@@ -1,0 +1,11 @@
+[client]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-diet-db-jumpserver
+prompt="\_\u@prod-diet-db.cktnvnjfzsiw.us-east-1.rds.amazonaws.com:[\D][\d]>\_"
+
+[mysql]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-diet-db-jumpserver
+prompt="\_\u@prod-diet-db.cktnvnjfzsiw.us-east-1.rds.amazonaws.com:[\D][\d]>\_"

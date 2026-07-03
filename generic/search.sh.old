@@ -1,0 +1,141 @@
+#!/opt/homebrew/bin/bash
+
+
+blk=$(tput blink)
+bld=$(tput bold)           	 # Bold
+red=${bld}$(tput setaf 1)    # Red
+grn=${bld}$(tput setaf 2)    # Green
+yel=${bld}$(tput setaf 3)    # Yellow
+blu=${bld}$(tput setaf 4)    # Blue
+mag=${bld}$(tput setaf 5)    # Purple
+cyn=${bld}$(tput setaf 6)    # Cyan
+wht=${bld}$(tput setaf 7)    # White
+off=$(tput sgr0)             # Text reset
+
+ERR_FILE=/tmp/tmp_search.err
+#BASEDIR="${HOME}/git/mygit/myToolsMadCollective"
+BASEDIR="${HOME}/git/myrepos/myToolsBetika"
+BASECONFDIR="${BASEDIR}/conf"
+BASELISTDIR="${BASEDIR}/lists"
+DBSERVERLIST="${BASELISTDIR}/servers_login_list.pro.txt"
+#MYCNF="${BASECONFDIR}/my.connection.conf"
+# Environment to check. PROD by default
+#ENV="prod"
+#MYENV=$4
+# OBJTYPE: Object Type to check, values avalable: DB, TAB, COL, PROC, TRIG, USER
+#     - DB   : DB SCHEMA
+#	  - TAB  : TABLE
+#	  - COL  : COLUMN
+#	  - PROC : PROCEDURE
+#	  - TRIG : TRIGGER
+#	  - USER : USER
+TOSEARCH=$2
+
+# if [[ -z "$4" ]]; then
+# 	DBENV="primary"
+# else
+# 	DBENV=$4
+# fi
+
+case "$3" in
+	"1" ) EXACT=$3
+		;;
+	* ) EXACT=0
+		;;
+
+esac
+
+
+case $1 in
+	's'|'schema')
+	INFOMSG="${yel}Searching schema ${cyn}${TOSEARCH}${off} in ${off}"
+	if [[ $EXACT -eq 0 ]]; then
+		QUERY="select SCHEMA_NAME,CONCAT('    on host/charset/collation: ',@@hostname,' / ',DEFAULT_CHARACTER_SET_NAME,' / ',DEFAULT_COLLATION_NAME) as info from information_schema.SCHEMATA where SCHEMA_NAME like '%$2%';"
+	else
+		QUERY="select SCHEMA_NAME,CONCAT('    on host/charset/collation: ',@@hostname,' / ',DEFAULT_CHARACTER_SET_NAME,' / ',DEFAULT_COLLATION_NAME) as info from information_schema.SCHEMATA where SCHEMA_NAME like '$2';"
+	fi		
+	;;
+	't'|'table')
+	INFOMSG="${yel}Searching table ${cyn}${TOSEARCH}${off} in schemas stored in ${off}"
+	if [[ $EXACT -eq 0 ]]; then
+		QUERY="select TABLE_SCHEMA,TABLE_NAME,ENGINE,ROW_FORMAT,CONCAT('    on host/db: ',@@hostname,' / ',TABLE_SCHEMA,'    rows/size: ',TABLE_ROWS,' / ',round(((data_length + index_length) / 1024 / 1024), 2), ' MB') as info from information_schema.TABLES where TABLE_NAME like '%$2%' and TABLE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	else
+		QUERY="select TABLE_SCHEMA,TABLE_NAME,ENGINE,ROW_FORMAT,CONCAT('    on host/db: ',@@hostname,' / ',TABLE_SCHEMA,'    rows/size: ',TABLE_ROWS,' / ',round(((data_length + index_length) / 1024 / 1024), 2), ' MB') as info from information_schema.TABLES where TABLE_NAME like '$2' and TABLE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	fi	
+	;;
+	'c'|'column')
+	INFOMSG="${yel}Searching column name ${cyn}${TOSEARCH}${off} in schemas stored in ${off}"
+	if [[ $EXACT -eq 0 ]]; then
+		QUERY="select TABLE_SCHEMA,COLUMN_NAME,COLUMN_TYPE,CONCAT('    on host/db/table: ',@@hostname,' / ',TABLE_SCHEMA,' / ',TABLE_NAME) as info from information_schema.COLUMNS where COLUMN_NAME like '%$2%' and TABLE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	else
+		QUERY="select TABLE_SCHEMA,COLUMN_NAME,COLUMN_TYPE,CONCAT('    on host/db/table: ',@@hostname,' / ',TABLE_SCHEMA,' / ',TABLE_NAME) as info from information_schema.COLUMNS where COLUMN_NAME like '$2' and TABLE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	fi
+	;;
+	'p'|'procedure')
+	INFOMSG="${yel}Searching stored procedure name ${cyn}${TOSEARCH}${off} in schemas stored in ${off}"
+	if [[ $EXACT -eq 0 ]]; then
+		QUERY="select ROUTINE_SCHEMA,ROUTINE_NAME,ROUTINE_TYPE,CONCAT('    on host/db/routine: ',@@hostname,' / ',ROUTINE_SCHEMA,' / ',ROUTINE_NAME,' defined by : ',DEFINER) as info from INFORMATION_SCHEMA.ROUTINES where ROUTINE_NAME like '%$2%' and ROUTINE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	else
+		QUERY="select ROUTINE_SCHEMA,ROUTINE_NAME,ROUTINE_TYPE,CONCAT('    on host/db/routine: ',@@hostname,' / ',ROUTINE_SCHEMA,' / ',ROUTINE_NAME,' defined by : ',DEFINER) as info from INFORMATION_SCHEMA.ROUTINES where ROUTINE_NAME like '$2' and ROUTINE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	fi
+	#QUERY="SELECT @@hostname,ROUTINE_SCHEMA, ROUTINE_NAME,ROUTINE_TYPE,DEFINER,CREATED,LAST_ALTERED FROM INFORMATION_SCHEMA.ROUTINES where ROUTINE_NAME like '$2' and ROUTINE_SCHEMA not in ('mysql','information_schema','mysql','performance_schema','sys');"
+	;;
+	'tr'|'trigger')
+	INFOMSG="${yel}Searching trigger name ${cyn}${TOSEARCH}${off} in schemas stored in ${off}"
+	if [[ $EXACT -eq 0 ]]; then
+		QUERY="select TRIGGER_SCHEMA,TRIGGER_NAME,CONCAT('    on host/db/trigger: ',@@hostname,' / ',TRIGGER_SCHEMA,' / ',TRIGGER_NAME,' defined by : ',DEFINER) as info from INFORMATION_SCHEMA.TRIGGERS where TRIGGER_NAME like '%$2%' and ROUTINE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	else
+		QUERY="select TRIGGER_SCHEMA,TRIGGER_NAME,CONCAT('    on host/db/trigger: ',@@hostname,' / ',TRIGGER_SCHEMA,' / ',TRIGGER_NAME,' defined by : ',DEFINER) as info from INFORMATION_SCHEMA.TRIGGERS where TRIGGER_NAME like '$2' and ROUTINE_SCHEMA not in ('mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit');"
+	fi	
+	#QUERY="SELECT @@hostname,TRIGGER_SCHEMA, TRIGGER_NAME,DEFINER, FROM INFORMATION_SCHEMA.TRIGGERS where TRIGGER_NAME like '$2' and TRIGGER_SCHEMA not in ('mysql','information_schema','mysql','performance_schema','sys');"
+	;;
+	'u'|'user')
+	INFOMSG="${yel}Searching user name ${cyn}${TOSEARCH}${off} created in ${off}"
+	if [[ $EXACT -eq 0 ]]; then
+		QUERY="select CONCAT('\'',user,'\'@\'',host,'\'') as fullusername,CONCAT('    on host: ',@@hostname) as extrainfo from mysql.user where user like '%$2%' order by fullusername"
+	else
+		QUERY="select CONCAT('\'',user,'\'@\'',host,'\'') as fullusername,CONCAT('    on host: ',@@hostname) as extrainfo from mysql.user where user like '$2' order by fullusername"
+	fi
+	
+	;;
+	*) echo -e "${red}[ERROR]Command not supported, please specify 'schema|table|column|proc|trigger|user' or 's|t|c|p|tr|u${off}"
+	   echo -e "${cyn} ############################################################################################################## ${off}"
+	   echo -e "${cyn} Usage command line 		: $0 [schema|table|column|proc|trigger|user] [object_name_to_search]${off}"
+	   echo -e "${cyn} Usage command line 		: $0 [s|t|c|p|tr|u] [object_name_to_search]${off}"
+	   echo -e "${cyn} ############################################################################################################## ${off}"
+	   echo -e "${yel}  * DB Schema search example         : $0 s mydbschema${off}"
+	   echo -e "${yel}  * DB Table search example          : $0 table mytable${off}"
+	   echo -e "${yel}  * DB Column search example         : $0 c my_column_name${off}"
+	   echo -e "${yel}  * DB User and grants search example: $0 user my_user_name${off}"
+	   echo -e "${yel}  * DB store procedure search example: $0 proc my_procedure_name${off}"
+	   echo -e "${yel}  * DB trigger search example        : $0 tr my_trigger_name${off}"
+	   echo -e "${cyn} ############################################################################################################## ${off}"
+	exit -1;;
+esac
+
+#for s in $SERVER_LIST
+# for s in `cat ${DBSERVERLIST} | grep ${DBENV}`
+for s in `cat ${DBSERVERLIST}`
+do
+#	if [ $s == 'navisiondb' ]
+#	then
+#		mysql -uroot -p -h$s -Nse "$QUERY" 2>$ERR_FILE
+#	else
+		#mysql -u$USER -p$PZPASS -h$s -Nse "$QUERY" 2>$ERR_FILE
+		echo -e "${cyn}[INFO][SEARCH]${off}${INFOMSG}${mag}${s}${off}"
+		#echo "${yel}" && mysql --defaults-file=${BASECONFDIR}/${s}.cnf -tse "$QUERY" 2>$ERR_FILE && echo -e "${off}"
+		echo "${yel}" && mysql --login-path=${s} -tse "$QUERY" 2>$ERR_FILE && echo -e "${off}"		
+#	fi
+
+	# Determine error and remove tmp file
+	ERROR=`cat $ERR_FILE` && rm $ERR_FILE
+
+	# Handle an error
+	if [ "" != "$ERROR" ]; then
+		# Error occured
+		if [ "mysql: [Warning] Using a password on the command line interface can be insecure." != "$ERROR"  ] && [ "Warning: Using a password on the command line interface can be insecure." != "$ERROR" ]
+		then
+			echo $ERROR >&2
+		fi
+	fi
+done

@@ -1,0 +1,127 @@
+#!/bin/bash
+#
+#       takes a sample of SHOW ENGINE INNODB STATUS every 10 seconds and stores it in files
+#       under $SAMPLEDIR for later use
+#       (run it in background with nohup; user should have password in dot file)
+#       get_reply routine only needed to drain the mysql output pipe otherwise script will block when it fills up
+#
+#SAMPLEDIR=$HOME/sampling/data/$(hostname)
+#set -x
+# Error input parameters ouput function
+function error_param_msg (){
+
+        echo -e " Usage command line : ${0} [mysql_instance_name]"
+        echo -e " Usage command line : ${0} [ba|cd|gh|ke|mw|tz|ug]-[primary|virtual]"
+        echo -e " Example 1          : ${0} ke-primary"
+        echo -e " Example 2          : ${0} ke-virtual"
+        echo -e " Example 3          : ${0} gh-primary"
+}
+
+# Log message function
+function log_message(){
+
+        LABEL=$2
+        MESSAGE_HEAD_LINE="[`date +"%Y-%m-%d %H:%M:%S"`]${LABEL}"
+
+
+        case "$3" in
+                'OK' ) MESSAGE_TYPE="${grn}${MESSAGE_HEAD_LINE}[OK]"
+                           MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[OK]"
+                        ;;
+                'INFO' ) MESSAGE_TYPE="${blu}${MESSAGE_HEAD_LINE}[INFO]"
+                           MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[INFO]"
+                        ;;
+                'ERROR' ) MESSAGE_TYPE="${red}${MESSAGE_HEAD_LINE}[ERROR]"
+                                  MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[ERROR]"
+                        ;;
+                'WARNING' ) MESSAGE_TYPE="${yel}${MESSAGE_HEAD_LINE}[WARN]"
+                                        MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[WARN]"
+                        ;;
+                
+        esac
+
+        case "$1" in
+                'STANDARD' ) MESSAGE_HEAD="${MESSAGE_TYPE}"
+                        ;;
+                'LOG' ) MESSAGE_HEAD="${MESSAGE_TYPE_LOG}"
+                        ;;
+        esac
+        MSG=$4
+
+        #MESSAGE_HEAD="${MESSAGE_TYPE}"
+        echo "${MESSAGE_HEAD} ${MSG} ${off}"
+}
+
+
+# Input parameters check and verification
+if [[ $# -eq 0 ]]; then
+
+        MSG=`log_message "LOG" "[PARAMETERS]" "ERROR" "NO PARAMETERS PROVIDED !!"`
+        echo "${MSG}" >> "${LOGFILE}"
+        error_param_msg
+        ERRORCODE=-10
+        exit ${ERRORCODE}
+fi
+CONFDIR="/root/scripts/mysql/.conf"
+CONFFILE="${CONFDIR}/$1.cnf"
+HOST=`cat ${CONFFILE} | grep 'host' | awk -F'=' '{print $2}'`
+PORT=`cat ${CONFFILE} | grep 'port' | awk -F'=' '{print $2}'`
+MYUSER=`cat ${CONFFILE} | grep 'user' | awk -F'=' '{print $2}'`
+MYPASS=`cat ${CONFFILE} | grep 'pass' | awk -F'=' '{print $2}'`
+startdatetime=`date +"%Y-%m-%d %H:%M:%S"`
+#SAMPLEBASEDIR="/data/rmateos/betika_africa"
+SAMPLEBASEDIR="/data/innodb"
+SAMPLEBASELOGDIR="/data/innodb/log"
+SAMPLEDIR="${SAMPLEBASEDIR}/${HOST}_${PORT}"
+LOCKFILE="${SAMPLEDIR}/lockfile.lock"
+LOGFILE="${SAMPLEBASELOGDIR}/${HOST}_${PORT}.log"
+RUNPID=$$
+
+
+if [ -f "$LOCKFILE" ]; then
+        RUNNINGPID=`cat $LOCKFILE`
+        MSG=`log_message "STANDARD" "[AUDIT]" "WARNING" "InnoDB Status Log Process is already running with PID=${RUNNINGPID}"`  
+        echo "${MSG}" >> "${LOGFILE}"
+        ERRORCODE=1
+        exit $ERRORCODE
+else
+	if [ ! -d $SAMPLEDIR ]; then
+		mkdir -p $SAMPLEDIR
+	fi
+        echo "${RUNPID}" > $LOCKFILE
+        MSG=`log_message "STANDARD" "[AUDIT][RUN]" "INFO" "InnoDB Status Log Process Started at ${startdatetime} with PID=${RUNPID}"`
+        echo "${MSG}" >> "${LOGFILE}"
+fi
+
+conn_account=0
+while true
+do
+
+        folder=$SAMPLEDIR/$(date +%Y%m%d)
+        samplefile=$(date +%Y%m%d_%H)
+        [ ! -d $folder ] && mkdir -p $folder
+        # Check Server Connectivity
+        #mysql --host=${HOST} -P${PORT} -u${MYUSER} -p${MYPASS} -AN -e'select now()'
+        mysql --defaults-file=${CONFFILE} -AN -e'select now()'
+        if [[ $? -eq 0 ]]; then
+                #echo "show engine innodb status\G" | mysql --login-path=innodb_monitor --host=${HOST} -P${PORT} -ANrs >> $folder/$samplefile.sample
+                echo "show engine innodb status\G" | mysql --defaults-file=${CONFFILE} -ANrs >> $folder/$samplefile.sample
+                conn_account=0
+        else
+                MSG=`log_message "STANDARD" "[AUDIT]" "ERROR" "CONNECTION ERROR !!"`
+                echo "${MSG}" >> "${LOGFILE}"
+                let conn_account=$conn_account+1
+                if [[ ${conn_account} -gt 12 ]]; then
+                        EXITMSG1=`log_message "STANDARD" "[AUDIT]" "ERROR" "CONNECTION ERROR REPORTED FOR 1 MINUTE...EXITING!!"`
+                        echo "${EXITMSG1}" >> "${LOGFILE}"
+                        EXITMSG2=`log_message "STANDARD" "[AUDIT]" "ERROR" "EXITING...DELETING LOCK FILE ${LOCKFILE}"`
+                        echo "${EXITMSG2}" >> "${LOGFILE}"
+                        rm -f ${LOCKFILE}
+                        ERRORCODE=-2
+                        exit $ERRORCODE
+                fi
+        fi
+        
+        sleep 5
+done
+

@@ -1,0 +1,16 @@
+[client]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-hl-db-jumpserver
+prompt="\_\u@hl-full-prod.cv4syz8nfpv7.us-east-1.rds.amazonaws.com:[\D][\d]>\_"
+
+[mysql]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-hl-db-jumpserver
+prompt="\_\u@hl-full-prod.cv4syz8nfpv7.us-east-1.rds.amazonaws.com:[\D][\d]>\_"
+
+[mysqldump]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-hl-db-jumpserver

@@ -1,0 +1,11 @@
+[client]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-funnel-db-jumpserver
+prompt="\_\u@prod-funnel-db.chlr22p2tkms.us-east-1.rds.amazonaws.com:[\D][\d]>\_"
+
+[mysql]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-funnel-db-jumpserver
+prompt="\_\u@prod-funnel-db.chlr22p2tkms.us-east-1.rds.amazonaws.com:[\D][\d]>\_"

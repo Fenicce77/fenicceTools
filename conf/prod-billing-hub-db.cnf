@@ -1,0 +1,11 @@
+[client]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-billing-hub-db-jumpserver
+prompt="\_\u@prod-billing-hub-db.cje2hb5hginv.us-east-1.rds.amazonaws.com:[\D][\d]>\_"
+
+[mysql]
+user=rmateos
+password=myM4r1aDBP4SS
+host=prod-billing-hub-db-jumpserver
+prompt="\_\u@prod-billing-hub-db.cje2hb5hginv.us-east-1.rds.amazonaws.com:[\D][\d]>\_"

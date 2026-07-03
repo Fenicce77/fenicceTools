@@ -1,0 +1,230 @@
+#!/opt/homebrew/bin/bash
+
+# ==========================================
+# Color Configuration
+# ==========================================
+blk=$(tput blink)
+bld=$(tput bold)
+red=${bld}$(tput setaf 1)
+grn=${bld}$(tput setaf 2)
+yel=${bld}$(tput setaf 3)
+blu=${bld}$(tput setaf 4)
+mag=${bld}$(tput setaf 5)
+cyn=${bld}$(tput setaf 6)
+wht=${bld}$(tput setaf 7)
+off=$(tput sgr0)
+
+# ==========================================
+# Help Function
+# ==========================================
+show_help() {
+    echo -e "${cyn}==============================================================================================================${off}"
+    echo -e "${bld}Hexon DB Search Tool v6.1 - Multi-Object Search in MySQL instances${off}"
+    echo -e "${cyn}==============================================================================================================${off}"
+    echo -e "${yel}USAGE:${off}"
+    echo -e "  $0 <object_type> <term_or_list> [0|1] [OPTIONS]"
+    echo -e ""
+    echo -e "${yel}MANDATORY PARAMETERS:${off}"
+    echo -e "  ${grn}<object_type>${off}       Defines which data dictionary to search in:"
+    echo -e "                      ${blu}s, schema${off}  | ${blu}t, table${off}   | ${blu}v, view${off} | ${blu}c, column${off} | ${blu}p, proc${off}"
+    echo -e "                      ${blu}tr, trigger${off}| ${blu}e, event${off}   | ${blu}i, index${off}| ${blu}u, user${off}"
+    echo -e "  ${grn}<term_or_list>${off}      Single string or comma-separated list (e.g., 'user1,user2', 'invoice')."
+    echo -e ""
+    echo -e "${yel}OPTIONAL POSITIONAL PARAMETER:${off}"
+    echo -e "  ${grn}[0|1]${off}               Match mode (Must go right after the search term):"
+    echo -e "                      ${blu}0${off} : Multiple partial search (Uses REGEXP) -> ${bld}DEFAULT${off}"
+    echo -e "                      ${blu}1${off} : Multiple exact search (Uses IN (...))"
+    echo -e ""
+    echo -e "${yel}OPTIONS (FLAGS):${off}"
+    echo -e "  ${grn}-c, --csv${off}         Exports the results to a CSV file ('|' separator)."
+    echo -e "  ${grn}-s, --server <ls>${off} Searches ONLY in servers containing these strings (e.g., prod,master)."
+    echo -e "  ${grn}-x, --exclude <ls>${off} Ignores servers containing these strings (e.g., dev,test)."
+    echo -e "  ${grn}-d, --detailed${off}    Extracts advanced info (Real index sizes, Charsets, etc.)."
+    echo -e "  ${grn}-h, --help${off}        Shows this help panel and exits."
+    echo -e "${cyn}==============================================================================================================${off}"
+}
+
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [[ -z "$1" ]] || [[ -z "$2" ]]; then
+    echo -e "${red}[ERROR] Missing mandatory parameters.${off}\n"
+    show_help
+    exit 1
+fi
+
+ACTION=$1
+TOSEARCH=$2
+EXACT=0
+CSV_EXPORT=0
+DETAILED=0
+CUSTOM_SERVERS=""
+EXCLUDE_SERVERS=""
+
+shift 2
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        0|1) EXACT=$1 ;;
+        -c|--csv) CSV_EXPORT=1 ;;
+        -s|--server) CUSTOM_SERVERS="$2"; shift ;;
+        -x|--exclude) EXCLUDE_SERVERS="$2"; shift ;;
+        -d|--detailed) DETAILED=1 ;;
+        -h|--help) show_help; exit 0 ;;
+        *) echo -e "${red}[ERROR] Unknown parameter: $1${off}\n"; show_help; exit 1 ;;
+    esac
+    shift
+done
+
+# ==========================================
+# Preparation of Multiple Search Pattern
+# ==========================================
+CLEAN_SEARCH=$(echo "$TOSEARCH" | tr -d ' ')
+
+if [[ $EXACT -eq 1 ]]; then
+    IN_VALUES=$(echo "$CLEAN_SEARCH" | sed "s/,/','/g")
+    SEARCH_CLAUSE="IN ('$IN_VALUES')"
+else
+    REGEXP_VALUES=$(echo "$CLEAN_SEARCH" | tr ',' '|')
+    SEARCH_CLAUSE="REGEXP '$REGEXP_VALUES'"
+fi
+
+IGNORE_SCHEMAS="'mysql','information_schema','performance_schema','innodb','tmp','sys','percona_toolkit'"
+
+# ==========================================
+# Server Selection (Corrected)
+# ==========================================
+ERR_FILE=$(mktemp /tmp/tmp_search.XXXXXX)
+trap "rm -f $ERR_FILE" EXIT
+
+BASEDIR="${HOME}/git/myrepos/myToolsBetika"
+DBSERVERLIST="${BASEDIR}/lists/servers_login_list.hex.txt"
+
+# 1. Validate that the base file always exists
+if [[ ! -f "$DBSERVERLIST" ]]; then
+    echo -e "${red}[ERROR] File not found: $DBSERVERLIST${off}"
+    exit 1
+fi
+
+# 2. Read the clean list (no comments or empty lines)
+RAW_SERVERS=$(grep -v '^[[:space:]]*$' "$DBSERVERLIST" | grep -v '^#')
+
+# 3. Apply INCLUSION filter (-s) if provided
+if [[ -n "$CUSTOM_SERVERS" ]]; then
+    INCLUDE_REGEX=$(echo "$CUSTOM_SERVERS" | tr ',' '|')
+    RAW_SERVERS=$(echo "$RAW_SERVERS" | grep -iE "$INCLUDE_REGEX")
+fi
+
+# 4. Apply EXCLUSION filter (-x) if provided
+if [[ -n "$EXCLUDE_SERVERS" ]]; then
+    EXCLUDE_REGEX=$(echo "$EXCLUDE_SERVERS" | tr ',' '|')
+    RAW_SERVERS=$(echo "$RAW_SERVERS" | grep -viE "$EXCLUDE_REGEX")
+fi
+
+# 5. Assign to the final variable
+SERVERS_TO_CHECK="$RAW_SERVERS"
+
+if [[ -z "$SERVERS_TO_CHECK" ]]; then
+    echo -e "${yel}[WARNING] The server list to check is empty after applying search and exclusion filters.${off}"
+    exit 0
+fi
+
+declare -a FOUND_SERVERS NOT_FOUND_SERVERS FAILED_CONN_SERVERS
+
+if [[ $CSV_EXPORT -eq 1 ]]; then
+    SAFE_FILENAME=$(echo "$CLEAN_SEARCH" | tr ',' '_')
+    CSV_FILE="search_results_${SAFE_FILENAME}_$(date +%Y%m%d_%H%M%S).csv"
+    echo "Hostname|Version|Schema/User|ObjectName|Type/Engine|Extra_Info" > "$CSV_FILE"
+fi
+
+echo -e "${cyn}Starting multi-object search for ${ACTION} -> [${TOSEARCH}]...${off}\n"
+
+# ==========================================
+# Main Execution
+# ==========================================
+for s in $SERVERS_TO_CHECK; do
+    RAW_VERSION=$(mysql --login-path="${s}" --connect-timeout=3 -Bse "SELECT version();" 2>/dev/null)
+    if [[ -z "$RAW_VERSION" ]]; then FAILED_CONN_SERVERS+=("$s"); continue; fi
+    MAJOR_VER=$(echo "$RAW_VERSION" | cut -d. -f1)
+    
+    case $ACTION in
+        's'|'schema')
+            QUERY="SELECT @@hostname, '$RAW_VERSION', SCHEMA_NAME, 'SCHEMA', 'SCHEMA', CONCAT('Char/Coll: ',DEFAULT_CHARACTER_SET_NAME,'/',DEFAULT_COLLATION_NAME) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME $SEARCH_CLAUSE;" ;;
+        't'|'table')
+            QUERY="SELECT @@hostname, '$RAW_VERSION', TABLE_SCHEMA, TABLE_NAME, ENGINE, CONCAT('Created: ', IFNULL(CREATE_TIME,'N/A'), ' | Updated: ', IFNULL(UPDATE_TIME,'N/A'), ' | Rows: ', TABLE_ROWS) FROM information_schema.TABLES WHERE TABLE_NAME $SEARCH_CLAUSE AND TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ($IGNORE_SCHEMAS);" ;;
+        'v'|'view')
+            QUERY="SELECT @@hostname, '$RAW_VERSION', TABLE_SCHEMA, TABLE_NAME, 'VIEW', CONCAT('Created: ', IFNULL(CREATE_TIME,'N/A')) FROM information_schema.TABLES WHERE TABLE_NAME $SEARCH_CLAUSE AND TABLE_TYPE = 'VIEW' AND TABLE_SCHEMA NOT IN ($IGNORE_SCHEMAS);" ;;
+        'p'|'procedure')
+            QUERY="SELECT @@hostname, '$RAW_VERSION', ROUTINE_SCHEMA, ROUTINE_NAME, ROUTINE_TYPE, CONCAT('Created: ', CREATED, ' | Modified: ', LAST_ALTERED, ' | Definer: ', DEFINER) FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME $SEARCH_CLAUSE AND ROUTINE_SCHEMA NOT IN ($IGNORE_SCHEMAS);" ;;
+        'tr'|'trigger')
+            IF_CREATED=$([[ "$MAJOR_VER" -ge 8 ]] && echo "IFNULL(CREATED,'N/A')" || echo "'N/A (v5.7)'")
+            QUERY="SELECT @@hostname, '$RAW_VERSION', TRIGGER_SCHEMA, TRIGGER_NAME, 'TRIGGER', CONCAT('Created: ', $IF_CREATED, ' | Definer: ', DEFINER) FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_NAME $SEARCH_CLAUSE AND TRIGGER_SCHEMA NOT IN ($IGNORE_SCHEMAS);" ;;
+        'e'|'event')
+            QUERY="SELECT @@hostname, '$RAW_VERSION', EVENT_SCHEMA, EVENT_NAME, 'EVENT', CONCAT('Created: ', CREATED, ' | Modified: ', LAST_ALTERED, ' | Status: ', STATUS) FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME $SEARCH_CLAUSE AND EVENT_SCHEMA NOT IN ($IGNORE_SCHEMAS);" ;;
+        'u'|'user')
+            QUERY="SELECT @@hostname, '$RAW_VERSION', user, host, 'USER', plugin FROM mysql.user WHERE user $SEARCH_CLAUSE;" ;;
+        
+        'c'|'column')
+            if [[ $DETAILED -eq 1 ]]; then
+                QUERY="SELECT @@hostname, '$RAW_VERSION', TABLE_SCHEMA, COLUMN_NAME, COLUMN_TYPE, CONCAT('Table: ', TABLE_NAME, ' | Charset: ', IFNULL(CHARACTER_SET_NAME,'N/A'), ' | Collation: ', IFNULL(COLLATION_NAME,'N/A')) FROM information_schema.COLUMNS WHERE COLUMN_NAME $SEARCH_CLAUSE AND TABLE_SCHEMA NOT IN ($IGNORE_SCHEMAS);"
+            else
+                QUERY="SELECT @@hostname, '$RAW_VERSION', TABLE_SCHEMA, COLUMN_NAME, COLUMN_TYPE, CONCAT('Table: ', TABLE_NAME) FROM information_schema.COLUMNS WHERE COLUMN_NAME $SEARCH_CLAUSE AND TABLE_SCHEMA NOT IN ($IGNORE_SCHEMAS);"
+            fi
+            ;;
+            
+        'i'|'index')
+            VISIBILITY_SQL=$([[ "$MAJOR_VER" -ge 8 ]] && echo "' | Visible: ', s.IS_VISIBLE," || echo "")
+            if [[ $DETAILED -eq 1 ]]; then
+                QUERY="SELECT @@hostname, '$RAW_VERSION', s.INDEX_SCHEMA, s.INDEX_NAME, 'INDEX', 
+                       CONCAT('Table: ', s.TABLE_NAME, $VISIBILITY_SQL ' | Size: ', IFNULL(CONCAT(ROUND((i.stat_value * @@innodb_page_size)/1024/1024, 2), ' MB'), 'N/A')) 
+                       FROM INFORMATION_SCHEMA.STATISTICS s 
+                       LEFT JOIN mysql.innodb_index_stats i ON s.INDEX_SCHEMA = i.database_name AND s.TABLE_NAME = i.table_name AND s.INDEX_NAME = i.index_name AND i.stat_name = 'size' 
+                       WHERE s.INDEX_NAME $SEARCH_CLAUSE AND s.INDEX_SCHEMA NOT IN ($IGNORE_SCHEMAS);"
+            else
+                QUERY="SELECT @@hostname, '$RAW_VERSION', INDEX_SCHEMA, INDEX_NAME, 'INDEX', CONCAT('Table: ', TABLE_NAME $VISIBILITY_SQL) FROM INFORMATION_SCHEMA.STATISTICS s WHERE INDEX_NAME $SEARCH_CLAUSE AND INDEX_SCHEMA NOT IN ($IGNORE_SCHEMAS);"
+            fi
+            ;;
+    esac
+
+    RESULT=$(mysql --login-path="${s}" -Bse "$QUERY" 2>"$ERR_FILE")
+    
+    if [[ -s "$ERR_FILE" ]]; then
+        ERROR=$(cat "$ERR_FILE")
+        echo -e "${red}[ERROR in ${s} (v${RAW_VERSION})]${off} $ERROR" >&2
+        > "$ERR_FILE"
+    fi
+
+    if [[ -n "$RESULT" ]]; then
+        FOUND_SERVERS+=("$s")
+        echo -e "${grn}[✓] Found in:${off} ${mag}${s}${off} ${wht}(v${RAW_VERSION})${off}"
+        echo "$RESULT" | column -t -s $'\t' | sed 's/^/    /'
+        echo ""
+        [[ $CSV_EXPORT -eq 1 ]] && echo "$RESULT" | sed 's/\t/|/g' >> "$CSV_FILE"
+    else
+        NOT_FOUND_SERVERS+=("$s")
+    fi
+done
+
+# ==========================================
+# Final Summary
+# ==========================================
+echo -e "${cyn}====================================================${off}"
+echo -e "${cyn}                   FINAL SUMMARY                    ${off}"
+echo -e "${cyn}====================================================${off}"
+
+if [ ${#FOUND_SERVERS[@]} -gt 0 ]; then
+    echo -e "${grn}[+] Matches found in (${#FOUND_SERVERS[@]}):${off} ${FOUND_SERVERS[*]}"
+else
+    echo -e "${yel}[-] Nothing found in any accessible server.${off}"
+fi
+
+if [ ${#NOT_FOUND_SERVERS[@]} -gt 0 ]; then
+    echo -e "${yel}[-] No matches in (${#NOT_FOUND_SERVERS[@]}):${off} ${NOT_FOUND_SERVERS[*]}"
+fi
+
+if [ ${#FAILED_CONN_SERVERS[@]} -gt 0 ]; then
+    echo -e "${red}[!] Connection error (${#FAILED_CONN_SERVERS[@]}):${off} ${FAILED_CONN_SERVERS[*]}"
+fi
+echo -e "${cyn}====================================================${off}"

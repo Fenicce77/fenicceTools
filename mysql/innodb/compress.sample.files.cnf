@@ -1,0 +1,3 @@
+logdir=/data/innodb/ke-saltstack.betika.private
+dailytocompressret=2
+toremovalretention=14
