@@ -1,1 +1,1 @@
-My Own tools developed for managing my dayli day tasks
+My Own tools, scripts and queries.
