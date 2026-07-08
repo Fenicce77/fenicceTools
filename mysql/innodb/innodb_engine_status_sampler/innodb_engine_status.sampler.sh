@@ -10,8 +10,9 @@
 # Error input parameters ouput function
 function error_param_msg (){
 
-        echo -e " Usage command line : ${0} [config_file]"
-        echo -e " Example            : ${0} /root/scripts/mysql/.conf/ke-primary.cnf"
+        echo -e " Usage command line : ${0} [instance_name]"
+        echo -e " Example            : ${0} ke-primary"
+#        echo -e " Example            : ${0} /root/scripts/mysql/.conf/ke-primary.cnf"
 }
 
 # Log message function
@@ -49,7 +50,6 @@ function log_message(){
         echo "${MESSAGE_HEAD} ${MSG} ${off}"
 }
 
-
 # Input parameters check and verification
 if [[ $# -eq 0 ]]; then
 
@@ -60,20 +60,36 @@ if [[ $# -eq 0 ]]; then
         exit ${ERRORCODE}
 fi
 
-CONFFILE=$1
-HOST=`cat ${CONFFILE} | grep 'host' | awk -F'=' '{print $2}'`
-PORT=`cat ${CONFFILE} | grep 'port' | awk -F'=' '{print $2}'`
+INSTANCENAME=$1
+ROOTPATHNAME=$(dirname "$0")
+CONFFILE="${ROOTPATHNAME}/.conf/${INSTANCENAME}.cnf"
 startdatetime=`date +"%Y-%m-%d %H:%M:%S"`
-#SAMPLEBASEDIR="/data/rmateos/betika_africa"
 SAMPLEBASEDIR="/data/innodb"
-SAMPLEDIR="${SAMPLEBASEDIR}/${HOST}_${PORT}"
+
+if [[ "$INSTANCENAME" == "betika-africa" ]]; then
+	HOST=${INSTANCENAME}
+	SAMPLEDIR="${SAMPLEBASEDIR}/${HOST}"
+else
+	HOST=`cat ${CONFFILE} | grep 'host' | awk -F'=' '{print $2}'`
+	PORT=`cat ${CONFFILE} | grep 'port' | awk -F'=' '{print $2}'`
+	SAMPLEDIR="${SAMPLEBASEDIR}/${HOST}_${PORT}"
+fi
+echo "INSTANCE : ${INSTANCENAME}"
+echo "DIRNAME: ${ROOTPATHNAME}"
+echo "CONFFILE : ${CONFFILE}"
+echo "HOST:PORT : ${HOST}:${PORT}"
+#exit 0
+
+#SAMPLEBASEDIR="/data/rmateos/betika_africa"
+#SAMPLEBASEDIR="/data/innodb"
+#SAMPLEDIR="${SAMPLEBASEDIR}/${HOST}_${PORT}"
 LOCKFILE="${SAMPLEDIR}/lockfile.lock"
 RUNPID=$$
 
 
 if [ -f "$LOCKFILE" ]; then
         RUNNINGPID=`cat $LOCKFILE`
-        MSG=`log_message "STANDARD" "[AUDIT]" "WARNING" "InnoDB Status Log Process is already running with PID=${RUNNINGPID}"`  
+        MSG=`log_message "STANDARD" "[AUDIT]" "WARNING" "InnoDB Status Log Process is already running with PID=${RUNNINGPID}"`
         echo "${MSG}"
         ERRORCODE=1
         exit $ERRORCODE
@@ -86,32 +102,14 @@ else
         echo "${MSG}"
 fi
 
-conn_account=0
+
 while true
 do
 
         folder=$SAMPLEDIR/$(date +%Y%m%d)
         samplefile=$(date +%Y%m%d_%H)
         [ ! -d $folder ] && mkdir -p $folder
-        # Check Server Connectivity
-        mysql --login-path=innodb_monitor --host=${HOST} -P${PORT} -AN -e'select now()'
-        if [[ $? -eq 0 ]]; then
-                echo "show engine innodb status\G" | mysql --login-path=innodb_monitor --host=${HOST} -P${PORT} -ANrs >> $folder/$samplefile.sample
-                conn_account=0
-        else
-                MSG=`log_message "STANDARD" "[AUDIT]" "ERROR" "CONNECTION ERROR !!"`
-                echo "${MSG}"
-                let conn_account=$conn_account+1
-                if [[ ${conn_account} -gt 12 ]]; then
-                        EXITMSG1=`log_message "STANDARD" "[AUDIT]" "ERROR" "CONNECTION ERROR REPORTED FOR 1 MINUTE...EXITING!!"`
-                        echo "${EXITMSG1}"
-                        EXITMSG2=`log_message "STANDARD" "[AUDIT]" "ERROR" "EXITING...DELETING LOCK FILE ${LOCKFILE}"`
-                        echo "${EXITMSG2}"
-                        rm -f ${LOCKFILE}
-                        ERRORCODE=-2
-                        exit $ERRORCODE
-                fi
-        fi
-        
+#        echo "show engine innodb status\G" | mysql --login-path=innodb_monitor --host=${HOST} -P${PORT} -ANrs >> $folder/$samplefile.sample
+	echo "show engine innodb status\G" | mysql --defaults-file=${CONFFILE} -ANrs >> $folder/$samplefile.sample
         sleep 5
 done
