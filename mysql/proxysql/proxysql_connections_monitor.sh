@@ -66,7 +66,7 @@ if [[ -z "$LOGIN_PATH" ]]; then
 fi
 
 # ==============================================================================
-# Connection and Version Validation
+# Connection, Version and Target Hostname Extraction
 # ==============================================================================
 MYSQL_CMD="mysql --login-path=$LOGIN_PATH -BN"
 
@@ -74,6 +74,17 @@ PROXY_VERSION=$($MYSQL_CMD -e "SELECT @@version;" 2>/dev/null)
 if [[ $? -ne 0 || -z "$PROXY_VERSION" ]]; then
     echo -e "${red}Critical Error: Could not connect to ProxySQL using login-path '$LOGIN_PATH'.${off}"
     exit 1
+fi
+
+# Extract the target host directly from the login-path configuration
+PROXY_HOSTNAME=$(mysql_config_editor print --login-path="$LOGIN_PATH" 2>/dev/null | grep -i 'host' | cut -d'=' -f2 | tr -d ' "')
+
+# Fallback to internal ProxySQL hostname if not explicitly defined in login-path
+if [[ -z "$PROXY_HOSTNAME" ]]; then
+    PROXY_HOSTNAME=$($MYSQL_CMD -e "SELECT @@hostname;" 2>/dev/null)
+    if [[ -z "$PROXY_HOSTNAME" ]]; then
+        PROXY_HOSTNAME="Unknown"
+    fi
 fi
 
 # ==============================================================================
@@ -117,7 +128,7 @@ FNR==NR {
         }
         
         # Print formatted row
-        # Fixed ANSI length bug: Colors are now passed as external %s arguments 
+        # Fixed ANSI length bug: Colors are passed as external %s arguments 
         # so they do not interfere with the internal padding of %-11s
         printf "%-22s | %-16s | %-35s | %-22s | %s%-11s%s | %s\n", $1, $2, $3, $4, bld, curr_val, color_off, diff_str
     }
@@ -149,14 +160,14 @@ while true; do
     # ==============================================================================
     clear
     echo -e "${cyn}================================================================================================================================${off}"
-    echo -e "${bld} ProxySQL Monitor${off} | Version: ${yel}$PROXY_VERSION${off} | Date: ${wht}$TIMESTAMP${off} | Refresh: ${yel}${REFRESH_TIME}s${off}"
+    echo -e "${bld} ProxySQL Monitor${off} | Server: ${cyn}${bld}$PROXY_HOSTNAME${off} | Version: ${yel}$PROXY_VERSION${off} | Date: ${wht}$TIMESTAMP${off} | Refresh: ${yel}${REFRESH_TIME}s${off}"
     if [[ -n "$USER_FILTER" ]]; then
         echo -e " ${bld}Active Filter:${off} ${blu}$USER_FILTER${off}"
     fi
     echo -e "${cyn}================================================================================================================================${off}"
     
-    # Headers
-    printf "${bld}%-22s | %-16s | %-35s | %-22s | %-11s | %-10s${off}\n" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONNECTIONS" "DELTA"
+    # Colored Headers
+    printf "${cyn}${bld}%-22s${off} | ${cyn}${bld}%-16s${off} | ${cyn}${bld}%-35s${off} | ${cyn}${bld}%-22s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-10s${off}\n" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONNECTIONS" "DELTA"
     echo -e "--------------------------------------------------------------------------------------------------------------------------------"
     
     # Data
@@ -167,7 +178,7 @@ while true; do
     fi
     echo -e "--------------------------------------------------------------------------------------------------------------------------------"
 
-    # Save to file if configured
+    # Save to file if configured (Plain text headers, no colors)
     if [[ -n "$OUTPUT_FILE" ]]; then
         {
             echo "=== $TIMESTAMP ==="
