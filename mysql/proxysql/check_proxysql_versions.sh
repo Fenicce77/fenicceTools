@@ -92,7 +92,8 @@ while IFS= read -r login_path || [[ -n "$login_path" ]]; do
     # Execute connection
     # --connect-timeout=5: Prevents script from hanging on firewalled/dead nodes
     # tr -d '\r': Strips carriage returns that break terminal alignment
-    version=$(mysql --login-path="$login_path" --connect-timeout=5 -N -B -e "SELECT @@version;" 2>/dev/null | tr -d '\r' | xargs)
+    #version=$(mysql --login-path="$login_path" --connect-timeout=5 -N -B -e "SELECT @@version;" 2>/dev/null | tr -d '\r' | xargs)
+    version=$(mysql --login-path="$login_path" --connect-timeout=5 -N -B -e "SELECT @@admin-version;" 2>/dev/null | tr -d '\r' | xargs)
 
     # 7. Evaluate the result and format the output
     if [[ $? -eq 0 && -n "$version" ]]; then
