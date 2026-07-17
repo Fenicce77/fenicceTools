@@ -98,10 +98,10 @@ if [[ -z "$PROXY_HOSTNAME" ]]; then
 fi
 
 # ==============================================================================
-# AWK Scripts Definition
+# AWK Scripts Definition (With strict substring truncations to prevent overflow)
 # ==============================================================================
 
-# 1. Connection Aggregation View (Now with Global Totals & Alert Thresholds)
+# 1. Connection Aggregation View
 AWK_SCRIPT_CONN='
 BEGIN { 
     FS="\t"; total_conn = 0; total_diff = 0;
@@ -127,15 +127,20 @@ FNR==NR {
         else if (diff < 0) diff_str = color_down diff color_off
         else diff_str = color_st "0" color_off
         
-        # Threshold Alerting Logic
         row_color = color_st;
-        user_disp = $1;
+        user_bld = "";
         if (threshold > 0 && curr_val >= threshold) {
             row_color = color_alert;
-            user_disp = bld user_disp;
+            user_bld = bld;
         }
         
-        printf "%s%-22s%s | %-16s | %-35s | %-22s | %s%-11s%s | %s\n", row_color, user_disp, color_off, $2, $3, $4, bld, curr_val, color_off, diff_str
+        # Strict width enforcements to prevent column pushing
+        usr = substr($1, 1, 20)
+        cli = substr($2, 1, 15)
+        srv = substr($3, 1, 28)
+        sch = substr($4, 1, 20)
+        
+        printf "%s%s%-20s%s | %-15s | %-28s | %-20s | %s%-10s%s | %s\n", row_color, user_bld, usr, color_off, cli, srv, sch, bld, curr_val, color_off, diff_str
     }
 }
 END {
@@ -144,37 +149,55 @@ END {
         else if (total_diff < 0) diff_str_tot = color_down total_diff color_off
         else diff_str_tot = color_st "0" color_off
         
-        print color_info "------------------------------------------------------------------------------------------------------------------------------------------" color_off
-        printf "%s%-22s | %-16s | %-35s | %-22s | %-11s | %s%s\n", bld color_info, "GLOBAL TOTALS", "", "", "", total_conn, diff_str_tot, color_off
+        printf "%s%-20s | %-15s | %-28s | %-20s | %-10s | %s%s\n", bld color_info, "GLOBAL TOTALS", "", "", "", total_conn, diff_str_tot, color_off
     }
 }'
 
-# 2. Active Queries View
+# 2. Active Queries View 
 AWK_SCRIPT_QUERY='
 BEGIN { FS="\t"; if (filter != "") gsub(",", "|", filter); }
 {
     if (NF > 0) {
         if (filter != "" && $3 !~ "(" filter ")") next;
         
-        query = $7; gsub(/[\r\n\t]+/, " ", query);
-        if (length(query) > 65) query = substr(query, 1, 62) "...";
-        
         time_ms_val = $6
-        if (time_ms_val > 1000) time_str = color_alert time_ms_val "ms" color_off
-        else if (time_ms_val > 500) time_str = color_warn time_ms_val "ms" color_off
-        else time_str = color_st time_ms_val "ms" color_off
+        if (time_ms_val > 1000) time_color = color_alert
+        else if (time_ms_val > 500) time_color = color_warn
+        else time_color = color_st
         
-        printf "%-10s | %-11s | %-20s | %-16s | %-35s | %s%-11s%s | %s\n", $1, $2, $3, $4, $5, bld, time_str, color_off, color_info query color_off
+        time_str = time_ms_val "ms"
+        
+        # Dynamic query truncation: Aggressive string cleanup to remove literal & escaped newlines
+        query = $7; 
+        gsub(/\\[nrt]/, " ", query);  # Removes escaped \n \r \t from mysql client
+        gsub(/[\r\n\t]+/, " ", query); # Removes actual control characters
+        
+        max_q_len = term_cols - 94
+        if (max_q_len < 70) max_q_len = 70  # Forced minimum of 70 characters
+        if (length(query) > max_q_len) query = substr(query, 1, max_q_len - 3) "...";
+        
+        psid = substr($1, 1, 8)
+        hg = substr($2, 1, 4)
+        usr = substr($3, 1, 15)
+        cli = substr($4, 1, 15)
+        backend = substr($5, 1, 28)
+        
+        printf "%-8s | %-4s | %-15s | %-15s | %-28s | %s%s%-9s%s | %s%s%s\n", psid, hg, usr, cli, backend, bld, time_color, time_str, color_off, color_info, query, color_off
     }
 }'
 
-# 3. Backend Health View (Connection Pool + Ping Log)
+# 3. Backend Health View
 AWK_SCRIPT_POOL='
 BEGIN { FS="\t" }
 {
     if (NF > 0) {
-        status_col = ($3 == "ONLINE") ? color_ok $3 color_off : color_err $3 color_off
-        printf "%-10s | %-35s | %-18s | %-11s | %-11s | %-11s | %s\n", $1, $2, status_col, $4, $5, $6, $7
+        if ($3 == "ONLINE") status_color = color_ok; else status_color = color_err;
+        
+        hg = substr($1, 1, 10)
+        bhost = substr($2, 1, 35)
+        status_txt = substr($3, 1, 15)
+        
+        printf "%-10s | %-35s | %s%-15s%s | %-11s | %-11s | %-11s | %s\n", hg, bhost, status_color, status_txt, color_off, $4, $5, $6, $7
     }
 }'
 
@@ -183,7 +206,12 @@ BEGIN { FS="\t" }
 {
     if (NF > 0) {
         ping_err = ($4 == "NULL" || $4 != "") ? color_err $4 color_off : color_ok "None" color_off
-        printf "%-35s | %-25s | %-20s | %s\n", $1, $2, $3"us", ping_err
+        
+        hostname = substr($1, 1, 35)
+        last_ping = substr($2, 1, 25)
+        success = substr($3"us", 1, 15)
+        
+        printf "%-35s | %-25s | %-15s | %s\n", hostname, last_ping, success, ping_err
     }
 }'
 
@@ -195,6 +223,14 @@ clear
 
 while true; do
     TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
+    
+    # Responsive terminal width detection (dynamically sized separators)
+    TERM_WIDTH=$(tput cols 2>/dev/null)
+    if [[ -z "$TERM_WIDTH" || "$TERM_WIDTH" -lt 110 ]]; then
+        TERM_WIDTH=130
+    fi
+    SEP_LINE=$(printf "%*s" "$TERM_WIDTH" "" | tr " " "=")
+    SEP_THIN=$(printf "%*s" "$TERM_WIDTH" "" | tr " " "-")
     
     if ! $PAUSED; then
         if [[ "$VIEW_MODE" == "CONN" ]]; then
@@ -209,12 +245,14 @@ while true; do
             PREV_DATA="$CURR_DATA"
             
         elif [[ "$VIEW_MODE" == "QUERY" ]]; then
-            QUERY="SELECT SessionID, COALESCE(srv_conn_id, 'N/A'), user, cli_host, COALESCE(srv_host, 'Pending'), time_ms, info 
+            QUERY="SELECT SessionID, hostgroup, user, cli_host, COALESCE(srv_host, 'Pending'), time_ms, info 
                    FROM stats.stats_mysql_processlist 
-                   WHERE user NOT IN ('admin', 'radmin', 'monitor', 'proxysql') AND info IS NOT NULL ORDER BY time_ms DESC;"
+                   WHERE user NOT IN ('admin', 'radmin', 'monitor', 'proxysql') 
+                   AND info IS NOT NULL AND info != '' 
+                   ORDER BY time_ms DESC;"
                    
             CURR_DATA=$($MYSQL_CMD -e "$QUERY" 2>/dev/null)
-            FORMATTED_OUTPUT=$(awk -v filter="$USER_FILTER" -v color_alert="$red" -v color_warn="$yel" -v color_st="$wht" -v color_info="$cyn" -v color_off="$off" -v bld="$bld" "$AWK_SCRIPT_QUERY" <(echo "$CURR_DATA"))
+            FORMATTED_OUTPUT=$(awk -v filter="$USER_FILTER" -v term_cols="$TERM_WIDTH" -v color_alert="$red" -v color_warn="$yel" -v color_st="$wht" -v color_info="$cyn" -v color_off="$off" -v bld="$bld" "$AWK_SCRIPT_QUERY" <(echo "$CURR_DATA"))
             
         elif [[ "$VIEW_MODE" == "BACKEND" ]]; then
             Q_POOL="SELECT hostgroup, srv_host, status, ConnUsed, ConnFree, ConnOK, ConnERR FROM stats.stats_mysql_connection_pool ORDER BY hostgroup, srv_host;"
@@ -232,9 +270,8 @@ while true; do
     # Render Output on Screen
     # ==============================================================================
     clear
-    echo -e "${cyn}==========================================================================================================================================${off}"
+    echo -e "${cyn}${SEP_LINE}${off}"
     
-    # Dynamic Headers
     if [[ "$VIEW_MODE" == "CONN" ]]; then MODE_LABEL="${blu}CONNECTIONS POOL${off} (Sort: $SORT_MODE)"
     elif [[ "$VIEW_MODE" == "QUERY" ]]; then MODE_LABEL="${red}ACTIVE QUERIES IN FLIGHT${off}"
     else MODE_LABEL="${mag}BACKEND HEALTH & PING${off}"; fi
@@ -248,28 +285,52 @@ while true; do
     [[ "$THRESHOLD" -gt 0 ]] && FILTERS="$FILTERS | ${bld}Threshold:${off} ${red}>=$THRESHOLD conn${off}"
     [[ -n "$FILTERS" ]] && echo -e "$FILTERS"
     
-    echo -e "${cyn}==========================================================================================================================================${off}"
+    echo -e "${cyn}${SEP_LINE}${off}"
     
     if [[ "$VIEW_MODE" == "CONN" ]]; then
-        printf "${cyn}${bld}%-22s${off} | ${cyn}${bld}%-16s${off} | ${cyn}${bld}%-35s${off} | ${cyn}${bld}%-22s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-10s${off}\n" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONNECTIONS" "DELTA"
-        echo -e "${wht}------------------------------------------------------------------------------------------------------------------------------------------${off}"
+        printf "${cyn}${bld}%-20s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-28s${off} | ${cyn}${bld}%-20s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off}\n" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONN" "DELTA"
+        echo -e "${wht}${SEP_THIN}${off}"
         [[ -z "$FORMATTED_OUTPUT" ]] && echo -e "${wht}No active data to display.${off}" || echo -e "$FORMATTED_OUTPUT"
         
     elif [[ "$VIEW_MODE" == "QUERY" ]]; then
-        printf "${cyn}${bld}%-10s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-20s${off} | ${cyn}${bld}%-16s${off} | ${cyn}${bld}%-35s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%s${off}\n" "PROXY SID" "BACKEND SID" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "TIME (ms)" "ACTIVE QUERY"
-        echo -e "${wht}------------------------------------------------------------------------------------------------------------------------------------------${off}"
+        printf "${cyn}${bld}%-8s${off} | ${cyn}${bld}%-4s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-28s${off} | ${cyn}${bld}%-9s${off} | ${cyn}${bld}%s${off}\n" "PSID" "HG" "USER" "SOURCE" "BACKEND" "TIME (ms)" "ACTIVE QUERY"
+        echo -e "${wht}${SEP_THIN}${off}"
         [[ -z "$FORMATTED_OUTPUT" ]] && echo -e "${wht}No active data to display.${off}" || echo -e "$FORMATTED_OUTPUT"
         
     elif [[ "$VIEW_MODE" == "BACKEND" ]]; then
         echo -e "${blu}${bld} MySQL Connection Pool (stats_mysql_connection_pool) ${off}"
-        printf "${cyn}${bld}%-10s${off} | ${cyn}${bld}%-35s${off} | ${cyn}${bld}%-18s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%s${off}\n" "HOSTGROUP" "BACKEND HOST" "STATUS" "CONN USED" "CONN FREE" "CONN OK" "CONN ERR"
-        echo -e "${wht}------------------------------------------------------------------------------------------------------------------------------------------${off}"
+        printf "${cyn}${bld}%-10s${off} | ${cyn}${bld}%-35s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%s${off}\n" "HOSTGROUP" "BACKEND HOST" "STATUS" "CONN USED" "CONN FREE" "CONN OK" "CONN ERR"
+        echo -e "${wht}${SEP_THIN}${off}"
         [[ -z "$F_POOL" ]] && echo -e "No pool data." || echo -e "$F_POOL"
         
         echo -e "\n${blu}${bld} Server Ping Log (mysql_server_ping_log) ${off}"
-        printf "${cyn}${bld}%-35s${off} | ${cyn}${bld}%-25s${off} | ${cyn}${bld}%-20s${off} | ${cyn}${bld}%s${off}\n" "HOSTNAME" "LAST PING DATETIME" "SUCCESS TIME (us)" "PING ERROR"
-        echo -e "${wht}------------------------------------------------------------------------------------------------------------------------------------------${off}"
+        printf "${cyn}${bld}%-35s${off} | ${cyn}${bld}%-25s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%s${off}\n" "HOSTNAME" "LAST PING DATETIME" "SUCCESS (us)" "PING ERROR"
+        echo -e "${wht}${SEP_THIN}${off}"
         [[ -z "$F_PING" ]] && echo -e "No ping data." || echo -e "$F_PING"
+    fi
+    echo -e "${wht}${SEP_THIN}${off}"
+
+    # ==============================================================================
+    # File Logging (Continuous Mode)
+    # ==============================================================================
+    if [[ -n "$OUTPUT_FILE" ]]; then
+        {
+            echo "=== $TIMESTAMP | MODE: $VIEW_MODE ==="
+            if [[ "$VIEW_MODE" == "CONN" ]]; then
+                printf "%-20s | %-15s | %-28s | %-20s | %-10s | %-10s\n" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONN" "DELTA"
+                [[ -n "$FORMATTED_OUTPUT" ]] && echo -e "$FORMATTED_OUTPUT"
+            elif [[ "$VIEW_MODE" == "QUERY" ]]; then
+                printf "%-8s | %-4s | %-15s | %-15s | %-28s | %-9s | %s\n" "PSID" "HG" "USER" "SOURCE" "BACKEND" "TIME (ms)" "ACTIVE QUERY"
+                [[ -n "$FORMATTED_OUTPUT" ]] && echo -e "$FORMATTED_OUTPUT"
+            elif [[ "$VIEW_MODE" == "BACKEND" ]]; then
+                echo -e "--- MySQL Connection Pool ---"
+                printf "%-10s | %-35s | %-15s | %-11s | %-11s | %-11s | %s\n" "HOSTGROUP" "BACKEND HOST" "STATUS" "CONN USED" "CONN FREE" "CONN OK" "CONN ERR"
+                [[ -n "$F_POOL" ]] && echo -e "$F_POOL"
+                echo -e "--- Server Ping Log ---"
+                printf "%-35s | %-25s | %-15s | %s\n" "HOSTNAME" "LAST PING DATETIME" "SUCCESS (us)" "PING ERROR"
+                [[ -n "$F_PING" ]] && echo -e "$F_PING"
+            fi
+        } | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g' >> "$OUTPUT_FILE"
     fi
 
     # ==============================================================================
@@ -284,9 +345,10 @@ while true; do
             echo -e "\n${bld}${red}Exiting monitor...${off}"
             break ;;
         v|V) 
+            PAUSED=false # Auto-unpause on view change to prevent rendering old data under new headers
             if [[ "$VIEW_MODE" == "CONN" ]]; then VIEW_MODE="QUERY"
             elif [[ "$VIEW_MODE" == "QUERY" ]]; then VIEW_MODE="BACKEND"
-            else VIEW_MODE="CONN"; PREV_DATA=""; fi # Reset baseline
+            else VIEW_MODE="CONN"; PREV_DATA=""; fi
             ;;
         r|R) 
             echo -e "\n"
@@ -296,8 +358,9 @@ while true; do
             fi
             ;;
         s|S)
+            PAUSED=false
             [[ "$VIEW_MODE" == "CONN" ]] && SORT_MODE=$([[ "$SORT_MODE" == "CONN" ]] && echo "USER" || echo "CONN")
-            PREV_DATA="" # Recalculate diff mapping correctly
+            PREV_DATA=""
             ;;
         p|P)
             PAUSED=$($PAUSED && echo false || echo true)
