@@ -20,6 +20,9 @@ set -euo pipefail
 
 printf 'gcloud:%s\n' "$*" >> "${TEST_TRACE}"
 if [[ "$1 $2 $3" == "sql instances describe" ]]; then
+    if [[ "${STUB_DESCRIBE_FAILURE:-false}" == "true" ]]; then
+        exit 71
+    fi
     if [[ "${STUB_FLAG_STATE:-off}" == "on" ]]; then
         printf '%s\n' '{"settings":{"databaseFlags":[{"name":"general_log","value":"on"}]}}'
     else
@@ -65,6 +68,7 @@ run_script() {
             PATH="${STUB_DIR}:/usr/bin:/bin" \
             TEST_TRACE="${TRACE_FILE}" \
             STUB_FLAG_STATE="${STUB_FLAG_STATE:-off}" \
+            STUB_DESCRIBE_FAILURE="${STUB_DESCRIBE_FAILURE:-false}" \
             STUB_SLEEP_MODE="${STUB_SLEEP_MODE:-return}" \
             bash "${SCRIPT}" \
             --project test-project \
@@ -78,7 +82,7 @@ run_script() {
 reset_case() {
     : > "${TRACE_FILE}"
     rm -rf "${WORK_DIR}/tmp"
-    unset STUB_FLAG_STATE STUB_SLEEP_MODE TEST_SLEEP_MARKER
+    unset STUB_DESCRIBE_FAILURE STUB_FLAG_STATE STUB_SLEEP_MODE TEST_SLEEP_MARKER
 }
 
 line_number() {
@@ -88,6 +92,20 @@ line_number() {
 help_output="$(PATH="${STUB_DIR}:/usr/bin:/bin" bash "${SCRIPT}" --help 2>&1 || true)"
 if [[ "${help_output}" != *"-G, --generate-only"* ]]; then
     echo "help output does not document --generate-only" >&2
+    exit 1
+fi
+
+reset_case
+if STUB_DESCRIBE_FAILURE="true" run_script --generate-only --duration 0 >/dev/null 2>&1; then
+    echo "describe failure unexpectedly continued" >&2
+    exit 1
+fi
+if ! grep -q '^gcloud:sql instances describe' "${TRACE_FILE}"; then
+    echo "describe failure did not reach flag inspection" >&2
+    exit 1
+fi
+if grep -qE '^patch:|^gcloud:logging read|^mysql:' "${TRACE_FILE}"; then
+    echo "describe failure continued to a mutating or retrieval operation" >&2
     exit 1
 fi
 

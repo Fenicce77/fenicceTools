@@ -102,7 +102,7 @@ log_msg "[$(timestamp)] ${blu}[INFO] Execution log: ${LOGFILE}${off}"
 apply_flags() {
     local state=$1
     local new_flags
-    local cmd
+    local -a cmd
 
     if [[ -z "${CLEAN_FLAGS}" ]]; then
         new_flags="general_log=${state}"
@@ -110,12 +110,17 @@ apply_flags() {
         new_flags="${CLEAN_FLAGS},general_log=${state}"
     fi
 
-    cmd="gcloud sql instances patch \"${INSTANCE}\" --project=\"${PROJECT}\" --database-flags=\"${new_flags}\" --quiet"
+    cmd=(
+        gcloud sql instances patch "${INSTANCE}"
+        "--project=${PROJECT}"
+        "--database-flags=${new_flags}"
+        --quiet
+    )
 
     if [[ "${DRY_RUN}" == "true" ]]; then
-        log_msg "[$(timestamp)] ${cyn}[DRY-RUN] COMMAND: ${cmd}${off}"
+        log_msg "[$(timestamp)] ${cyn}[DRY-RUN] COMMAND: ${cmd[*]}${off}"
     else
-        eval "${cmd}"
+        "${cmd[@]}"
     fi
 }
 
@@ -159,31 +164,45 @@ else
         log_msg "[$(timestamp)] ${cyn}[DRY-RUN] Fetching current database flags via gcloud API...${off}"
     fi
 
-    CURRENT_FLAGS_JSON=$(gcloud sql instances describe "${INSTANCE}" --project="${PROJECT}" --format="json" 2>/dev/null || echo "{}")
+    if ! CURRENT_FLAGS_JSON=$(gcloud sql instances describe "${INSTANCE}" --project="${PROJECT}" --format="json" 2>>"${LOGFILE}"); then
+        log_msg "[$(timestamp)] ${red}[ERROR] Failed to read current Cloud SQL database flags. No changes were applied.${off}"
+        exit 1
+    fi
 
-    eval $(python3 -c '
+    if ! FLAG_STATE=$(python3 -c '
 import sys, json
 
 try:
     data = json.load(sys.stdin)
     flags = data.get("settings", {}).get("databaseFlags", [])
-    
+    if not isinstance(flags, list):
+        raise ValueError("settings.databaseFlags is not a list")
+
     is_on = "false"
     clean_flags = []
-    
-    for f in flags:
-        if f["name"] == "general_log":
-            if f["value"] == "on":
+
+    for flag in flags:
+        if not isinstance(flag, dict):
+            raise ValueError("database flag is not an object")
+        name = flag.get("name")
+        value = flag.get("value")
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise ValueError("database flag name or value is not a string")
+        if name == "general_log":
+            if value == "on":
                 is_on = "true"
         else:
-            clean_flags.append("{}={}".format(f["name"], f["value"]))
-            
-    print(f"ALREADY_ENABLED={is_on}")
-    print("CLEAN_FLAGS={}".format(",".join(clean_flags)))
-except Exception:
-    print("ALREADY_ENABLED=false")
-    print("CLEAN_FLAGS=")
-' <<< "${CURRENT_FLAGS_JSON}")
+            clean_flags.append("{}={}".format(name, value))
+
+    print("{}\t{}".format(is_on, ",".join(clean_flags)))
+except Exception as exc:
+    sys.stderr.write("failed to parse database flags: {}\n".format(exc))
+    sys.exit(1)
+' <<< "${CURRENT_FLAGS_JSON}" 2>>"${LOGFILE}"); then
+        log_msg "[$(timestamp)] ${red}[ERROR] Failed to parse current Cloud SQL database flags. No changes were applied.${off}"
+        exit 1
+    fi
+    IFS=$'\t' read -r ALREADY_ENABLED CLEAN_FLAGS <<< "${FLAG_STATE}"
 
     if [[ "${ALREADY_ENABLED}" == "true" ]]; then
         log_msg "[$(timestamp)] ${grn}[INFO] general_log is already enabled. Bypassing patch operation.${off}"
@@ -358,7 +377,7 @@ def parse_mysql_general_log(
         accepted += 1
 
         safe_arg = argument.replace("\\", "\\\\").replace("\x27", "\x27\x27").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
-        safe_user_host = user_host.replace("\x27", "\x27\x27")
+        safe_user_host = user_host.replace("\\", "\\\\").replace("\x27", "\x27\x27")
         insert_stmt = f"INSERT INTO {target_schema}.general_log_analysis (thread_id, user_host, server_id, command_type, argument, event_time) VALUES ({thread_id}, \x27{safe_user_host}\x27, {server_id}, \x27{command_type}\x27, \x27{safe_arg}\x27, \x27{current_time}\x27);"
         current_batch.append(insert_stmt)
 

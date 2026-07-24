@@ -70,13 +70,23 @@ class ParserContractTest(unittest.TestCase):
         payloads = [
             "2026-07-23T12:01:55Z user[user]\t@\t[2001:db8::1]99 1 Query\tSELECT 1\nFROM dual",
             "2026-07-23T12:01:56Z outer[user] @ [db.internal] 100 1 Quit",
+            "2026-07-23T12:01:57Z user[user] @ [127.0.0.1]101 1 Change\tuser switch",
         ]
         sql, log = self.parse_payloads(payloads)
         self.assertIn("'user@2001:db8::1'", sql)
         self.assertIn("'Query', 'SELECT 1\\nFROM dual'", sql)
         self.assertIn("'user@db.internal'", sql)
         self.assertIn("'Quit', ''", sql)
-        self.assertIn("accepted=2 rejected=0", log)
+        self.assertIn("'Change user', 'switch'", sql)
+        self.assertIn("accepted=3 rejected=0", log)
+
+    def test_user_host_escapes_backslashes_before_quotes(self) -> None:
+        payload = (
+            "2026-07-23T12:01:55Z outer[bad\\'user] @ [db\\'host]99 1 "
+            "Ping"
+        )
+        sql, _ = self.parse_payloads([payload])
+        self.assertIn("'bad\\\\''user@db\\\\''host'", sql)
 
     def test_all_supported_commands_and_prefix_collisions(self) -> None:
         for command in EXPECTED_COMMAND_TYPES:
