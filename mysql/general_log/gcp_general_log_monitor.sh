@@ -19,6 +19,7 @@ LOGIN_PATH=""
 SCHEMA=""
 DRY_RUN="false"
 FETCH_ONLY="false"
+GENERATE_ONLY="false"
 LOCAL_TMP_DIR="$(pwd)/tmp"
 OUTFILE="${LOCAL_TMP_DIR}/gcp_general_log_capture.sql"
 LOGFILE="${LOCAL_TMP_DIR}/gcp_general_log_monitor.log"
@@ -29,7 +30,7 @@ ${bld}NAME${off}
     gcp_general_log_monitor.sh - Capture GCP Cloud SQL general log telemetry
 
 ${bld}SYNOPSIS${off}
-    ./gcp_general_log_monitor.sh -p <project> -i <instance> -l <login-path> -s <schema> [-d <duration>] [--fetch-only] [--dry-run]
+    ./gcp_general_log_monitor.sh -p <project> -i <instance> -l <login-path> -s <schema> [-d <duration>] [--fetch-only] [--generate-only] [--dry-run]
 
 ${bld}DESCRIPTION${off}
     Evaluates current GCP Cloud SQL database flags to avoid unnecessary restarts. Enables general_log 
@@ -43,12 +44,14 @@ ${bld}OPTIONS${off}
     -s, --schema        Target database schema name.
     -d, --duration      Capture duration in seconds. Default: 300.
     -f, --fetch-only    Skip flag toggling and sleep; fetch full log history (ignores duration freshness).
+    -G, --generate-only Generate the SQL file but do not import it into MySQL.
     -D, --dry-run       Output commands to be executed without applying changes.
     -h, --help          Show this help message.
 
 ${bld}EXAMPLES${off}
     ${grn}su - rmateos${off}
     ./gcp_general_log_monitor.sh -p my-gcp-project -i my-prod-db -l target_monitor_node -s feniccedb -d 60 -f
+    ./gcp_general_log_monitor.sh -p my-gcp-project -i my-prod-db -l target_monitor_node -s feniccedb -G
 EOF
     exit 1
 }
@@ -62,6 +65,7 @@ while [[ $# -gt 0 ]]; do
         -s|--schema) SCHEMA="$2"; shift 2 ;;
         -d|--duration) DURATION="$2"; shift 2 ;;
         -f|--fetch-only) FETCH_ONLY="true"; shift 1 ;;
+        -G|--generate-only) GENERATE_ONLY="true"; shift 1 ;;
         -D|--dry-run) DRY_RUN="true"; shift 1 ;;
         -h|--help) usage ;;
         *) echo "${red}[ERROR] Unknown parameter passed: $1${off}"; usage ;;
@@ -73,8 +77,17 @@ if [[ -z "${PROJECT}" || -z "${INSTANCE}" || -z "${LOGIN_PATH}" || -z "${SCHEMA}
     usage
 fi
 
+if [[ "${DRY_RUN}" == "true" && "${GENERATE_ONLY}" == "true" ]]; then
+    echo "${red}[ERROR] --dry-run and --generate-only cannot be used together.${off}" >&2
+    exit 2
+fi
+
+umask 077
 mkdir -p "${LOCAL_TMP_DIR}"
-> "${LOGFILE}"
+: > "${LOGFILE}"
+chmod 600 "${LOGFILE}"
+GENERAL_LOG_MODIFIED="false"
+CAPTURE_PID=""
 
 log_msg() {
     local msg="$1"
@@ -106,6 +119,39 @@ apply_flags() {
     fi
 }
 
+cleanup_general_log() {
+    local exit_status=$?
+
+    trap - EXIT
+    if [[ "${GENERAL_LOG_MODIFIED}" == "true" ]]; then
+        log_msg "[$(timestamp)] ${yel}[WARNING] Restoring general_log after interrupted execution...${off}"
+        if ! apply_flags "off"; then
+            log_msg "[$(timestamp)] ${red}[ERROR] Failed to restore general_log. Manual intervention is required.${off}"
+            echo "[ERROR] Failed to restore general_log. Manual intervention is required." >&2
+            if [[ ${exit_status} -eq 0 ]]; then
+                exit_status=1
+            fi
+        fi
+        GENERAL_LOG_MODIFIED="false"
+    fi
+    exit "${exit_status}"
+}
+
+handle_signal() {
+    local signal_status=$1
+
+    if [[ -n "${CAPTURE_PID}" ]]; then
+        kill "${CAPTURE_PID}" 2>/dev/null || true
+        wait "${CAPTURE_PID}" 2>/dev/null || true
+        CAPTURE_PID=""
+    fi
+    exit "${signal_status}"
+}
+
+trap cleanup_general_log EXIT
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+
 if [[ "${FETCH_ONLY}" == "true" ]]; then
     log_msg "[$(timestamp)] ${grn}[INFO] --fetch-only passed. Bypassing flag evaluation and traffic capture wait.${off}"
 else
@@ -130,10 +176,10 @@ try:
             if f["value"] == "on":
                 is_on = "true"
         else:
-            clean_flags.append(f"{f[\"name\"]}={f[\"value\"]}")
+            clean_flags.append("{}={}".format(f["name"], f["value"]))
             
     print(f"ALREADY_ENABLED={is_on}")
-    print(f"CLEAN_FLAGS={','.join(clean_flags)}")
+    print("CLEAN_FLAGS={}".format(",".join(clean_flags)))
 except Exception:
     print("ALREADY_ENABLED=false")
     print("CLEAN_FLAGS=")
@@ -144,18 +190,23 @@ except Exception:
     else
         log_msg "[$(timestamp)] ${blu}[INFO] general_log is disabled. Patching instance to enable...${off}"
         apply_flags "on"
+        GENERAL_LOG_MODIFIED="true"
     fi
 
     if [[ "${DRY_RUN}" == "true" ]]; then
         log_msg "[$(timestamp)] ${cyn}[DRY-RUN] SLEEP: sleep ${DURATION}${off}"
     else
         log_msg "[$(timestamp)] ${yel}[INFO] Sleeping for ${DURATION} seconds while traffic is captured...${off}"
-        sleep "${DURATION}"
+        sleep "${DURATION}" &
+        CAPTURE_PID=$!
+        wait "${CAPTURE_PID}"
+        CAPTURE_PID=""
     fi
 
     if [[ "${ALREADY_ENABLED}" == "false" ]]; then
         log_msg "[$(timestamp)] ${blu}[INFO] Reverting general_log to disabled state...${off}"
         apply_flags "off"
+        GENERAL_LOG_MODIFIED="false"
     else
         log_msg "[$(timestamp)] ${blu}[INFO] general_log was originally enabled. Leaving flag in 'on' state.${off}"
     fi
@@ -193,105 +244,157 @@ fi
 log_msg "[$(timestamp)] ${blu}[INFO] Parsing JSON payload logs and generating INSERT statements...${off}"
 
 python3 -c '
-import sys
+# PARSER_PYTHON_BEGIN
 import json
 import re
-from typing import List, Dict, Any
+import sys
+from typing import Any, Dict, List, TextIO
 
-def parse_mysql_general_log(json_input: str, target_schema: str) -> str:
+COMMAND_TYPES = (
+    "Sleep", "Quit", "Init DB", "Query", "Field List", "Create DB",
+    "Drop DB", "Refresh", "Shutdown", "Statistics", "Processlist",
+    "Connect", "Kill", "Debug", "Ping", "Time", "Delayed insert",
+    "Change user", "Binlog Dump", "Table Dump", "Connect Out",
+    "Register Replica", "Register Slave", "Prepare", "Execute", "Long Data",
+    "Close stmt", "Reset stmt", "Set option", "Fetch", "Daemon",
+    "Binlog Dump GTID", "Reset Connection", "clone",
+    "Group Replication Data Stream subscription", "Error",
+)
+
+command_pattern = "|".join(
+    re.escape(command).replace(r"\ ", r"\s+")
+    for command in sorted(COMMAND_TYPES, key=len, reverse=True)
+)
+
+GENERAL_LOG_PATTERN = re.compile(
+    rf"""
+    \A
+    (?P<event_time>
+        \d{{4}}-\d{{2}}-\d{{2}}T
+        \d{{2}}:\d{{2}}:\d{{2}}
+        (?:\.\d{{1,6}})?Z
+    )
+    \s+
+    (?P<outer_username>[^\s\[\]]+)
+    \[(?P<username>[^\]\r\n]+)\]
+    \s*@\s*
+    \[(?P<host>[^\]\r\n]+)\]
+    \s*
+    (?P<thread_id>\d+)
+    \s+
+    (?P<server_id>\d+)
+    \s+
+    (?P<command_type>{command_pattern})
+    (?:\s+(?P<argument>.*))?
+    \Z
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+def log_rejection(rejection_log: TextIO, reason: str, raw_payload: str) -> None:
+    rejection_log.write(f"[PARSER REJECT] {reason}\n")
+    rejection_log.write("[PARSER RAW PAYLOAD BEGIN]\n")
+    rejection_log.write(raw_payload)
+    if not raw_payload.endswith("\n"):
+        rejection_log.write("\n")
+    rejection_log.write("[PARSER RAW PAYLOAD END]\n")
+
+
+def parse_mysql_general_log(
+    json_input: str,
+    target_schema: str,
+    rejection_log: TextIO,
+) -> str:
     sql_batches: List[str] = ["SET autocommit=0;\n"]
     current_batch: List[str] = []
-    batch_size: int = 500  
-    
+    batch_size = 500
+    accepted = 0
+    rejected = 0
+
     try:
         logs: List[Dict[str, Any]] = json.loads(json_input)
-    except Exception:
+    except Exception as exc:
+        rejection_log.write(f"[PARSER ERROR] invalid JSON: {type(exc).__name__}: {exc}\n")
         return ""
-        
-    cmd_types = r"(Query|Execute|Prepare|Close\sstmt|Connect|Quit|Init\sDB|Sleep|Ping|Field\sList|Fetch|Reset\sstmt|Change\suser)"
-    
-    # Pattern constructed using standard concatenation. 
-    # Group 1: Time (Optional)
-    # Group 2: Raw User string
-    # Group 3: Raw IP string
-    # Group 4: Thread ID
-    # Group 5: Server ID
-    # Group 6: Command Type
-    # Group 7: Argument (Optional to support argument-less commands like Quit)
-    pattern_str = r"^(?:(\d{4}-\d{2}-\d{2}T.*?Z?)\s+)?(.*?)\s*@\s*\[(.*?)\]\s*(\d+)\s+(\d+)\s+" + cmd_types + r"(?:\s+(.*))?$"
-    pattern = re.compile(pattern_str, re.DOTALL)
-    
+
+    if not isinstance(logs, list):
+        rejection_log.write("[PARSER ERROR] top-level JSON value is not a list\n")
+        return ""
+
     for entry in reversed(logs):
-        line: str = ""
-        
-        if "textPayload" in entry:
-            line = entry["textPayload"]
-        elif "jsonPayload" in entry and isinstance(entry["jsonPayload"], dict):
-            jp = entry["jsonPayload"]
-            line = jp.get("message", jp.get("textPayload", jp.get("query", "")))
-            
-        line = line.strip()
+        raw_line = ""
+        if isinstance(entry, dict):
+            if isinstance(entry.get("textPayload"), str):
+                raw_line = entry["textPayload"]
+            elif isinstance(entry.get("jsonPayload"), dict):
+                json_payload = entry["jsonPayload"]
+                for field in ("message", "textPayload", "query"):
+                    if isinstance(json_payload.get(field), str):
+                        raw_line = json_payload[field]
+                        break
+
+        line = raw_line.strip()
         if not line:
+            rejected += 1
+            log_rejection(rejection_log, "empty payload", raw_line)
             continue
-            
-        match = pattern.search(line)
-        if match:
-            raw_time = match.group(1)
-            raw_user = match.group(2).strip()
-            raw_ip = match.group(3).strip()
-            thread_id = match.group(4)
-            server_id = match.group(5)
-            command_type = match.group(6).strip()
-            argument = match.group(7) or ""
-            
-            # Sub T/Z artifacts from standard MySQL log time
-            current_time = raw_time.replace("T", " ").replace("Z", "") if raw_time else ""
-            user_host = f"{raw_user}@{raw_ip}"
-        else:
-            thread_id = "0"
-            user_host = "unknown"
-            server_id = "1"
-            command_type = "Query"
-            argument = line
-            current_time = ""
-            
-        # Natively map GCP log metadata timestamp as reliable fallback
-        if not current_time:
-            gcp_time = entry.get("timestamp", "1970-01-01T00:00:00.000000Z")
-            current_time = re.sub(r"[TZ]", " ", gcp_time).strip()
-            current_time = re.sub(r"[+-]\d{2}:\d{2}$", "", current_time).strip()
-            
-        # SQL Injection & newline escaping layer
+
+        match = GENERAL_LOG_PATTERN.fullmatch(line)
+        if not match:
+            rejected += 1
+            log_rejection(rejection_log, "payload format mismatch", raw_line)
+            continue
+
+        raw_time = match.group("event_time")
+        username = match.group("username").strip()
+        host = match.group("host").strip()
+        thread_id = match.group("thread_id")
+        server_id = match.group("server_id")
+        command_type = re.sub(r"\s+", " ", match.group("command_type"))
+        argument = match.group("argument") or ""
+        current_time = raw_time[:-1].replace("T", " ", 1)
+        user_host = f"{username}@{host}"
+        accepted += 1
+
         safe_arg = argument.replace("\\", "\\\\").replace("\x27", "\x27\x27").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
-        safe_user_host = user_host.strip().replace("\x27", "\x27\x27")
-        
+        safe_user_host = user_host.replace("\x27", "\x27\x27")
         insert_stmt = f"INSERT INTO {target_schema}.general_log_analysis (thread_id, user_host, server_id, command_type, argument, event_time) VALUES ({thread_id}, \x27{safe_user_host}\x27, {server_id}, \x27{command_type}\x27, \x27{safe_arg}\x27, \x27{current_time}\x27);"
-        
         current_batch.append(insert_stmt)
-        
-        # Enforce batch execution caps to respect MySQL max_allowed_packet configurations
+
         if len(current_batch) >= batch_size:
             sql_batches.append("START TRANSACTION;\n" + "\n".join(current_batch) + "\nCOMMIT;\n")
             current_batch = []
-            
+
+    rejection_log.write(f"[PARSER SUMMARY] accepted={accepted} rejected={rejected}\n")
+    if accepted == 0:
+        return ""
+
     if current_batch:
         sql_batches.append("START TRANSACTION;\n" + "\n".join(current_batch) + "\nCOMMIT;\n")
-        
-    if len(sql_batches) > 1:
-        sql_batches.append("SET autocommit=1;\n")
-        return "\n".join(sql_batches)
-    return ""
+    sql_batches.append("SET autocommit=1;\n")
+    return "\n".join(sql_batches)
 
-raw_data = sys.stdin.read()
-schema = sys.argv[1]
-sql_output = parse_mysql_general_log(raw_data, schema)
-if sql_output:
-    print(sql_output, end="")
-' "${SCHEMA}" <<< "$RAW_LOGS" > "${OUTFILE}"
+
+if __name__ == "__main__":
+    raw_data = sys.stdin.read()
+    schema = sys.argv[1]
+    log_path = sys.argv[2]
+    with open(log_path, "a", encoding="utf-8", newline="") as parser_log:
+        sql_output = parse_mysql_general_log(raw_data, schema, parser_log)
+    if sql_output:
+        print(sql_output, end="")
+# PARSER_PYTHON_END
+' "${SCHEMA}" "${LOGFILE}" <<< "$RAW_LOGS" > "${OUTFILE}" 2>>"${LOGFILE}"
 
 if [[ -s "${OUTFILE}" ]] && grep -q "INSERT INTO" "${OUTFILE}"; then
     log_msg "[$(timestamp)] ${grn}[OK] Transactions insertion file generated at ${OUTFILE}${off}"
-    
+
+    if [[ "${GENERATE_ONLY}" == "true" ]]; then
+        log_msg "[$(timestamp)] ${grn}[OK] --generate-only completed. MySQL import skipped.${off}"
+        exit 0
+    fi
+
     log_msg "[$(timestamp)] ${blu}[INFO] Populating target schema ${SCHEMA} via login-path ${LOGIN_PATH}...${off}"
     if mysql --login-path="${LOGIN_PATH}" "${SCHEMA}" < "${OUTFILE}" 2>>"${LOGFILE}"; then
         log_msg "[$(timestamp)] ${grn}[OK] Telemetry successfully flushed to ${SCHEMA}.general_log_analysis.${off}"
