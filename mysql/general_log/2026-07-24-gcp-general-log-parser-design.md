@@ -1,18 +1,28 @@
 # GCP Cloud SQL General Log Parser Design
 
 **Date:** 2026-07-24  
-**Status:** Approved in conversation  
-**Source script:** `/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh`
+**Status:** Revised and approved in conversation
+**Source script:** `mysql/general_log/gcp_general_log_monitor.sh`
 
 ## Purpose
 
 Correct the script's `textPayload` parsing so that valid MySQL general-log
 events produce accurately populated insert statements and malformed events
-never produce synthetic database rows.
+never produce synthetic database rows. Add an optional SQL-generation-only
+mode and guarantee best-effort restoration of a `general_log` flag temporarily
+enabled by the script.
 
-The change is limited to payload parsing, rejection reporting, and the parser
-tests needed to establish those behaviors. Cloud SQL flag management, log
-retrieval, batching, and MySQL execution remain outside this design.
+The change covers:
+
+- strict payload parsing and rejection reporting;
+- parser and shell integration tests;
+- a `-G` / `--generate-only` execution option;
+- explicit execution-mode validation;
+- ownership tracking and interruption-safe restoration of `general_log`.
+
+Cloud Logging retrieval, SQL batching, and normal MySQL import behavior remain
+unchanged except where execution-mode control or safe flag restoration requires
+an explicit branch.
 
 ## Problem
 
@@ -58,6 +68,11 @@ Rules:
 
 The parser retains the original payload separately from the stripped matching
 value so a rejected payload can be logged verbatim.
+
+Cloud Logging entries truncated into separate records are not reconstructed.
+Only a payload containing a complete general-log header and body is accepted.
+A standalone continuation fragment is rejected and logged under the same
+rejection contract as any other malformed payload.
 
 ## Single-Regex Parser
 
@@ -214,6 +229,81 @@ The parser records accepted and rejected counts:
 Parser diagnostics must use a channel separate from SQL standard output so raw
 payloads and status text cannot contaminate the generated SQL file.
 
+## Execution Modes
+
+Add the independent option:
+
+```text
+-G, --generate-only
+```
+
+It uses the existing output path:
+
+```text
+./tmp/gcp_general_log_capture.sql
+```
+
+The supported execution matrix is:
+
+| Options | Flag management | Cloud Logging read | SQL generated | MySQL import |
+|---|---:|---:|---:|---:|
+| none | Yes | Yes | Yes | Yes |
+| `--generate-only` | Yes | Yes | Yes | No |
+| `--fetch-only` | No | Yes | Yes | Yes |
+| `--fetch-only --generate-only` | No | Yes | Yes | No |
+| `--dry-run` | Preview only | No | No | Previewed |
+
+`--dry-run` and `--generate-only` are mutually exclusive. The script validates
+this before any external command, prints:
+
+```text
+[ERROR] --dry-run and --generate-only cannot be used together.
+```
+
+and exits with status `2`.
+
+After successful SQL generation, `--generate-only` logs the output path, skips
+the `mysql` command, and exits with status `0`. The output file must be
+nonempty and contain at least one generated `INSERT`. Invalid input or a batch
+with no accepted events remains an error and cannot reach MySQL.
+
+## General-Log Flag Lifecycle
+
+The script records whether `general_log` was enabled before this execution. It
+enables the flag only when initially disabled and restores that original state
+immediately after the capture interval, before Cloud Logging retrieval and SQL
+generation.
+
+The state variable:
+
+```text
+GENERAL_LOG_MODIFIED=false
+```
+
+changes to `true` only after a successful enable operation. A successful normal
+restore changes it back to `false`.
+
+An `EXIT` cleanup handler performs a best-effort `general_log=off` restoration
+only when `GENERAL_LOG_MODIFIED=true`. `SIGINT` and `SIGTERM` terminate with
+their conventional statuses and allow the `EXIT` cleanup to run. Cleanup must:
+
+- disable its own recursive execution before running external commands;
+- preserve the original exit status when restoration succeeds;
+- report a restoration failure to both stderr and the restricted monitor log;
+- return a nonzero status if the main workflow succeeded but restoration
+  failed.
+
+The cleanup handler does nothing in these cases:
+
+- `--fetch-only`;
+- `--dry-run`;
+- the instance had `general_log` enabled before execution;
+- normal restoration already succeeded.
+
+An instance whose `general_log` was originally enabled is left enabled.
+Restoration means returning to the original state, not unconditionally
+disabling the flag.
+
 ## Testing
 
 The parser test set must cover:
@@ -237,6 +327,32 @@ The parser test set must cover:
 17. Accepted/rejected summary counts.
 18. Monitor log mode `0600`.
 
+The parser suite must also cover:
+
+19. `outer[canonical] @ [host]` producing `canonical@host`.
+20. Multiline query arguments contained in one complete payload.
+21. Standalone truncated continuation fragments being rejected without
+    reconstruction.
+
+Shell integration tests use local fixtures and command stubs only. They must
+prove:
+
+1. `--dry-run --generate-only` fails before external command execution.
+2. `--fetch-only --generate-only` reads fixture logs, creates SQL, and never
+   invokes MySQL.
+3. Normal `--generate-only` performs enable, capture, restore, read, and
+   generation in that order without invoking MySQL.
+4. Normal execution still imports after successful SQL generation.
+5. An originally enabled `general_log` is not disabled.
+6. Interruption after temporary enable triggers restoration.
+7. Restoration occurs before Cloud Logging retrieval.
+8. Empty or all-rejected output never invokes MySQL.
+9. The monitor log has mode `0600`.
+10. Help output documents `--generate-only`, its short option, incompatibility
+    with `--dry-run`, and representative examples.
+
+No test may invoke a real `gcloud` or `mysql` binary.
+
 Tests must explicitly assert that rejected input never produces an insert
 containing the former fallback values.
 
@@ -251,6 +367,12 @@ The change is complete when:
   generated SQL.
 - Mixed batches retain valid events.
 - All-invalid input cannot reach the MySQL import step.
+- `--generate-only` creates the normal SQL artifact and never invokes MySQL.
+- `--dry-run --generate-only` is rejected before external execution.
+- A `general_log` flag enabled by this run is restored before log retrieval.
+- Interruption or unexpected exit after enable triggers best-effort
+  restoration.
+- An originally enabled `general_log` remains enabled.
 - Parser tests and shell-level integration tests pass without invoking GCP or a
   database.
 

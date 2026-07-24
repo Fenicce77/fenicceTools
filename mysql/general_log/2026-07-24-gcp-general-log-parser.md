@@ -1,812 +1,212 @@
-# GCP Cloud SQL General Log Parser Implementation Plan
+# GCP Cloud SQL General-Log Parser Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to execute this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the supplied monitor script generate accurate inserts for all source-backed Cloud SQL MySQL command types while logging malformed payloads verbatim and excluding them from SQL.
+**Goal:** Generate accurate Cloud SQL MySQL general-log inserts, reject malformed payloads safely, provide SQL-generation-only mode, and restore a temporarily enabled `general_log` flag when execution is interrupted.
 
-**Architecture:** Keep the deliverable as one portable Bash script with its Python parser embedded. Replace the permissive positional regex with one anchored named-group regex whose command alternation is generated from an explicit 36-label whitelist. Unit tests extract the marked Python block without running the shell workflow; a narrow shell test exercises only `--fetch-only --dry-run`, which cannot call GCP or MySQL.
+**Architecture:** Keep `gcp_general_log_monitor.sh` as the single operational artifact. Its embedded Python parser becomes a marked import-safe module with a strict named-group parser API. Shell integration tests use stub `gcloud`, `mysql`, and `sleep` commands to prove control flow without calling GCP or a database.
 
-**Tech Stack:** Bash, Python 3 standard library (`json`, `re`, `io`, `unittest`), ShellCheck.
+**Tech Stack:** Bash, Python 3 standard library (`io`, `json`, `pathlib`, `re`, `stat`, `subprocess`, `tempfile`, `unittest`), ShellCheck.
 
 ## Global Constraints
 
-- Do not run `gcloud`, `mysql`, or the normal monitor workflow during development or verification.
-- Do not run `git` or initialize a repository; this workspace is intentionally not Git-backed.
-- Modify only `/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh` and the new parser test files named below.
-- Keep the runtime deliverable self-contained in the existing Bash script.
-- Use one compiled, anchored regular expression with named capture groups.
-- Recognize exactly the 36 source-backed command labels in the approved design.
-- Use the bracketed username to construct `username@host`.
-- A rejected payload must generate no insert and must be written to the monitor log verbatim, without sanitization, redaction, truncation, or console output.
-- Mixed batches retain valid events; wholly rejected batches produce no SQL and cannot reach MySQL.
-- The monitor log must have mode `0600`.
-- Parser standard output is SQL only; diagnostics use the monitor log.
-- Because Git is prohibited, replace commit checkpoints with SHA-256 checkpoints for the changed files.
+- Work only in this repository-local path: `mysql/general_log/`.
+- Do not invoke real `gcloud` or `mysql` during local testing.
+- Keep the runtime deliverable as one Bash script with embedded Python.
+- Use `set -euo pipefail` and preserve colourized help and output.
+- Parser stdout is SQL only; raw rejection diagnostics go only to the mode-`0600` monitor log.
+- Accept exactly the approved 36 MySQL command labels.
+- Do not reconstruct truncated Cloud Logging fragments.
+- `--dry-run` and `--generate-only` must fail together with exit status `2`.
+- A flag originally enabled must remain enabled; a flag enabled by this execution must be restored before log retrieval and on interruption.
 
 ## File Structure
 
-- Modify: `/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh`
-  - Retains the complete runtime workflow.
-  - Contains a marked, import-safe Python parser block.
-  - Creates the monitor log with user-only permissions.
-- Create: `/Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py`
-  - Extracts the marked Python block and tests parsing, normalization, command coverage, rejection behavior, and SQL output without invoking the Bash workflow.
-- Create: `/Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh`
-  - Runs only the `--fetch-only --dry-run` path to verify log permissions and absence of external execution.
+- Modify: `mysql/general_log/gcp_general_log_monitor.sh`
+  - CLI validation, flag lifecycle cleanup, secure monitor log, embedded parser, and final load branch.
+- Create: `mysql/general_log/tests/gcp-general-log-parser/test_parser.py`
+  - Extracted-parser contract tests.
+- Create: `mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh`
+  - Stubbed shell workflow integration tests.
+- Modify: `mysql/general_log/README.md`
+  - Usage and local verification documentation reflecting the implementation.
 
 ---
 
-### Task 1: Add a Failing Parser Contract Test
+### Task 1: Establish Parser Contract Tests
 
 **Files:**
-- Create: `/Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py`
-- Read: `/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh`
+- Create: `mysql/general_log/tests/gcp-general-log-parser/test_parser.py`
+- Read: `mysql/general_log/gcp_general_log_monitor.sh`
 
 **Interfaces:**
-- Consumes: marked source between `# PARSER_PYTHON_BEGIN` and `# PARSER_PYTHON_END`.
-- Produces: extracted `COMMAND_TYPES`, `GENERAL_LOG_PATTERN`, and `parse_mysql_general_log(json_input: str, target_schema: str, rejection_log: TextIO) -> str`.
+- Consumes source between `# PARSER_PYTHON_BEGIN` and `# PARSER_PYTHON_END`.
+- Produces executable coverage for `COMMAND_TYPES`, `GENERAL_LOG_PATTERN`, and `parse_mysql_general_log(json_input: str, target_schema: str, rejection_log: TextIO) -> str`.
 
-- [ ] **Step 1: Create the test directory and parser test**
+- [ ] **Step 1: Write failing parser tests**
 
-Use `apply_patch` to add this complete file:
+Create tests that load the marked Python block into a namespace with `__name__ = "embedded_general_log_parser"`. Cover the exact `Change user` fixture, canonical `user[user] @ [10.10.10.1] -> user@10.10.10.1`, IPv4/IPv6/hostname hosts, tabs, absent host/thread whitespace, argumentless commands, all 36 command labels, longest-command prefix collisions, malformed timestamps/brackets/IDs/commands, whitespace-only input, a truncated continuation fragment, mixed input, all-rejected input, invalid JSON, verbatim raw logging, summaries, and absence of fallback values.
 
-```python
-import io
-import json
-import os
-import re
-import unittest
-from pathlib import Path
-
-
-SCRIPT = Path(
-    os.environ.get(
-        "GCP_GENERAL_LOG_MONITOR_SCRIPT",
-        "/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh",
-    )
-)
-
-EXPECTED_COMMAND_TYPES = (
-    "Sleep",
-    "Quit",
-    "Init DB",
-    "Query",
-    "Field List",
-    "Create DB",
-    "Drop DB",
-    "Refresh",
-    "Shutdown",
-    "Statistics",
-    "Processlist",
-    "Connect",
-    "Kill",
-    "Debug",
-    "Ping",
-    "Time",
-    "Delayed insert",
-    "Change user",
-    "Binlog Dump",
-    "Table Dump",
-    "Connect Out",
-    "Register Replica",
-    "Register Slave",
-    "Prepare",
-    "Execute",
-    "Long Data",
-    "Close stmt",
-    "Reset stmt",
-    "Set option",
-    "Fetch",
-    "Daemon",
-    "Binlog Dump GTID",
-    "Reset Connection",
-    "clone",
-    "Group Replication Data Stream subscription",
-    "Error",
-)
-
-
-def load_parser_namespace():
-    source = SCRIPT.read_text(encoding="utf-8")
-    start_marker = "# PARSER_PYTHON_BEGIN\n"
-    end_marker = "# PARSER_PYTHON_END"
-    start = source.index(start_marker) + len(start_marker)
-    end = source.index(end_marker, start)
-    namespace = {"__name__": "embedded_general_log_parser"}
-    exec(compile(source[start:end], str(SCRIPT), "exec"), namespace)
-    return namespace
-
-
-class ParserContractTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.namespace = load_parser_namespace()
-        cls.parse = staticmethod(cls.namespace["parse_mysql_general_log"])
-
-    def parse_payloads(self, payloads):
-        logs = [
-            {
-                "textPayload": payload,
-                "timestamp": "2026-07-23T12:01:55.896580Z",
-            }
-            for payload in payloads
-        ]
-        rejection_log = io.StringIO()
-        sql = self.parse(json.dumps(logs), "rmc_betika", rejection_log)
-        return sql, rejection_log.getvalue()
-
-    def test_command_whitelist_is_complete_and_exact(self):
-        self.assertEqual(
-            tuple(self.namespace["COMMAND_TYPES"]),
-            EXPECTED_COMMAND_TYPES,
-        )
-
-    def test_supplied_change_user_payload(self):
-        payload = (
-            "2026-07-23T12:01:55.896580Z\t"
-            "dev-userapp[dev-userapp] @  [XX.XX.XXX.XXX]"
-            "15397 4226757038 Change user\t"
-            "dev-userapp@XX.XX.XXX.XXX on dev_betika_africa using TCP/IP"
-        )
-        sql, log = self.parse_payloads([payload])
-        expected_values = (
-            "(15397, 'dev-userapp@XX.XX.XXX.XXX', 4226757038, "
-            "'Change user', "
-            "'dev-userapp@XX.XX.XXX.XXX on dev_betika_africa using TCP/IP', "
-            "'2026-07-23 12:01:55.896580')"
-        )
-        self.assertIn(expected_values, sql)
-        self.assertIn("[PARSER SUMMARY] accepted=1 rejected=0", log)
-        self.assertNotIn("unknown", sql)
-
-    def test_all_source_backed_commands_match_without_prefix_collision(self):
-        for command in EXPECTED_COMMAND_TYPES:
-            with self.subTest(command=command):
-                payload = (
-                    "2026-07-23T12:01:55.896580Z "
-                    "user[user] @ [127.0.0.1]"
-                    f"99 1 {command} payload"
-                )
-                sql, log = self.parse_payloads([payload])
-                self.assertIn(f", '{command}', 'payload', ", sql)
-                self.assertIn("accepted=1 rejected=0", log)
-
-    def test_whitespace_ipv6_and_argumentless_command(self):
-        payloads = [
-            (
-                "2026-07-23T12:01:55Z   user[user]\t@\t"
-                "[2001:db8::1]  99   1   Query   SELECT 1"
-            ),
-            "2026-07-23T12:01:56Z user[user] @ [db.internal]100 1 Quit",
-        ]
-        sql, log = self.parse_payloads(payloads)
-        self.assertIn("'user@2001:db8::1'", sql)
-        self.assertIn("'Query', 'SELECT 1'", sql)
-        self.assertIn("'user@db.internal'", sql)
-        self.assertIn("'Quit', ''", sql)
-        self.assertIn("accepted=2 rejected=0", log)
-
-    def test_unknown_command_is_logged_verbatim_and_not_inserted(self):
-        payload = (
-            "2026-07-23T12:01:55Z user[user] @ [127.0.0.1]"
-            "99 1 Unsupported command secret argument"
-        )
-        sql, log = self.parse_payloads([payload])
-        self.assertEqual(sql, "")
-        self.assertIn("[PARSER REJECT] payload format mismatch", log)
-        self.assertIn(payload, log)
-        self.assertIn("[PARSER SUMMARY] accepted=0 rejected=1", log)
-        self.assertNotIn("INSERT INTO", sql)
-        self.assertNotIn("(0, 'unknown', 1, 'Query'", sql)
-
-    def test_mixed_batch_keeps_only_valid_payload(self):
-        valid = (
-            "2026-07-23T12:01:55Z user[user] @ [127.0.0.1]"
-            "99 1 Ping"
-        )
-        rejected = (
-            "2026-07-23T12:01:55Z user[user] @ [127.0.0.1]"
-            "not-a-thread 1 Query SELECT 1"
-        )
-        sql, log = self.parse_payloads([valid, rejected])
-        self.assertEqual(sql.count("INSERT INTO"), 1)
-        self.assertIn("'Ping', ''", sql)
-        self.assertNotIn(rejected, sql)
-        self.assertIn(rejected, log)
-        self.assertIn("accepted=1 rejected=1", log)
-
-    def test_malformed_structures_are_rejected(self):
-        payloads = (
-            "   ",
-            "2026-07-23 12:01:55Z user[user] @ [127.0.0.1]99 1 Query x",
-            "2026-07-23T12:01:55.1234567Z user[user] @ [127.0.0.1]99 1 Query x",
-            "2026-07-23T12:01:55Z user[user @ [127.0.0.1]99 1 Query x",
-            "2026-07-23T12:01:55Z user[user] @ 127.0.0.1]99 1 Query x",
-            "2026-07-23T12:01:55Z user[user] @ [127.0.0.1]x 1 Query x",
-            "2026-07-23T12:01:55Z user[user] @ [127.0.0.1]99 x Query x",
-        )
-        sql, log = self.parse_payloads(payloads)
-        self.assertEqual(sql, "")
-        self.assertEqual(log.count("[PARSER RAW PAYLOAD BEGIN]"), len(payloads))
-        for payload in payloads:
-            self.assertIn(payload, log)
-
-    def test_invalid_json_produces_no_sql(self):
-        rejection_log = io.StringIO()
-        sql = self.parse("{not-json", "rmc_betika", rejection_log)
-        self.assertEqual(sql, "")
-        self.assertIn("[PARSER ERROR] invalid JSON", rejection_log.getvalue())
-
-    def test_pattern_is_anchored_and_uses_named_groups(self):
-        pattern = self.namespace["GENERAL_LOG_PATTERN"]
-        self.assertIsInstance(pattern, re.Pattern)
-        self.assertEqual(
-            set(pattern.groupindex),
-            {
-                "event_time",
-                "outer_username",
-                "username",
-                "host",
-                "thread_id",
-                "server_id",
-                "command_type",
-                "argument",
-            },
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
-```
-
-- [ ] **Step 2: Run the parser tests and confirm RED**
+- [ ] **Step 2: Verify RED**
 
 Run:
 
 ```bash
 python3 -m unittest discover \
-  -s /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser \
+  -s mysql/general_log/tests/gcp-general-log-parser \
   -p 'test_parser.py' -v
 ```
 
-Expected: ERROR from `source.index(start_marker)` because the supplied script
-does not yet contain the marked, import-safe parser block.
+Expected: failure because the source lacks the parser markers and the import-safe parser API.
 
-- [ ] **Step 3: Record the RED checkpoint**
-
-Run:
+- [ ] **Step 3: Commit the failing contract tests**
 
 ```bash
-shasum -a 256 \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py
+git add mysql/general_log/tests/gcp-general-log-parser/test_parser.py
+git commit -m "test: define general log parser contract"
 ```
 
-Expected: one SHA-256 line for the new failing test. Save it in the execution
-notes; do not initialize Git.
-
----
-
-### Task 2: Implement the Strict Comprehensive Parser
+### Task 2: Implement the Strict Embedded Parser
 
 **Files:**
-- Modify: `/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh:195-290`
-- Test: `/Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py`
+- Modify: `mysql/general_log/gcp_general_log_monitor.sh`
+- Test: `mysql/general_log/tests/gcp-general-log-parser/test_parser.py`
 
 **Interfaces:**
-- Consumes: Cloud Logging JSON text, target schema, and an open text stream for parser diagnostics.
-- Produces: `COMMAND_TYPES`, `GENERAL_LOG_PATTERN`, and `parse_mysql_general_log(json_input: str, target_schema: str, rejection_log: TextIO) -> str`.
+- `parse_mysql_general_log(json_input: str, target_schema: str, rejection_log: TextIO) -> str` emits transaction-wrapped SQL or `""`.
+- `log_rejection(rejection_log: TextIO, reason: str, raw_payload: str) -> None` writes unmodified payloads only to the log stream.
 
-- [ ] **Step 1: Mark the embedded Python block and make it import-safe**
+- [ ] **Step 1: Add marked import-safe parser boundary**
 
-Use `apply_patch` to place:
+Wrap the embedded Python source with `# PARSER_PYTHON_BEGIN` and `# PARSER_PYTHON_END`. Move stdin, argv, log-file opening, and stdout emission under `if __name__ == "__main__":`.
 
-```python
-# PARSER_PYTHON_BEGIN
-```
+- [ ] **Step 2: Replace permissive parsing**
 
-immediately after the opening `python3 -c '` and:
+Define the exact 36-item `COMMAND_TYPES` tuple. Build a longest-first escaped command alternation where command spaces become `\\s+`. Compile the approved `\\A...\\Z` named-group regex and use `fullmatch()`.
 
-```python
-# PARSER_PYTHON_END
-```
+- [ ] **Step 3: Implement strict normalization and rejection logging**
 
-immediately before the closing shell quote.
+Use the bracketed `username` and `host` groups to build `user_host = f"{username}@{host}"`. Preserve raw payload prior to `.strip()`. For every reject write begin/end markers and the raw payload directly to `rejection_log`; do not use shell `log_msg`. Log accepted/rejected summary counts. Return no SQL on invalid JSON, a non-list top-level value, or zero accepted payloads.
 
-Move stdin/argument handling under:
+- [ ] **Step 4: Wire parser diagnostics to the monitor log**
 
-```python
-if __name__ == "__main__":
-    raw_data = sys.stdin.read()
-    schema = sys.argv[1]
-    log_path = sys.argv[2]
-    with open(log_path, "a", encoding="utf-8", newline="") as parser_log:
-        sql_output = parse_mysql_general_log(raw_data, schema, parser_log)
-    if sql_output:
-        print(sql_output, end="")
-```
+Pass `${LOGFILE}` as a Python argument. Keep stdout redirected to `${OUTFILE}` and append Python stderr to `${LOGFILE}`.
 
-This prevents test extraction from reading test-runner stdin or requiring shell
-arguments.
+- [ ] **Step 5: Verify GREEN**
 
-- [ ] **Step 2: Add the exact command vocabulary and generated alternation**
+Run the Task 1 test command. Expected: all parser tests pass and no external command is executed.
 
-Replace the old `cmd_types` value with:
-
-```python
-COMMAND_TYPES = (
-    "Sleep",
-    "Quit",
-    "Init DB",
-    "Query",
-    "Field List",
-    "Create DB",
-    "Drop DB",
-    "Refresh",
-    "Shutdown",
-    "Statistics",
-    "Processlist",
-    "Connect",
-    "Kill",
-    "Debug",
-    "Ping",
-    "Time",
-    "Delayed insert",
-    "Change user",
-    "Binlog Dump",
-    "Table Dump",
-    "Connect Out",
-    "Register Replica",
-    "Register Slave",
-    "Prepare",
-    "Execute",
-    "Long Data",
-    "Close stmt",
-    "Reset stmt",
-    "Set option",
-    "Fetch",
-    "Daemon",
-    "Binlog Dump GTID",
-    "Reset Connection",
-    "clone",
-    "Group Replication Data Stream subscription",
-    "Error",
-)
-
-command_pattern = "|".join(
-    re.escape(command).replace(r"\ ", r"\s+")
-    for command in sorted(COMMAND_TYPES, key=len, reverse=True)
-)
-```
-
-Do not add case-insensitive matching. Preserve official command spelling and
-case, including lowercase `clone`.
-
-- [ ] **Step 3: Compile the anchored named-group pattern**
-
-Add:
-
-```python
-GENERAL_LOG_PATTERN = re.compile(
-    rf"""
-    \A
-    (?P<event_time>
-        \d{{4}}-\d{{2}}-\d{{2}}T
-        \d{{2}}:\d{{2}}:\d{{2}}
-        (?:\.\d{{1,6}})?Z
-    )
-    \s+
-    (?P<outer_username>[^\s\[\]]+)
-    \[(?P<username>[^\]\r\n]+)\]
-    \s*@\s*
-    \[(?P<host>[^\]\r\n]+)\]
-    \s*
-    (?P<thread_id>\d+)
-    \s+
-    (?P<server_id>\d+)
-    \s+
-    (?P<command_type>{command_pattern})
-    (?:\s+(?P<argument>.*))?
-    \Z
-    """,
-    re.VERBOSE | re.DOTALL,
-)
-```
-
-- [ ] **Step 4: Add verbatim rejection logging**
-
-Import `TextIO`:
-
-```python
-from typing import List, Dict, Any, TextIO
-```
-
-Add:
-
-```python
-def log_rejection(rejection_log: TextIO, reason: str, raw_payload: str) -> None:
-    rejection_log.write(f"[PARSER REJECT] {reason}\n")
-    rejection_log.write("[PARSER RAW PAYLOAD BEGIN]\n")
-    rejection_log.write(raw_payload)
-    if not raw_payload.endswith("\n"):
-        rejection_log.write("\n")
-    rejection_log.write("[PARSER RAW PAYLOAD END]\n")
-```
-
-This writes the raw string directly. Do not apply `repr()`, JSON encoding,
-redaction, truncation, or shell logging to it.
-
-- [ ] **Step 5: Replace fallback-row generation with strict parsing**
-
-Change the signature to:
-
-```python
-def parse_mysql_general_log(
-    json_input: str,
-    target_schema: str,
-    rejection_log: TextIO,
-) -> str:
-```
-
-Initialize counters:
-
-```python
-accepted = 0
-rejected = 0
-```
-
-For invalid JSON:
-
-```python
-try:
-    logs: List[Dict[str, Any]] = json.loads(json_input)
-except Exception as exc:
-    rejection_log.write(
-        f"[PARSER ERROR] invalid JSON: {type(exc).__name__}: {exc}\n"
-    )
-    return ""
-
-if not isinstance(logs, list):
-    rejection_log.write("[PARSER ERROR] top-level JSON value is not a list\n")
-    return ""
-```
-
-Keep the existing payload-field selection, but retain the original string:
-
-```python
-raw_line = line
-line = raw_line.strip()
-if not line:
-    rejected += 1
-    log_rejection(rejection_log, "empty payload", raw_line)
-    continue
-
-match = GENERAL_LOG_PATTERN.fullmatch(line)
-if not match:
-    rejected += 1
-    log_rejection(rejection_log, "payload format mismatch", raw_line)
-    continue
-```
-
-Delete the entire old `else:` branch that assigned `thread_id = "0"`,
-`user_host = "unknown"`, `server_id = "1"`, and `command_type = "Query"`.
-Delete the metadata timestamp fallback because the event timestamp is now a
-required payload field.
-
-Normalize successful captures:
-
-```python
-raw_time = match.group("event_time")
-username = match.group("username").strip()
-host = match.group("host").strip()
-thread_id = match.group("thread_id")
-server_id = match.group("server_id")
-command_type = re.sub(r"\s+", " ", match.group("command_type"))
-argument = match.group("argument") or ""
-
-current_time = raw_time[:-1].replace("T", " ", 1)
-user_host = f"{username}@{host}"
-accepted += 1
-```
-
-Retain the existing SQL escaping and batching around these normalized fields.
-
-Before returning, always append:
-
-```python
-rejection_log.write(
-    f"[PARSER SUMMARY] accepted={accepted} rejected={rejected}\n"
-)
-```
-
-If `accepted == 0`, return an empty string. Otherwise retain the transaction
-wrapper and `SET autocommit` behavior.
-
-- [ ] **Step 6: Pass the monitor log path without contaminating SQL output**
-
-Change the embedded Python invocation tail to:
+- [ ] **Step 6: Commit**
 
 ```bash
-' "${SCHEMA}" "${LOGFILE}" <<< "$RAW_LOGS" \
-    > "${OUTFILE}" 2>>"${LOGFILE}"
+git add mysql/general_log/gcp_general_log_monitor.sh \
+  mysql/general_log/tests/gcp-general-log-parser/test_parser.py
+git commit -m "fix: strictly parse Cloud SQL general log payloads"
 ```
 
-The Python parser writes SQL only to stdout. Raw rejected payloads go directly
-to the opened monitor log; unhandled Python stderr also goes to that log.
+### Task 3: Add Generate-Only and Interrupt-Safe Flag Control
 
-- [ ] **Step 7: Run the parser tests and confirm GREEN**
+**Files:**
+- Modify: `mysql/general_log/gcp_general_log_monitor.sh`
+- Create: `mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh`
+
+**Interfaces:**
+- `-G|--generate-only` skips only the final MySQL import.
+- `GENERAL_LOG_MODIFIED` records ownership of a temporary flag enable.
+- `cleanup_general_log` restores only a flag enabled by this process.
+
+- [ ] **Step 1: Write failing stubbed shell integration tests**
+
+Create a Bash test that creates a temporary `bin/` with executable stubs. The `gcloud` stub records ordered calls, returns a disabled/enabled flag JSON for `sql instances describe`, records `sql instances patch`, and serves a complete fixture from `logging read`. The `mysql` stub records invocation. The test must assert:
+
+```text
+--dry-run --generate-only exits 2 before a stub is called
+--fetch-only --generate-only produces SQL and never calls mysql
+normal --generate-only calls patch on, then patch off, then logging read, and never mysql
+normal mode calls mysql after SQL generation
+an initially enabled flag is never patched off
+SIGTERM after temporary enable produces a patch off call
+the monitor log mode is 0600
+```
+
+- [ ] **Step 2: Verify RED**
 
 Run:
+
+```bash
+bash mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh
+```
+
+Expected: failure because `--generate-only` and cleanup behavior do not exist.
+
+- [ ] **Step 3: Add CLI and secure log initialization**
+
+Introduce `GENERATE_ONLY="false"`, parse `-G|--generate-only`, document it in help, and reject it with `--dry-run` via exit `2`. Replace bare log redirection with `umask 077`, `mkdir -p`, `: > "${LOGFILE}"`, and `chmod 600 "${LOGFILE}"`.
+
+- [ ] **Step 4: Add flag ownership and cleanup**
+
+Set `GENERAL_LOG_MODIFIED="false"`. Set it only after a successful `apply_flags "on"`; clear it after normal `apply_flags "off"`. Install an EXIT cleanup path plus INT/TERM exit handlers. Cleanup disables recursion, returns the original status when restore succeeds, and emits an error plus nonzero status if it cannot restore a flag this execution enabled.
+
+- [ ] **Step 5: Add final-load branch**
+
+After verifying a nonempty SQL file with inserts, log and exit success when `GENERATE_ONLY=true`; otherwise retain the existing MySQL import branch. Preserve existing all-rejected/no-output failure behaviour.
+
+- [ ] **Step 6: Verify GREEN**
+
+Run the Task 3 test command. Expected: exit `0`, with only stubs invoked.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add mysql/general_log/gcp_general_log_monitor.sh \
+  mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh
+git commit -m "feat: add generate-only general log capture mode"
+```
+
+### Task 4: Update Handoff and Run Full Verification
+
+**Files:**
+- Modify: `mysql/general_log/README.md`
+- Verify: parser, shell test, and script.
+
+- [ ] **Step 1: Update README**
+
+Replace obsolete absolute source/test paths with repository-local paths. Document `--generate-only`, its output path, its incompatibility with `--dry-run`, strict parser/rejection behavior, and tests that do not access GCP or MySQL.
+
+- [ ] **Step 2: Run full local verification**
 
 ```bash
 python3 -m unittest discover \
-  -s /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser \
+  -s mysql/general_log/tests/gcp-general-log-parser \
   -p 'test_parser.py' -v
+bash mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh
+bash -n mysql/general_log/gcp_general_log_monitor.sh \
+  mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh
+shellcheck -x mysql/general_log/gcp_general_log_monitor.sh \
+  mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh
+! rg -n 'user_host = "unknown"|thread_id = "0"|server_id = "1"' \
+  mysql/general_log/gcp_general_log_monitor.sh
+shasum -a 256 mysql/general_log/gcp_general_log_monitor.sh \
+  mysql/general_log/tests/gcp-general-log-parser/test_parser.py \
+  mysql/general_log/tests/gcp-general-log-parser/test_shell_integration.sh \
+  mysql/general_log/README.md \
+  mysql/general_log/2026-07-24-gcp-general-log-parser-design.md \
+  mysql/general_log/2026-07-24-gcp-general-log-parser.md
 ```
 
-Expected: 9 tests pass. No GCP or MySQL command is executed.
+Expected: all tests pass, Bash syntax passes, no fallback assignments match, and ShellCheck has no new warnings beyond baseline `SC2034` and `SC2046`.
 
-- [ ] **Step 8: Record the parser checkpoint**
-
-Run:
+- [ ] **Step 3: Commit**
 
 ```bash
-shasum -a 256 \
-  /Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py
+git add mysql/general_log/README.md \
+  mysql/general_log/2026-07-24-gcp-general-log-parser.md
+git commit -m "docs: document general log parser workflow"
 ```
 
-Expected: two SHA-256 lines. Save them in the execution notes; do not run Git.
-
----
-
-### Task 3: Secure the Log and Add a Shell-Safety Test
-
-**Files:**
-- Modify: `/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh:68-78`
-- Create: `/Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh`
-
-**Interfaces:**
-- Consumes: the monitor script's `--fetch-only --dry-run` path.
-- Produces: a mode-`0600` monitor log and a test proving the safe dry-run path does not invoke external tools.
-
-- [ ] **Step 1: Create the failing shell integration test**
-
-Use `apply_patch` to add:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT="${GCP_GENERAL_LOG_MONITOR_SCRIPT:-/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh}"
-TEST_TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TEST_TMP_DIR}"' EXIT
-
-(
-    cd "${TEST_TMP_DIR}"
-    PATH="/usr/bin:/bin" bash "${SCRIPT}" \
-        --project test-project \
-        --instance test-instance \
-        --login-path test-login \
-        --schema test_schema \
-        --fetch-only \
-        --dry-run \
-        >"${TEST_TMP_DIR}/stdout.log" \
-        2>"${TEST_TMP_DIR}/stderr.log"
-)
-
-LOG_PATH="${TEST_TMP_DIR}/tmp/gcp_general_log_monitor.log"
-
-python3 - "${LOG_PATH}" <<'PY'
-import os
-import stat
-import sys
-
-path = sys.argv[1]
-mode = stat.S_IMODE(os.stat(path).st_mode)
-if mode != 0o600:
-    raise SystemExit(f"expected mode 0600, got {mode:04o}")
-PY
-
-grep -q "Dry-run complete" "${TEST_TMP_DIR}/stdout.log"
-
-if grep -qE "command not found|No such file or directory" \
-    "${TEST_TMP_DIR}/stdout.log" "${TEST_TMP_DIR}/stderr.log"; then
-    echo "dry-run attempted to execute an unavailable external command" >&2
-    exit 1
-fi
-```
-
-The combination of `--fetch-only --dry-run` bypasses flag inspection and exits
-before log retrieval, so neither `gcloud` nor `mysql` is executed. Restricting
-`PATH` makes an accidental external call fail the test visibly.
-
-- [ ] **Step 2: Run the shell test and confirm RED**
-
-Run:
-
-```bash
-(
-  umask 022
-  bash \
-    /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh
-)
-```
-
-Expected: FAIL with `expected mode 0600, got 0644`.
-
-- [ ] **Step 3: Enforce monitor-log permissions**
-
-Immediately before creating the local directory and truncating the log, use:
-
-```bash
-umask 077
-mkdir -p "${LOCAL_TMP_DIR}"
-: > "${LOGFILE}"
-chmod 600 "${LOGFILE}"
-```
-
-Replace the existing bare:
-
-```bash
-> "${LOGFILE}"
-```
-
-Do not print the rejected payload via `log_msg`; that function uses `tee` and
-would expose the raw payload on the console.
-
-- [ ] **Step 4: Run the shell test and confirm GREEN**
-
-Run:
-
-```bash
-(
-  umask 022
-  bash \
-    /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh
-)
-```
-
-Expected: exit 0, with no `gcloud` or `mysql` execution.
-
-- [ ] **Step 5: Run Bash syntax validation**
-
-Run:
-
-```bash
-bash -n \
-  /Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh
-```
-
-Expected: exit 0 with no output.
-
-- [ ] **Step 6: Inspect ShellCheck output**
-
-Run:
-
-```bash
-shellcheck -x \
-  /Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh
-```
-
-Expected: no new warnings in the parser or test changes. The supplied script's
-existing unrelated `SC2034` warning for `blk` and `SC2046` warning for the flag
-parsing `eval` may remain; do not broaden this parser change to refactor them.
-
-- [ ] **Step 7: Record the shell checkpoint**
-
-Run:
-
-```bash
-shasum -a 256 \
-  /Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh
-```
-
-Expected: three SHA-256 lines. Save them in the execution notes; do not run Git.
-
----
-
-### Task 4: Run the Complete Local Verification
-
-**Files:**
-- Verify: `/Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh`
-- Verify: `/Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py`
-- Verify: `/Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh`
-
-**Interfaces:**
-- Consumes: completed implementation and tests from Tasks 1-3.
-- Produces: local evidence that parser behavior is correct without cloud or database access.
-
-- [ ] **Step 1: Run all parser unit tests**
-
-Run:
-
-```bash
-python3 -m unittest discover \
-  -s /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser \
-  -p 'test_parser.py' -v
-```
-
-Expected: all 9 tests pass, including all 36 command subtests.
-
-- [ ] **Step 2: Run the safe shell integration test**
-
-Run:
-
-```bash
-(
-  umask 022
-  bash \
-    /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh
-)
-```
-
-Expected: exit 0. This path must not invoke GCP or MySQL.
-
-- [ ] **Step 3: Validate shell syntax**
-
-Run:
-
-```bash
-bash -n \
-  /Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh
-```
-
-Expected: exit 0 with no output.
-
-- [ ] **Step 4: Confirm fallback-row code is absent**
-
-Run:
-
-```bash
-rg -n \
-  'user_host = "unknown"|thread_id = "0"|server_id = "1"' \
-  /Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh
-```
-
-Expected: no matches and `rg` exit status 1.
-
-- [ ] **Step 5: Confirm the supplied payload produces the requested values**
-
-The `test_supplied_change_user_payload` test is the executable proof. Re-run it
-alone:
-
-```bash
-python3 \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py \
-  ParserContractTest.test_supplied_change_user_payload -v
-```
-
-Expected: one test passes.
-
-- [ ] **Step 6: Capture final checksums**
-
-Run:
-
-```bash
-shasum -a 256 \
-  /Users/jalvarez/Downloads/gcp_general_log_monitor.3.sh \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_parser.py \
-  /Volumes/sysops/Jira-ticket-analysis/tests/gcp-general-log-parser/test_shell_integration.sh \
-  /Volumes/sysops/Jira-ticket-analysis/docs/superpowers/specs/2026-07-24-gcp-general-log-parser-design.md \
-  /Volumes/sysops/Jira-ticket-analysis/docs/superpowers/plans/2026-07-24-gcp-general-log-parser.md
-```
-
-Expected: five SHA-256 lines suitable for handoff. Do not commit or initialize
-Git.
-
-- [ ] **Step 7: Report the handoff**
-
-Report:
-
-- the changed script path;
-- the parser and shell test paths;
-- unit-test and shell-test results;
-- Bash syntax result;
-- any retained pre-existing ShellCheck warnings;
-- the final SHA-256 values;
-- explicit confirmation that no GCP or database operation was run.
+## Plan Self-Review
+
+- Parser correctness and rejection contract: Task 1 and Task 2.
+- `--generate-only`, dry-run conflict, log permissions, flag lifecycle, and interruption restoration: Task 3.
+- Documentation, full verification, and final hashes: Task 4.
+- No task accesses GCP or a database; shell tests use local command stubs.
