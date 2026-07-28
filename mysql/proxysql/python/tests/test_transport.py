@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from proxysql_monitor.transport import PersistentMySQLSession, TransportError
 
@@ -67,6 +69,31 @@ class TransportTests(unittest.TestCase):
         ) as session:
             session.execute("SELECT @@version;")
             self.assertLessEqual(len(session.recent_stderr), 3)
+
+    def test_mysql_bin_environment_override(self) -> None:
+        os.environ["MYSQL_BIN"] = self.mysql_bin
+        try:
+            with PersistentMySQLSession("node01") as session:
+                self.assertEqual(["2.7.3"], session.execute("SELECT @@version;"))
+        finally:
+            os.environ.pop("MYSQL_BIN", None)
+
+    @patch("proxysql_monitor.transport.subprocess.Popen")
+    def test_batch_client_keeps_control_character_escaping(
+        self, popen: object
+    ) -> None:
+        mocked = popen.return_value
+        mocked.poll.return_value = None
+        mocked.stdin = io.StringIO()
+        mocked.stdout = io.StringIO()
+        mocked.stderr = io.StringIO()
+        session = PersistentMySQLSession("node01", mysql_bin=self.mysql_bin)
+        session.start()
+        command = popen.call_args.args[0]
+        self.assertIn("--batch", command)
+        self.assertNotIn("--raw", command)
+        mocked.poll.return_value = 0
+        session.close()
 
 
 if __name__ == "__main__":

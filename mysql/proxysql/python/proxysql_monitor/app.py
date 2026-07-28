@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import math
+import re
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional, Protocol, Sequence
+from typing import Callable, ContextManager, Optional, Protocol, Sequence
 
 from .formatter import (
     RenderedView,
@@ -18,8 +20,14 @@ from .formatter import (
     parse_digests,
     parse_queries,
 )
-from .models import Config, MonitorState, SortMode, View
-from .queries import sql_for_view
+from .models import Config, MonitorState, SmokeResult, SortMode, View
+from .queries import (
+    BACKEND_PING_MARKER,
+    BACKEND_POOL_MARKER,
+    HOSTNAME_SQL,
+    VERSION_SQL,
+    sql_for_view,
+)
 from .terminal import TerminalController
 from .transport import PersistentMySQLSession, TransportError
 
@@ -223,3 +231,85 @@ class MonitorApp:
         self.state.last_rendered = rendered.clean
         self.last_colored = rendered.colored
         self.last_row_count = rendered.row_count
+
+
+def resolve_display_host(login_path: str, session: Session) -> str:
+    """Resolve a display host without exposing credentials or requiring connectivity."""
+    try:
+        result = subprocess.run(
+            ["mysql_config_editor", "print", "--login-path=" + login_path],
+            capture_output=True,
+            check=False,
+            shell=False,
+            text=True,
+            timeout=2.0,
+        )
+        match = re.search(r"^\s*host\s*=\s*(.+?)\s*$", result.stdout, re.MULTILINE)
+        if result.returncode == 0 and match:
+            return match.group(1)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    rows = session.execute_with_retry(HOSTNAME_SQL, timeout=2.0)
+    return rows[0] if rows else "Unknown"
+
+
+def _smoke_row_count(view: View, raw: Sequence[str]) -> int:
+    if view is View.CONN:
+        return len(parse_connections(raw))
+    if view is View.QUERY:
+        return len(parse_queries(raw))
+    if view is View.DIGEST:
+        return len(parse_digests(raw))
+    if BACKEND_POOL_MARKER not in raw or BACKEND_PING_MARKER not in raw:
+        raise ValueError("BACKEND payload is missing section markers.")
+    backend = parse_backend(raw)
+    return len(backend.pool) + len(backend.ping)
+
+
+def run_smoke(
+    config: Config,
+    *,
+    session_factory: Callable[[str], ContextManager[Session]] = PersistentMySQLSession,
+    host_resolver: Callable[[str, Session], str] = resolve_display_host,
+    clock: Callable[[], float] = time.monotonic,
+) -> Sequence[SmokeResult]:
+    """Run every read-only view sequentially for every configured login path."""
+    results = []
+    views = (View.CONN, View.QUERY, View.DIGEST, View.BACKEND)
+    for login_path in config.login_paths:
+        try:
+            with session_factory(login_path) as session:
+                version = session.execute_with_retry(
+                    VERSION_SQL, timeout=config.query_timeout
+                )
+                if not version:
+                    raise ValueError("ProxySQL returned an empty version.")
+                host_resolver(login_path, session)
+                for view in views:
+                    started = clock()
+                    try:
+                        raw = session.execute_with_retry(
+                            sql_for_view(view), timeout=config.query_timeout
+                        )
+                        rows = _smoke_row_count(view, raw)
+                        results.append(
+                            SmokeResult(
+                                login_path, view, rows, clock() - started, True
+                            )
+                        )
+                    except (TransportError, ValueError) as exc:
+                        results.append(
+                            SmokeResult(
+                                login_path,
+                                view,
+                                0,
+                                clock() - started,
+                                False,
+                                str(exc),
+                            )
+                        )
+        except (TransportError, ValueError, OSError) as exc:
+            completed = sum(1 for result in results if result.login_path == login_path)
+            for view in views[completed:]:
+                results.append(SmokeResult(login_path, view, 0, 0.0, False, str(exc)))
+    return tuple(results)

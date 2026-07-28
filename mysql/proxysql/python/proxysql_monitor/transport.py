@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import os
 import subprocess
 import threading
 import time
@@ -27,7 +28,7 @@ class PersistentMySQLSession:
         stderr_lines: int = 100,
     ) -> None:
         self.login_path = login_path
-        self.mysql_bin = mysql_bin
+        self.mysql_bin = os.environ.get("MYSQL_BIN", mysql_bin)
         self.queue_size = queue_size
         self.stderr_lines = stderr_lines
         self.process: Optional[subprocess.Popen[str]] = None
@@ -66,7 +67,6 @@ class PersistentMySQLSession:
                     self.mysql_bin,
                     f"--login-path={self.login_path}",
                     "--batch",
-                    "--raw",
                     "--skip-column-names",
                     "--unbuffered",
                     "--force",
