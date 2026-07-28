@@ -15,6 +15,16 @@ initialize_defaults() {
     PAUSED=false
     QUERY_TIMEOUT=5
     MYSQL_BIN=${MYSQL_BIN:-mysql}
+    MYSQL_PID=""
+    MYSQL_INPUT_FD=""
+    MYSQL_OUTPUT_FD=""
+    MYSQL_SESSION_DIR=""
+    MYSQL_INPUT_PIPE=""
+    MYSQL_OUTPUT_PIPE=""
+    MYSQL_ERROR_FILE=""
+    MYSQL_REQUEST_SEQUENCE=0
+    QUERY_RESULT=""
+    LAST_DB_ERROR=""
 }
 
 initialize_colors() {
@@ -116,6 +126,134 @@ initialize_monitor() {
         PROXY_HOSTNAME=$("${mysql_cmd[@]}" -e "SELECT @@hostname;" 2>/dev/null || printf 'Unknown')
     fi
     MYSQL_CMD="${MYSQL_BIN} --login-path=${LOGIN_PATH} -BN"
+}
+
+# ==============================================================================
+# Persistent MySQL Transport
+# ==============================================================================
+mysql_session_alive() {
+    [[ -n "${MYSQL_PID:-}" ]] &&
+        [[ "$MYSQL_PID" =~ ^[0-9]+$ ]] &&
+        kill -0 "$MYSQL_PID" 2>/dev/null
+}
+
+stop_mysql_session() {
+    if [[ -n "${MYSQL_INPUT_FD:-}" ]]; then
+        exec 7>&- || true
+        MYSQL_INPUT_FD=""
+    fi
+    if [[ -n "${MYSQL_OUTPUT_FD:-}" ]]; then
+        exec 8<&- || true
+        MYSQL_OUTPUT_FD=""
+    fi
+    if [[ -n "${MYSQL_PID:-}" ]] && [[ "$MYSQL_PID" =~ ^[0-9]+$ ]]; then
+        if mysql_session_alive; then
+            kill "$MYSQL_PID" 2>/dev/null || true
+        fi
+        wait "$MYSQL_PID" 2>/dev/null || true
+    fi
+    MYSQL_PID=""
+
+    case "${MYSQL_SESSION_DIR:-}" in
+        "${TMPDIR:-/tmp}"/proxysql-monitor.*)
+            rm -rf "$MYSQL_SESSION_DIR"
+            ;;
+    esac
+    MYSQL_SESSION_DIR=""
+    MYSQL_INPUT_PIPE=""
+    MYSQL_OUTPUT_PIPE=""
+    MYSQL_ERROR_FILE=""
+}
+
+start_mysql_session() {
+    stop_mysql_session
+
+    MYSQL_SESSION_DIR=$(mktemp -d "${TMPDIR:-/tmp}/proxysql-monitor.XXXXXX") ||
+        return 1
+    MYSQL_INPUT_PIPE="$MYSQL_SESSION_DIR/input"
+    MYSQL_OUTPUT_PIPE="$MYSQL_SESSION_DIR/output"
+    MYSQL_ERROR_FILE="$MYSQL_SESSION_DIR/mysql.stderr"
+
+    if ! mkfifo "$MYSQL_INPUT_PIPE" "$MYSQL_OUTPUT_PIPE"; then
+        stop_mysql_session
+        return 1
+    fi
+
+    "$MYSQL_BIN" "--login-path=$LOGIN_PATH" --batch --raw \
+        --skip-column-names --unbuffered --force \
+        < "$MYSQL_INPUT_PIPE" > "$MYSQL_OUTPUT_PIPE" 2> "$MYSQL_ERROR_FILE" &
+    MYSQL_PID=$!
+
+    exec 7> "$MYSQL_INPUT_PIPE"
+    MYSQL_INPUT_FD=7
+    exec 8< "$MYSQL_OUTPUT_PIPE"
+    MYSQL_OUTPUT_FD=8
+    MYSQL_REQUEST_SEQUENCE=0
+
+    if ! mysql_session_alive; then
+        LAST_DB_ERROR="Unable to start the ProxySQL admin session"
+        stop_mysql_session
+        return 1
+    fi
+}
+
+execute_query() {
+    local sql=$1
+    local line=""
+    local result=""
+    local begin_marker=""
+    local end_marker=""
+    local collecting=false
+
+    QUERY_RESULT=""
+    if ! mysql_session_alive; then
+        LAST_DB_ERROR="ProxySQL admin session is not running"
+        return 1
+    fi
+
+    MYSQL_REQUEST_SEQUENCE=$((MYSQL_REQUEST_SEQUENCE + 1))
+    begin_marker="__PXMON_BEGIN_${$}_${MYSQL_REQUEST_SEQUENCE}__"
+    end_marker="__PXMON_END_${$}_${MYSQL_REQUEST_SEQUENCE}__"
+
+    if ! printf "SELECT '%s';\n%s\nSELECT '%s';\n" \
+        "$begin_marker" "$sql" "$end_marker" >&7; then
+        LAST_DB_ERROR="Unable to write to the ProxySQL admin session"
+        return 1
+    fi
+
+    while IFS= read -r -t "$QUERY_TIMEOUT" -u 8 line; do
+        if [[ "$line" == "$begin_marker" ]]; then
+            collecting=true
+        elif [[ "$line" == "$end_marker" ]]; then
+            QUERY_RESULT=$result
+            LAST_DB_ERROR=""
+            return 0
+        elif [[ "$collecting" == true ]]; then
+            if [[ -n "$result" ]]; then
+                result="${result}"$'\n'"${line}"
+            else
+                result=$line
+            fi
+        fi
+    done
+
+    LAST_DB_ERROR="Timed out waiting for ProxySQL response"
+    return 1
+}
+
+execute_query_with_retry() {
+    local sql=$1
+
+    if execute_query "$sql"; then
+        return 0
+    fi
+
+    stop_mysql_session
+    if ! start_mysql_session; then
+        LAST_DB_ERROR="Unable to reconnect to ProxySQL admin"
+        return 1
+    fi
+    execute_query "$sql"
 }
 
 # ==============================================================================
