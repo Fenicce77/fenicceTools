@@ -18,5 +18,17 @@ while IFS= read -r sql; do
         *TEST_SECOND_SAMPLE*)
             printf 'app\t10.0.0.10\t10.0.0.20:3306\tappdb\t6\n'
             ;;
+        *"SELECT '__PXMON_POOL__'"*)
+            printf '__PXMON_POOL__\n'
+            ;;
+        *stats.stats_mysql_connection_pool*)
+            printf '10\tbackend:3306\tONLINE\t2\t3\t50\t1\n'
+            ;;
+        *"SELECT '__PXMON_PING__'"*)
+            printf '__PXMON_PING__\n'
+            ;;
+        *monitor.mysql_server_ping_log*)
+            printf 'backend\t2026-07-28 12:00:00\t500\t\n'
+            ;;
     esac
 done

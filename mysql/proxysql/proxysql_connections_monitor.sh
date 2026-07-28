@@ -25,6 +25,13 @@ initialize_defaults() {
     MYSQL_REQUEST_SEQUENCE=0
     QUERY_RESULT=""
     LAST_DB_ERROR=""
+    LAST_SAMPLE_STALE=false
+    PREV_DATA=""
+    FORMATTED_OUTPUT=""
+    F_POOL=""
+    F_PING=""
+    PROXY_VERSION=""
+    PROXY_HOSTNAME="Unknown"
 }
 
 initialize_colors() {
@@ -112,20 +119,21 @@ validate_arguments() {
 }
 
 initialize_monitor() {
-    local mysql_cmd=("$MYSQL_BIN" "--login-path=$LOGIN_PATH" -BN)
-
-    PROXY_VERSION=$("${mysql_cmd[@]}" -e "SELECT @@version;" 2>/dev/null || true)
-    if [[ -z "$PROXY_VERSION" ]]; then
+    if ! start_mysql_session || ! execute_query "SELECT @@version;"; then
         printf '%b\n' "${red}Critical Error: Could not connect to ProxySQL using login-path '$LOGIN_PATH'.${off}" >&2
         return 1
     fi
+    PROXY_VERSION=$QUERY_RESULT
 
     PROXY_HOSTNAME=$(mysql_config_editor print --login-path="$LOGIN_PATH" 2>/dev/null |
         awk -F= 'tolower($1) ~ /host/ { gsub(/[ "]/, "", $2); print $2; exit }' || true)
     if [[ -z "$PROXY_HOSTNAME" ]]; then
-        PROXY_HOSTNAME=$("${mysql_cmd[@]}" -e "SELECT @@hostname;" 2>/dev/null || printf 'Unknown')
+        if execute_query "SELECT @@hostname;" && [[ -n "$QUERY_RESULT" ]]; then
+            PROXY_HOSTNAME=$QUERY_RESULT
+        else
+            PROXY_HOSTNAME="Unknown"
+        fi
     fi
-    MYSQL_CMD="${MYSQL_BIN} --login-path=${LOGIN_PATH} -BN"
 }
 
 # ==============================================================================
@@ -261,8 +269,9 @@ execute_query_with_retry() {
 # ==============================================================================
 
 AWK_SCRIPT_CONN='
-BEGIN { FS="\t"; total_conn = 0; total_diff = 0; if (filter != "") gsub(",", "|", filter); }
-FNR==NR { if (NF > 0) prev[$1"\t"$2"\t"$3"\t"$4] = $5; next }
+BEGIN { FS="\t"; reading_current = 0; total_conn = 0; total_diff = 0; if (filter != "") gsub(",", "|", filter); }
+$0 == "__PXMON_CURRENT__" { reading_current = 1; next }
+!reading_current { if (NF > 0) prev[$1"\t"$2"\t"$3"\t"$4] = $5; next }
 {
     if (NF > 0) {
         if (filter != "" && $1 !~ "(" filter ")") next;
@@ -327,31 +336,159 @@ BEGIN { FS="\t"; }
     }
 }'
 
-AWK_SCRIPT_POOL='
-BEGIN { FS="\t" }
+AWK_SCRIPT_BACKEND='
+BEGIN { FS="\t"; section = "" }
+$0 == "__PXMON_POOL__" { section = "P"; next }
+$0 == "__PXMON_PING__" { section = "G"; next }
 {
-    if (NF > 0) {
+    if (NF > 0 && section == "P") {
         status_color = ($3 == "ONLINE") ? color_ok : color_err;
         hg = substr($1, 1, 10); bhost = substr($2, 1, 35); status_txt = substr($3, 1, 15)
-        printf "%-10s | %-35s | %s%-15s%s | %-11s | %-11s | %-11s | %s\n", hg, bhost, status_color, status_txt, color_off, $4, $5, $6, $7
+        printf "P\t%-10s | %-35s | %s%-15s%s | %-11s | %-11s | %-11s | %s\n", hg, bhost, status_color, status_txt, color_off, $4, $5, $6, $7
+    } else if (NF > 0 && section == "G") {
+        ping_err = ($4 == "NULL" || $4 != "") ? color_err $4 color_off : color_ok "None" color_off
+        hostname = substr($1, 1, 35); last_ping = substr($2, 1, 25); success = substr($3"us", 1, 15)
+        printf "G\t%-35s | %-25s | %-15s | %s\n", hostname, last_ping, success, ping_err
     }
 }'
 
-AWK_SCRIPT_PING='
-BEGIN { FS="\t" }
-{
-    if (NF > 0) {
-        ping_err = ($4 == "NULL" || $4 != "") ? color_err $4 color_off : color_ok "None" color_off
-        hostname = substr($1, 1, 35); last_ping = substr($2, 1, 25); success = substr($3"us", 1, 15)
-        printf "%-35s | %-25s | %-15s | %s\n", hostname, last_ping, success, ping_err
-    }
-}'
+format_conn_data() {
+    local previous=$1
+    local current=$2
+    local input="${previous}"$'\n__PXMON_CURRENT__\n'"${current}"
+
+    FORMATTED_OUTPUT=$(awk \
+        -v filter="$USER_FILTER" \
+        -v threshold="$THRESHOLD" \
+        -v color_alert="$red" \
+        -v color_up="$red" \
+        -v color_down="$grn" \
+        -v color_st="$wht" \
+        -v color_info="$blu" \
+        -v color_off="$off" \
+        -v bld="$bld" \
+        "$AWK_SCRIPT_CONN" <<< "$input")
+}
+
+format_query_data() {
+    local data=$1
+
+    FORMATTED_OUTPUT=$(awk \
+        -v filter="$USER_FILTER" \
+        -v color_alert="$red" \
+        -v color_warn="$yel" \
+        -v color_st="$wht" \
+        -v color_info="$cyn" \
+        -v color_off="$off" \
+        -v bld="$bld" \
+        "$AWK_SCRIPT_QUERY" <<< "$data")
+}
+
+format_digest_data() {
+    local data=$1
+
+    FORMATTED_OUTPUT=$(awk \
+        -v term_cols="$TERM_WIDTH" \
+        -v color_info="$mag" \
+        -v color_off="$off" \
+        -v bld="$bld" \
+        "$AWK_SCRIPT_DIGEST" <<< "$data")
+}
+
+format_backend_data() {
+    local data=$1
+    local formatted=""
+    local section=""
+    local line=""
+
+    F_POOL=""
+    F_PING=""
+    formatted=$(awk \
+        -v color_ok="$grn" \
+        -v color_err="$red" \
+        -v color_off="$off" \
+        "$AWK_SCRIPT_BACKEND" <<< "$data")
+
+    while IFS=$'\t' read -r section line; do
+        case "$section" in
+            P)
+                F_POOL="${F_POOL}${F_POOL:+$'\n'}${line}"
+                ;;
+            G)
+                F_PING="${F_PING}${F_PING:+$'\n'}${line}"
+                ;;
+        esac
+    done <<< "$formatted"
+}
+
+sample_current_view() {
+    local query=""
+    local current_data=""
+
+    case "$VIEW_MODE" in
+        CONN)
+            if [[ "$SORT_MODE" == "CONN" ]]; then
+                ORDER_CLAUSE="ORDER BY COUNT(*) DESC"
+            else
+                ORDER_CLAUSE="ORDER BY user ASC"
+            fi
+            query="SELECT user, cli_host, COALESCE(srv_host, 'N/A'), COALESCE(db, 'N/A'), COUNT(*)
+                   FROM stats.stats_mysql_processlist
+                   WHERE user NOT IN ('admin', 'radmin', 'monitor', 'proxysql')
+                   GROUP BY user, cli_host, srv_host, db ${ORDER_CLAUSE};"
+            ;;
+        QUERY)
+            query="SELECT SessionID, hostgroup, user, cli_host, COALESCE(srv_host, 'Pending'), time_ms, info
+                   FROM stats.stats_mysql_processlist
+                   WHERE user NOT IN ('admin', 'radmin', 'monitor', 'proxysql')
+                     AND info IS NOT NULL AND info != ''
+                   ORDER BY time_ms DESC;"
+            ;;
+        DIGEST)
+            query="SELECT digest, count_star, sum_time, min_time, max_time, digest_text
+                   FROM stats.stats_mysql_query_digest
+                   ORDER BY sum_time DESC LIMIT 15;"
+            ;;
+        BACKEND)
+            query="SELECT '__PXMON_POOL__';
+                   SELECT hostgroup, srv_host, status, ConnUsed, ConnFree, ConnOK, ConnERR
+                   FROM stats.stats_mysql_connection_pool
+                   ORDER BY hostgroup, srv_host;
+                   SELECT '__PXMON_PING__';
+                   SELECT hostname, from_unixtime(time_start_us/1000/1000), ping_success_time_us, ping_error
+                   FROM monitor.mysql_server_ping_log
+                   ORDER BY time_start_us DESC LIMIT 8;"
+            ;;
+    esac
+
+    if ! execute_query_with_retry "$query"; then
+        LAST_SAMPLE_STALE=true
+        return 1
+    fi
+
+    current_data=$QUERY_RESULT
+    LAST_SAMPLE_STALE=false
+    case "$VIEW_MODE" in
+        CONN)
+            format_conn_data "$PREV_DATA" "$current_data"
+            PREV_DATA=$current_data
+            ;;
+        QUERY)
+            format_query_data "$current_data"
+            ;;
+        DIGEST)
+            format_digest_data "$current_data"
+            ;;
+        BACKEND)
+            format_backend_data "$current_data"
+            ;;
+    esac
+}
 
 # ==============================================================================
 # Main Monitoring Loop
 # ==============================================================================
 monitor_loop() {
-    PREV_DATA=""
     clear
 
     while true; do
@@ -362,40 +499,7 @@ monitor_loop() {
     SEP_THIN=$(printf "%*s" "$TERM_WIDTH" "" | tr " " "-")
     
     if [[ "$PAUSED" == false ]]; then
-        if [[ "$VIEW_MODE" == "CONN" ]]; then
-            ORDER_CLAUSE=$([[ "$SORT_MODE" == "CONN" ]] && echo "ORDER BY COUNT(*) DESC" || echo "ORDER BY user ASC")
-            QUERY="SELECT user, cli_host, COALESCE(srv_host, 'N/A'), COALESCE(db, 'N/A'), COUNT(*) 
-                   FROM stats.stats_mysql_processlist 
-                   WHERE user NOT IN ('admin', 'radmin', 'monitor', 'proxysql') 
-                   GROUP BY user, cli_host, srv_host, db $ORDER_CLAUSE;"
-            CURR_DATA=$($MYSQL_CMD -e "$QUERY" 2>/dev/null || true)
-            FORMATTED_OUTPUT=$(awk -v filter="$USER_FILTER" -v threshold="$THRESHOLD" -v color_alert="$red" -v color_up="$red" -v color_down="$grn" -v color_st="$wht" -v color_info="$blu" -v color_off="$off" -v bld="$bld" "$AWK_SCRIPT_CONN" <(echo "$PREV_DATA") <(echo "$CURR_DATA"))
-            PREV_DATA="$CURR_DATA"
-            
-        elif [[ "$VIEW_MODE" == "QUERY" ]]; then
-            QUERY="SELECT SessionID, hostgroup, user, cli_host, COALESCE(srv_host, 'Pending'), time_ms, info 
-                   FROM stats.stats_mysql_processlist 
-                   WHERE user NOT IN ('admin', 'radmin', 'monitor', 'proxysql') 
-                   AND info IS NOT NULL AND info != '' 
-                   ORDER BY time_ms DESC;"
-            CURR_DATA=$($MYSQL_CMD -e "$QUERY" 2>/dev/null || true)
-            FORMATTED_OUTPUT=$(awk -v filter="$USER_FILTER" -v color_alert="$red" -v color_warn="$yel" -v color_st="$wht" -v color_info="$cyn" -v color_off="$off" -v bld="$bld" "$AWK_SCRIPT_QUERY" <(echo "$CURR_DATA"))
-            
-        elif [[ "$VIEW_MODE" == "DIGEST" ]]; then
-            QUERY="SELECT digest, count_star, sum_time, min_time, max_time, digest_text 
-                   FROM stats.stats_mysql_query_digest 
-                   ORDER BY sum_time DESC LIMIT 15;"
-            CURR_DATA=$($MYSQL_CMD -e "$QUERY" 2>/dev/null || true)
-            FORMATTED_OUTPUT=$(awk -v term_cols="$TERM_WIDTH" -v color_info="$mag" -v color_off="$off" -v bld="$bld" "$AWK_SCRIPT_DIGEST" <(echo "$CURR_DATA"))
-            
-        elif [[ "$VIEW_MODE" == "BACKEND" ]]; then
-            Q_POOL="SELECT hostgroup, srv_host, status, ConnUsed, ConnFree, ConnOK, ConnERR FROM stats.stats_mysql_connection_pool ORDER BY hostgroup, srv_host;"
-            Q_PING="SELECT hostname, from_unixtime(time_start_us/1000/1000), ping_success_time_us, ping_error FROM monitor.mysql_server_ping_log ORDER BY time_start_us DESC LIMIT 8;"
-            POOL_DATA=$($MYSQL_CMD -e "$Q_POOL" 2>/dev/null || true)
-            PING_DATA=$($MYSQL_CMD -e "$Q_PING" 2>/dev/null || true)
-            F_POOL=$(awk -v color_ok="$grn" -v color_err="$red" -v color_off="$off" "$AWK_SCRIPT_POOL" <(echo "$POOL_DATA"))
-            F_PING=$(awk -v color_ok="$grn" -v color_err="$red" -v color_off="$off" "$AWK_SCRIPT_PING" <(echo "$PING_DATA"))
-        fi
+        sample_current_view || true
     fi
 
     # ==============================================================================

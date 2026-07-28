@@ -77,6 +77,56 @@ assert_eq "2" "$launches" "dead client is replaced exactly once"
 stop_mysql_session
 [[ ! -e "$active_session_dir" ]] || fail "active transport directory was not removed"
 
+PREV_DATA=$'app\tclient\tbackend:3306\tappdb\t4'
+CURR_DATA=$'app\tclient\tbackend:3306\tappdb\t6'
+USER_FILTER=""
+THRESHOLD=0
+format_conn_data "$PREV_DATA" "$CURR_DATA"
+case "$FORMATTED_OUTPUT" in
+    *"+2"*) : ;;
+    *) fail "CONN formatter did not preserve delta semantics" ;;
+esac
+
+format_query_data $'11\t10\tapp\tclient\tbackend:3306\t1200\tSELECT\\n*\\tFROM t'
+case "$FORMATTED_OUTPUT" in
+    *"SELECT * FROM t"*) : ;;
+    *) fail "QUERY formatter did not sanitize escaped controls" ;;
+esac
+
+TERM_WIDTH=130
+format_digest_data $'0x123\t8\t12000\t100\t4000\tSELECT\\tcol FROM very_long_table'
+case "$FORMATTED_OUTPUT" in
+    *"SELECT col FROM very_long_table"*) : ;;
+    *) fail "DIGEST formatter did not sanitize escaped controls" ;;
+esac
+
+backend_payload=$'__PXMON_POOL__\n10\tbackend:3306\tONLINE\t2\t3\t50\t1\n__PXMON_PING__\nbackend\t2026-07-28 12:00:00\t500\t'
+format_backend_data "$backend_payload"
+case "${F_POOL}:${F_PING}" in
+    *"ONLINE"*"500us"*) : ;;
+    *) fail "BACKEND formatter did not split both sections" ;;
+esac
+
+launches_before_backend=$(wc -l < "$FAKE_MYSQL_STATE_DIR/launches")
+launches_before_backend=${launches_before_backend// /}
+VIEW_MODE="BACKEND"
+LAST_SAMPLE_STALE=false
+start_mysql_session
+sample_current_view
+sample_current_view
+backend_session_dir=$MYSQL_SESSION_DIR
+
+case "${F_POOL}:${F_PING}" in
+    *"ONLINE"*"500us"*) : ;;
+    *) fail "BACKEND sampling did not format both persistent-query sections" ;;
+esac
+launches_after_backend=$(wc -l < "$FAKE_MYSQL_STATE_DIR/launches")
+launches_after_backend=${launches_after_backend// /}
+assert_eq "$((launches_before_backend + 1))" "$launches_after_backend" \
+    "two BACKEND samples reuse one client"
+stop_mysql_session
+[[ ! -e "$backend_session_dir" ]] || fail "BACKEND transport directory was not removed"
+
 rm -rf "$TRANSPORT_TEST_DIR"
 
 printf 'PASS: %s assertions\n' "$TEST_COUNT"
