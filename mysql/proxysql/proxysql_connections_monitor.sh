@@ -2,101 +2,121 @@
 set -euo pipefail
 
 # ==============================================================================
-# ANSI Colors Configuration
+# Initialization and CLI
 # ==============================================================================
-blk=$(tput blink || true)
-bld=$(tput bold || true)
-red=${bld}$(tput setaf 1 || true)
-grn=${bld}$(tput setaf 2 || true)
-yel=${bld}$(tput setaf 3 || true)
-blu=${bld}$(tput setaf 4 || true)
-mag=${bld}$(tput setaf 5 || true)
-cyn=${bld}$(tput setaf 6 || true)
-wht=${bld}$(tput setaf 7 || true)
-off=$(tput sgr0 || true)
-
-# ==============================================================================
-# Default Variables & States
-# ==============================================================================
-LOGIN_PATH=""
-REFRESH_TIME=5
-USER_FILTER=""
-OUTPUT_FILE=""
-VIEW_MODE="CONN"     # "CONN", "QUERY", "DIGEST", or "BACKEND"
-SORT_MODE="CONN"
-THRESHOLD=0
-PAUSED=false
-
-# ==============================================================================
-# Help Function
-# ==============================================================================
-usage() {
-    clear
-    echo -e "${cyn}=================================================================================${off}"
-    echo -e "${bld} ProxySQL Ultimate Monitor (DBA Edition) ${off}"
-    echo -e "${cyn}=================================================================================${off}"
-    echo -e "${blu}Usage:${off} $0 ${mag}--login-path=NAME${off} ${wht}[OPTIONS]${off}\n"
-    
-    echo -e "${yel}Mandatory Parameters:${off}"
-    echo -e "  ${mag}--login-path=NAME${off}      MySQL login-path file to connect to ProxySQL admin.\n"
-    
-    echo -e "${yel}Optional Parameters:${off}"
-    echo -e "  ${grn}-r, --refresh-time=N${off}   Refresh time in seconds. Supports floats e.g., 0.5 (Default: ${bld}5${off})."
-    echo -e "  ${grn}-u, --user-filter=STR${off}  Filter by user (string match or comma-separated list)."
-    echo -e "  ${grn}-t, --threshold=N${off}      Alert threshold for active connections (Default: 0)."
-    echo -e "  ${grn}-o, --output-file=FILE${off} File path to save the continuous output log."
-    echo -e "  ${grn}-h, --help${off}             Shows this help and exits.\n"
-    
-    echo -e "${yel}Use Cases and Examples:${off}"
-    echo -e "  ${wht}1. Sub-second monitoring execution as system user:${off}"
-    echo -e "     su - rmateos -c \"$0 ${mag}--login-path=proxysql_admin${off} ${grn}-r 0.5${off}\"\n"
-    echo -e "${cyn}=================================================================================${off}\n"
-    exit 1
+initialize_defaults() {
+    LOGIN_PATH=""
+    REFRESH_TIME=5
+    USER_FILTER=""
+    OUTPUT_FILE=""
+    VIEW_MODE="CONN"
+    SORT_MODE="CONN"
+    THRESHOLD=0
+    PAUSED=false
+    QUERY_TIMEOUT=5
+    MYSQL_BIN=${MYSQL_BIN:-mysql}
 }
 
-# ==============================================================================
-# Parameter Parsing
-# ==============================================================================
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        --login-path=*) LOGIN_PATH="${1#*=}" ;;
-        --login-path) LOGIN_PATH="$2"; shift ;;
-        -r|--refresh-time) REFRESH_TIME="$2"; shift ;;
-        --refresh-time=*) REFRESH_TIME="${1#*=}" ;;
-        -u|--user-filter) USER_FILTER="$2" ; shift ;;
-        --user-filter=*) USER_FILTER="${1#*=}" ;;
-        -t|--threshold) THRESHOLD="$2" ; shift ;;
-        --threshold=*) THRESHOLD="${1#*=}" ;;
-        -o|--output-file) OUTPUT_FILE="$2"; shift ;;
-        --output-file=*) OUTPUT_FILE="${1#*=}" ;;
-        -h|--help) usage ;;
-        *) echo -e "${red}Error: Unknown parameter: $1${off}"; usage ;;
-    esac
-    shift || true
-done
+initialize_colors() {
+    blk=$(tput blink 2>/dev/null || true)
+    bld=$(tput bold 2>/dev/null || true)
+    red=${bld}$(tput setaf 1 2>/dev/null || true)
+    grn=${bld}$(tput setaf 2 2>/dev/null || true)
+    yel=${bld}$(tput setaf 3 2>/dev/null || true)
+    blu=${bld}$(tput setaf 4 2>/dev/null || true)
+    mag=${bld}$(tput setaf 5 2>/dev/null || true)
+    cyn=${bld}$(tput setaf 6 2>/dev/null || true)
+    wht=${bld}$(tput setaf 7 2>/dev/null || true)
+    off=$(tput sgr0 2>/dev/null || true)
+}
 
-if [[ -z "$LOGIN_PATH" ]]; then
-    echo -e "${red}Error: The --login-path parameter is mandatory.${off}\n"
-    usage
-fi
+usage_text() {
+    printf '\033[H\033[2J'
+    printf '%b\n' "${cyn}=================================================================================${off}"
+    printf '%b\n' "${bld} ProxySQL Ultimate Monitor (DBA Edition) ${off}"
+    printf '%b\n' "${cyn}=================================================================================${off}"
+    printf '%b\n\n' "${blu}Usage:${off} $0 ${mag}--login-path=NAME${off} ${wht}[OPTIONS]${off}"
+    printf '%b\n' "${yel}Mandatory Parameters:${off}"
+    printf '%b\n\n' "  ${mag}--login-path=NAME${off}      MySQL login-path file to connect to ProxySQL admin."
+    printf '%b\n' "${yel}Optional Parameters:${off}"
+    printf '%b\n' "  ${grn}-r, --refresh-time=N${off}   Refresh time in seconds. Supports floats e.g., 0.5 (Default: ${bld}5${off})."
+    printf '%b\n' "  ${grn}-u, --user-filter=STR${off}  Filter by user (string match or comma-separated list)."
+    printf '%b\n' "  ${grn}-t, --threshold=N${off}      Alert threshold for active connections (Default: 0)."
+    printf '%b\n' "  ${grn}-o, --output-file=FILE${off} File path to save the continuous output log."
+    printf '%b\n\n' "  ${grn}-h, --help${off}             Shows this help and exits."
+    printf '%b\n' "${yel}Use Cases and Examples:${off}"
+    printf '%b\n' "  ${wht}1. Sub-second monitoring execution as system user:${off}"
+    printf '%b\n\n' "     su - rmateos -c \"$0 ${mag}--login-path=proxysql_admin${off} ${grn}-r 0.5${off}\""
+    printf '%b\n\n' "${cyn}=================================================================================${off}"
+}
 
-if [[ ! "$REFRESH_TIME" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    echo -e "${red}Error: Refresh time must be an integer or a float (e.g., 0.5).${off}\n"
-    exit 1
-fi
+usage() {
+    local status=${1:-1}
+    usage_text
+    exit "$status"
+}
 
-MYSQL_CMD="mysql --login-path=$LOGIN_PATH -BN"
+print_error() {
+    printf '%b\n' "${red}Error: $1${off}" >&2
+}
 
-PROXY_VERSION=$($MYSQL_CMD -e "SELECT @@version;" 2>/dev/null || true)
-if [[ -z "$PROXY_VERSION" ]]; then
-    echo -e "${red}Critical Error: Could not connect to ProxySQL using login-path '$LOGIN_PATH'.${off}"
-    exit 1
-fi
+require_option_value() {
+    local option=$1
+    local value=$2
 
-PROXY_HOSTNAME=$(mysql_config_editor print --login-path="$LOGIN_PATH" 2>/dev/null | grep -i 'host' | cut -d'=' -f2 | tr -d ' "' || true)
-if [[ -z "$PROXY_HOSTNAME" ]]; then
-    PROXY_HOSTNAME=$($MYSQL_CMD -e "SELECT @@hostname;" 2>/dev/null || echo "Unknown")
-fi
+    if [[ -z "$value" ]]; then
+        print_error "Option $option requires a value."
+        return 1
+    fi
+}
+
+parse_arguments() {
+    while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+            --login-path=*) LOGIN_PATH="${1#*=}" ;;
+            --login-path) require_option_value "$1" "${2-}"; LOGIN_PATH=$2; shift ;;
+            -r|--refresh-time) require_option_value "$1" "${2-}"; REFRESH_TIME=$2; shift ;;
+            --refresh-time=*) REFRESH_TIME="${1#*=}" ;;
+            -u|--user-filter) require_option_value "$1" "${2-}"; USER_FILTER=$2; shift ;;
+            --user-filter=*) USER_FILTER="${1#*=}" ;;
+            -t|--threshold) require_option_value "$1" "${2-}"; THRESHOLD=$2; shift ;;
+            --threshold=*) THRESHOLD="${1#*=}" ;;
+            -o|--output-file) require_option_value "$1" "${2-}"; OUTPUT_FILE=$2; shift ;;
+            --output-file=*) OUTPUT_FILE="${1#*=}" ;;
+            -h|--help) usage 0 ;;
+            *) print_error "Unknown parameter: $1"; usage 1 ;;
+        esac
+        shift
+    done
+}
+
+validate_arguments() {
+    if [[ -z "$LOGIN_PATH" ]]; then
+        print_error "The --login-path parameter is mandatory."
+        usage 1
+    fi
+    if [[ ! "$REFRESH_TIME" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        print_error "Refresh time must be an integer or a float (e.g., 0.5)."
+        return 1
+    fi
+}
+
+initialize_monitor() {
+    local mysql_cmd=("$MYSQL_BIN" "--login-path=$LOGIN_PATH" -BN)
+
+    PROXY_VERSION=$("${mysql_cmd[@]}" -e "SELECT @@version;" 2>/dev/null || true)
+    if [[ -z "$PROXY_VERSION" ]]; then
+        printf '%b\n' "${red}Critical Error: Could not connect to ProxySQL using login-path '$LOGIN_PATH'.${off}" >&2
+        return 1
+    fi
+
+    PROXY_HOSTNAME=$(mysql_config_editor print --login-path="$LOGIN_PATH" 2>/dev/null |
+        awk -F= 'tolower($1) ~ /host/ { gsub(/[ "]/, "", $2); print $2; exit }' || true)
+    if [[ -z "$PROXY_HOSTNAME" ]]; then
+        PROXY_HOSTNAME=$("${mysql_cmd[@]}" -e "SELECT @@hostname;" 2>/dev/null || printf 'Unknown')
+    fi
+    MYSQL_CMD="${MYSQL_BIN} --login-path=${LOGIN_PATH} -BN"
+}
 
 # ==============================================================================
 # AWK Scripts Definition
@@ -192,10 +212,11 @@ BEGIN { FS="\t" }
 # ==============================================================================
 # Main Monitoring Loop
 # ==============================================================================
-PREV_DATA=""
-clear
+monitor_loop() {
+    PREV_DATA=""
+    clear
 
-while true; do
+    while true; do
     TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
     TERM_WIDTH=$(tput cols 2>/dev/null || echo 130)
     [[ -z "$TERM_WIDTH" || "$TERM_WIDTH" -lt 110 ]] && TERM_WIDTH=130
@@ -355,5 +376,22 @@ while true; do
         t|T)
             echo -e "\n"; read -p "Enter connection threshold (0 to disable): " new_th || true
             [[ "$new_th" =~ ^[0-9]+$ ]] && THRESHOLD=$new_th ;;
-    esac
-done
+        esac
+    done
+}
+
+main() {
+    initialize_defaults
+    initialize_colors
+    parse_arguments "$@"
+    validate_arguments
+    initialize_monitor
+    monitor_loop
+}
+
+initialize_defaults
+initialize_colors
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
