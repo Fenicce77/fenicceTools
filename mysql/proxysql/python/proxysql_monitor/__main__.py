@@ -12,6 +12,14 @@ from .transport import PersistentMySQLSession, TransportError
 from .queries import VERSION_SQL
 
 
+class MonitorCancelled(KeyboardInterrupt):
+    """Controlled signal cancellation with a conventional process exit code."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"Monitor cancelled by signal {signum}.")
+        self.exit_code = 128 + signum
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run interactive mode or the finite read-only smoke suite."""
     arguments = tuple(sys.argv[1:] if argv is None else argv)
@@ -21,8 +29,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"{RED}Error: {exc}{RESET}", file=sys.stderr)
         return 2
 
+    def cancel(signum: int, _frame: object) -> None:
+        raise MonitorCancelled(signum)
+
+    signal.signal(signal.SIGINT, cancel)
+    signal.signal(signal.SIGTERM, cancel)
+
     if config.smoke_test:
-        results = run_smoke(config)
+        try:
+            results = run_smoke(config)
+        except MonitorCancelled as exc:
+            return exc.exit_code
         for result in results:
             status = "PASS" if result.success else "FAIL"
             color = GREEN if result.success else RED
@@ -43,6 +60,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not version_rows:
             raise TransportError("ProxySQL returned an empty version.")
         display_host = resolve_display_host(config.login_paths[0], session)
+    except MonitorCancelled as exc:
+        session.close()
+        return exc.exit_code
     except (TransportError, OSError, ValueError) as exc:
         session.close()
         print(f"{RED}Error: {exc}{RESET}", file=sys.stderr)
@@ -51,19 +71,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     app.proxy_version = version_rows[0]
     app.display_host = display_host
 
-    def stop(_signum: int, _frame: object) -> None:
-        app.running = False
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGINT, stop)
-    signal.signal(signal.SIGTERM, stop)
     if hasattr(signal, "SIGWINCH"):
         signal.signal(signal.SIGWINCH, lambda _signum, _frame: terminal.mark_geometry_dirty())
     try:
         with terminal:
             app.run()
-    except KeyboardInterrupt:
-        return 0
+    except MonitorCancelled as exc:
+        return exc.exit_code
     except (TransportError, OSError) as exc:
         print(f"{RED}Error: {exc}{RESET}", file=sys.stderr)
         return 1

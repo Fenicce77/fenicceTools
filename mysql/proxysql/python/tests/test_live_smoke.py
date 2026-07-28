@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import unittest
+import signal
 from typing import Dict, List
 
 from proxysql_monitor.app import run_smoke
+from proxysql_monitor.__main__ import MonitorCancelled
 from proxysql_monitor.models import Config, View
 from proxysql_monitor.queries import HOSTNAME_SQL, VERSION_SQL
 from tests.fixtures import BACKEND, CONNECTIONS_CURRENT, DIGEST_ESCAPED, QUERY_ESCAPED
@@ -15,6 +17,7 @@ class SmokeSession:
         self.responses = responses
         self.closed = False
         self.close_error: Exception | None = None
+        self.cancel_on_version = False
 
     def __enter__(self) -> "SmokeSession":
         return self
@@ -27,6 +30,8 @@ class SmokeSession:
     def execute_with_retry(self, sql: str, timeout: float = 5.0) -> List[str]:
         del timeout
         if sql == VERSION_SQL:
+            if self.cancel_on_version:
+                raise MonitorCancelled(signal.SIGTERM)
             return ["2.7.3"]
         if sql == HOSTNAME_SQL:
             return [self.login_path]
@@ -128,6 +133,23 @@ class LiveSmokeTests(unittest.TestCase):
         self.assertTrue(
             all(not item.success and "cleanup failed" in item.error for item in results)
         )
+
+    def test_signal_cancellation_unwinds_node_session(self) -> None:
+        sessions: List[SmokeSession] = []
+
+        def factory(login_path: str) -> SmokeSession:
+            session = SmokeSession(login_path, self.responses())
+            session.cancel_on_version = True
+            sessions.append(session)
+            return session
+
+        with self.assertRaises(MonitorCancelled):
+            run_smoke(
+                Config(login_paths=("node01",), smoke_test=True),
+                session_factory=factory,
+                host_resolver=lambda login_path, _session: login_path,
+            )
+        self.assertTrue(sessions[0].closed)
 
 
 if __name__ == "__main__":
