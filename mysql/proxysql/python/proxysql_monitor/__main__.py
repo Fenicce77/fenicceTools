@@ -53,6 +53,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     def stop(_signum: int, _frame: object) -> None:
         app.running = False
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
@@ -61,6 +62,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         with terminal:
             app.run()
+    except KeyboardInterrupt:
+        return 0
     except (TransportError, OSError) as exc:
         print(f"{RED}Error: {exc}{RESET}", file=sys.stderr)
         return 1

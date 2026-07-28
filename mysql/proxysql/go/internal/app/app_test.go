@@ -46,7 +46,7 @@ type fakeTerminal struct {
 	restored bool
 }
 
-func (t *fakeTerminal) Prompt(string) (string, error) {
+func (t *fakeTerminal) Prompt(context.Context, string) (string, error) {
 	answer := t.answers[0]
 	t.answers = t.answers[1:]
 	return answer, nil
@@ -55,6 +55,7 @@ func (t *fakeTerminal) Size() (int, int)                 { return 130, 24 }
 func (t *fakeTerminal) Clear() error                     { t.cleared++; return nil }
 func (t *fakeTerminal) Keys(context.Context) <-chan rune { return make(chan rune) }
 func (t *fakeTerminal) Restore() error                   { t.restored = true; return nil }
+func (t *fakeTerminal) Stop() error                      { return nil }
 func (t *fakeTerminal) MarkGeometryDirty()               {}
 
 func newTestApp(t *testing.T, outputFile string) (*App, *fakeSession, *fakeTerminal) {

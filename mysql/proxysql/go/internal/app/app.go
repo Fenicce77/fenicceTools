@@ -23,11 +23,12 @@ type Session interface {
 }
 
 type Terminal interface {
-	Prompt(string) (string, error)
+	Prompt(context.Context, string) (string, error)
 	Size() (int, int)
 	Clear() error
 	Keys(context.Context) <-chan rune
 	Restore() error
+	Stop() error
 	MarkGeometryDirty()
 }
 
@@ -153,21 +154,21 @@ func (a *App) HandleKey(ctx context.Context, key rune) {
 	case 'p', 'P':
 		a.State.Paused = !a.State.Paused
 	case 'r', 'R':
-		value, err := a.terminal.Prompt("Enter new refresh time (seconds, e.g. 0.5): ")
+		value, err := a.terminal.Prompt(ctx, "Enter new refresh time (seconds, e.g. 0.5): ")
 		if err == nil {
 			if seconds, parseErr := strconv.ParseFloat(value, 64); parseErr == nil && seconds > 0 {
 				a.Refresh = time.Duration(seconds * float64(time.Second))
 			}
 		}
 	case 't', 'T':
-		value, err := a.terminal.Prompt("Enter new connection threshold: ")
+		value, err := a.terminal.Prompt(ctx, "Enter new connection threshold: ")
 		if err == nil {
 			if threshold, parseErr := strconv.Atoi(value); parseErr == nil && threshold >= 0 {
 				a.Threshold = threshold
 			}
 		}
 	case 'u', 'U':
-		value, err := a.terminal.Prompt("Enter new user filter (empty to disable): ")
+		value, err := a.terminal.Prompt(ctx, "Enter new user filter (empty to disable): ")
 		if err == nil {
 			expression := strings.ReplaceAll(value, ",", "|")
 			if _, compileErr := regexp.Compile(expression); compileErr == nil {
@@ -268,7 +269,7 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) Close() error {
 	a.closeOnce.Do(func() {
-		a.closeErr = errors.Join(a.terminal.Restore(), a.session.Close())
+		a.closeErr = errors.Join(a.terminal.Stop(), a.terminal.Restore(), a.session.Close())
 	})
 	return a.closeErr
 }

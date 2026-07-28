@@ -1,12 +1,14 @@
 package terminal
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -21,6 +23,8 @@ type Controller struct {
 	geometryDirty bool
 	readerOnce    sync.Once
 	readerStarted bool
+	readerCancel  context.CancelFunc
+	readerDone    chan struct{}
 	keys          chan rune
 	prompting     bool
 	promptInput   chan byte
@@ -62,23 +66,23 @@ func (c *Controller) Restore() error {
 
 func (c *Controller) Keys(ctx context.Context) <-chan rune {
 	c.readerOnce.Do(func() {
+		readerContext, cancel := context.WithCancel(ctx)
 		c.mu.Lock()
 		c.readerStarted = true
+		c.readerCancel = cancel
+		c.readerDone = make(chan struct{})
 		c.mu.Unlock()
-		go c.readInput(ctx)
+		go c.readInput(readerContext)
 	})
 	return c.keys
 }
 
-func (c *Controller) Prompt(message string) (string, error) {
+func (c *Controller) Prompt(ctx context.Context, message string) (string, error) {
+	c.Keys(ctx)
 	c.mu.Lock()
-	readerStarted := c.readerStarted
-	var promptInput chan byte
-	if readerStarted {
-		c.prompting = true
-		c.promptInput = make(chan byte, 256)
-		promptInput = c.promptInput
-	}
+	c.prompting = true
+	c.promptInput = make(chan byte, 256)
+	promptInput := c.promptInput
 	c.mu.Unlock()
 	wasRaw := c.isRaw()
 	if wasRaw {
@@ -92,21 +96,37 @@ func (c *Controller) Prompt(message string) (string, error) {
 		c.finishPrompt()
 		return "", err
 	}
-	if !readerStarted {
-		value, err := bufio.NewReader(c.input).ReadString('\n')
-		return strings.TrimRight(value, "\r\n"), err
-	}
 	defer c.finishPrompt()
 	var value strings.Builder
 	for {
-		character, ok := <-promptInput
-		if !ok {
-			return strings.TrimRight(value.String(), "\r\n"), io.EOF
+		select {
+		case <-ctx.Done():
+			return strings.TrimRight(value.String(), "\r\n"), ctx.Err()
+		case character, ok := <-promptInput:
+			if !ok {
+				return strings.TrimRight(value.String(), "\r\n"), io.EOF
+			}
+			value.WriteByte(character)
+			if character == '\n' {
+				return strings.TrimRight(value.String(), "\r\n"), nil
+			}
 		}
-		value.WriteByte(character)
-		if character == '\n' {
-			return strings.TrimRight(value.String(), "\r\n"), nil
-		}
+	}
+}
+
+func (c *Controller) Stop() error {
+	c.mu.Lock()
+	cancel, done := c.readerCancel, c.readerDone
+	c.mu.Unlock()
+	if cancel == nil || done == nil {
+		return nil
+	}
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(time.Second):
+		return errors.New("terminal input reader did not stop within one second")
 	}
 }
 
@@ -146,14 +166,14 @@ func (c *Controller) finishPrompt() {
 }
 
 func (c *Controller) readInput(ctx context.Context) {
+	fd := int(c.input.Fd())
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		c.finishInput()
+		return
+	}
 	defer func() {
-		c.mu.Lock()
-		if c.promptInput != nil {
-			close(c.promptInput)
-			c.promptInput = nil
-		}
-		close(c.keys)
-		c.mu.Unlock()
+		_ = syscall.SetNonblock(fd, false)
+		c.finishInput()
 	}()
 	buffer := make([]byte, 1)
 	for {
@@ -162,7 +182,20 @@ func (c *Controller) readInput(ctx context.Context) {
 			return
 		default:
 		}
-		count, err := c.input.Read(buffer)
+		count, err := syscall.Read(fd, buffer)
+		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
+			timer := time.NewTimer(25 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				continue
+			}
+		}
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
 		if err != nil || count == 0 {
 			return
 		}
@@ -183,4 +216,17 @@ func (c *Controller) readInput(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (c *Controller) finishInput() {
+	c.mu.Lock()
+	if c.promptInput != nil {
+		close(c.promptInput)
+		c.promptInput = nil
+	}
+	close(c.keys)
+	if c.readerDone != nil {
+		close(c.readerDone)
+	}
+	c.mu.Unlock()
 }

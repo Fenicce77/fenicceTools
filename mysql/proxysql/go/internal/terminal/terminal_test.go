@@ -3,6 +3,7 @@ package terminal
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -94,7 +95,7 @@ func TestPromptDoesNotCompeteWithKeyReader(t *testing.T) {
 	result := make(chan string, 1)
 	errs := make(chan error, 1)
 	go func() {
-		value, promptErr := controller.Prompt("refresh: ")
+		value, promptErr := controller.Prompt(ctx, "refresh: ")
 		if promptErr != nil {
 			errs <- promptErr
 			return
@@ -118,5 +119,46 @@ func TestPromptDoesNotCompeteWithKeyReader(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("prompt timed out while key reader was active")
+	}
+	if err := controller.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPromptCancellationStopsWaiting(t *testing.T) {
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	output := &notifyingWriter{ready: make(chan struct{})}
+	controller := New(input, output)
+	readerContext, cancelReader := context.WithCancel(context.Background())
+	defer cancelReader()
+	keys := controller.Keys(readerContext)
+	if _, err := writer.Write([]byte{'r'}); err != nil {
+		t.Fatal(err)
+	}
+	<-keys
+
+	promptContext, cancelPrompt := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, promptErr := controller.Prompt(promptContext, "refresh: ")
+		result <- promptErr
+	}()
+	<-output.ready
+	cancelPrompt()
+	select {
+	case promptErr := <-result:
+		if !errors.Is(promptErr, context.Canceled) {
+			t.Fatalf("prompt error = %v, want context.Canceled", promptErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled prompt did not return")
+	}
+	if err := controller.Stop(); err != nil {
+		t.Fatal(err)
 	}
 }

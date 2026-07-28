@@ -27,6 +27,17 @@ class TerminalTests(unittest.TestCase):
         terminal.mark_geometry_dirty()
         self.assertTrue(terminal.geometry_dirty)
 
+    def test_prompt_propagates_signal_cancellation(self) -> None:
+        class InterruptedInput(io.StringIO):
+            def readline(self, *_args: object, **_kwargs: object) -> str:
+                raise KeyboardInterrupt
+
+        terminal = TerminalController(
+            stdin=InterruptedInput(), stdout=io.StringIO()
+        )
+        with self.assertRaises(KeyboardInterrupt):
+            terminal.prompt("refresh: ")
+
 
 if __name__ == "__main__":
     unittest.main()
