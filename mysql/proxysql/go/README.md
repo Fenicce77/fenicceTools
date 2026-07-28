@@ -41,8 +41,10 @@ connection threshold, and `q` exits.
 The process keeps one persistent MySQL client per node. A failed frame causes
 one reconnect and one retry. Stdout and stderr buffers are bounded, and owned
 children are explicitly terminated and reaped. Batch escaping remains enabled
-so literal query controls cannot corrupt row framing. Normal mode queries only
-the visible view. Logging writes fresh nonempty samples from clean logical data.
+so literal query controls cannot corrupt row framing. `--force` is intentionally
+disabled so SQL errors terminate the frame instead of appearing as empty
+successful samples. Normal mode queries only the visible view. Logging writes
+fresh nonempty samples from clean logical data.
 
 ## Examples
 

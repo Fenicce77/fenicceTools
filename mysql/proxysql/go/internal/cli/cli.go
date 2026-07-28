@@ -122,7 +122,10 @@ Usage: %s --login-path=NAME [OPTIONS]
   -h, --help                  Show this help.
 
 Examples:
+  %s --login-path=proxysql_admin
   %s --login-path=proxysql_admin -r 0.5
+  %s --login-path=proxysql_admin --output-file=/tmp/proxysql.log
   su - rmateos -c '%s --login-path=proxysql_admin -r 0.5'
-`, program, program, program)
+  %s --smoke-test --login-path=node01 --login-path=node02 --login-path=node03
+`, program, program, program, program, program, program)
 }

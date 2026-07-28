@@ -31,9 +31,15 @@ func parseInt(value, field string) (int, error) {
 func Sanitize(value string) string {
 	replacer := strings.NewReplacer(
 		`\n`, " ", `\r`, " ", `\t`, " ",
-		"\n", " ", "\r", " ", "\t", " ",
 	)
-	return strings.TrimSpace(replacer.Replace(value))
+	value = replacer.Replace(value)
+	value = strings.Map(func(character rune) rune {
+		if character < 32 || (character >= 127 && character <= 159) {
+			return ' '
+		}
+		return character
+	}, value)
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func truncate(value string, width int) string {
@@ -178,7 +184,7 @@ func ParseBackend(lines []string) (model.BackendRows, error) {
 			return model.BackendRows{}, fmt.Errorf("malformed BACKEND ping row %q", line)
 		}
 		var success *int
-		if fields[2] != "" {
+		if fields[2] != "" && !strings.EqualFold(fields[2], "NULL") {
 			number, err := parseInt(fields[2], "ping_success_time_us")
 			if err != nil {
 				return model.BackendRows{}, err
@@ -218,22 +224,29 @@ func FormatConnections(
 	for _, row := range previous {
 		old[key{row.User, row.ClientHost, row.ServerHost, row.Schema}] = row.Connections
 	}
-	header := fmt.Sprintf("%-15s %-20s %-25s %-15s %6s %7s",
+	header := fmt.Sprintf("%-20s | %-15s | %-28s | %-20s | %-10s | %-10s",
 		"USER", "SOURCE (Cli)", "BACKEND (Srv)", "SCHEMA", "CONN", "DELTA")
 	clean, colored := []string{header}, []string{bold + header + reset}
 	count := 0
+	totalConnections, totalDelta := 0, 0
 	for _, row := range rows {
-		if !filter.MatchString(row.User) {
+		if !filter.MatchString(Sanitize(row.User)) {
 			continue
 		}
-		delta := row.Connections - old[key{row.User, row.ClientHost, row.ServerHost, row.Schema}]
+		rowKey := key{row.User, row.ClientHost, row.ServerHost, row.Schema}
+		previousValue, exists := old[rowKey]
+		delta := row.Connections - previousValue
 		deltaText := "0"
-		if _, exists := old[key{row.User, row.ClientHost, row.ServerHost, row.Schema}]; exists && delta != 0 {
+		if !exists {
+			delta = 0
+		} else if delta != 0 {
 			deltaText = fmt.Sprintf("%+d", delta)
 		}
-		line := fmt.Sprintf("%-15s %-20s %-25s %-15s %6d %7s",
-			truncate(row.User, 15), truncate(row.ClientHost, 20),
-			truncate(row.ServerHost, 25), truncate(row.Schema, 15),
+		totalConnections += row.Connections
+		totalDelta += delta
+		line := fmt.Sprintf("%-20s | %-15s | %-28s | %-20s | %-10d | %-10s",
+			truncate(Sanitize(row.User), 20), truncate(Sanitize(row.ClientHost), 15),
+			truncate(Sanitize(row.ServerHost), 28), truncate(Sanitize(row.Schema), 20),
 			row.Connections, deltaText)
 		color := green
 		if threshold > 0 && row.Connections >= threshold {
@@ -241,6 +254,15 @@ func FormatConnections(
 		}
 		clean, colored = append(clean, line), append(colored, color+line+reset)
 		count++
+	}
+	if totalConnections > 0 {
+		deltaText := "0"
+		if totalDelta != 0 {
+			deltaText = fmt.Sprintf("%+d", totalDelta)
+		}
+		line := fmt.Sprintf("%-20s | %-15s | %-28s | %-20s | %-10d | %-10s",
+			"GLOBAL TOTALS", "", "", "", totalConnections, deltaText)
+		clean, colored = append(clean, line), append(colored, bold+cyan+line+reset)
 	}
 	return render(clean, colored, count), nil
 }
@@ -250,18 +272,19 @@ func FormatQueries(rows []model.QueryRow, userFilter string, terminalWidth int) 
 	if err != nil {
 		return model.RenderedView{}, err
 	}
-	queryWidth := max(20, terminalWidth-84)
-	header := fmt.Sprintf("%-8s %-5s %-12s %-16s %-20s %8s %-*s",
+	queryWidth := max(20, terminalWidth-97)
+	header := fmt.Sprintf("%-8s | %-4s | %-15s | %-15s | %-28s | %-9s | %-*s",
 		"PSID", "HG", "USER", "SOURCE", "BACKEND", "TIME", queryWidth, "ACTIVE QUERY")
 	clean, colored := []string{header}, []string{bold + header + reset}
 	count := 0
 	for _, row := range rows {
-		if !filter.MatchString(row.User) {
+		if !filter.MatchString(Sanitize(row.User)) {
 			continue
 		}
-		line := fmt.Sprintf("%-8s %-5s %-12s %-16s %-20s %8d %-*s",
-			truncate(row.SessionID, 8), truncate(row.Hostgroup, 5), truncate(row.User, 12),
-			truncate(row.ClientHost, 16), truncate(row.ServerHost, 20), row.TimeMS,
+		line := fmt.Sprintf("%-8s | %-4s | %-15s | %-15s | %-28s | %-9s | %-*s",
+			truncate(Sanitize(row.SessionID), 8), truncate(Sanitize(row.Hostgroup), 4),
+			truncate(Sanitize(row.User), 15), truncate(Sanitize(row.ClientHost), 15),
+			truncate(Sanitize(row.ServerHost), 28), fmt.Sprintf("%dms", row.TimeMS),
 			queryWidth, truncate(Sanitize(row.Query), queryWidth))
 		color := cyan
 		if row.TimeMS > 1000 {
@@ -276,13 +299,13 @@ func FormatQueries(rows []model.QueryRow, userFilter string, terminalWidth int) 
 }
 
 func FormatDigests(rows []model.DigestRow, terminalWidth int) model.RenderedView {
-	queryWidth := max(50, terminalWidth-60)
-	header := fmt.Sprintf("%-14s %6s %10s %10s %10s %-*s",
+	queryWidth := max(20, terminalWidth-73)
+	header := fmt.Sprintf("%-18s | %-10s | %-10s | %-10s | %-10s | %-*s",
 		"DIGEST", "COUNT", "SUM_TIME", "MIN_TIME", "MAX_TIME", queryWidth, "QUERY TEXT")
 	clean, colored := []string{header}, []string{bold + header + reset}
 	for _, row := range rows {
-		line := fmt.Sprintf("%-14s %6d %10d %10d %10d %-*s",
-			truncate(row.Digest, 14), row.Count, row.SumTime, row.MinTime, row.MaxTime,
+		line := fmt.Sprintf("%-18s | %-10d | %-10d | %-10d | %-10d | %-*s",
+			truncate(Sanitize(row.Digest), 18), row.Count, row.SumTime, row.MinTime, row.MaxTime,
 			queryWidth, truncate(Sanitize(row.Query), queryWidth))
 		clean, colored = append(clean, line), append(colored, cyan+line+reset)
 	}
@@ -290,12 +313,13 @@ func FormatDigests(rows []model.DigestRow, terminalWidth int) model.RenderedView
 }
 
 func FormatBackend(rows model.BackendRows) model.RenderedView {
-	header := fmt.Sprintf("%-10s %-30s %-12s %7s %7s %10s %8s",
-		"HOSTGROUP", "BACKEND HOST", "STATUS", "USED", "FREE", "OK", "ERR")
+	header := fmt.Sprintf("%-10s | %-35s | %-15s | %-11s | %-11s | %-11s | %-11s",
+		"HOSTGROUP", "BACKEND HOST", "STATUS", "CONN USED", "CONN FREE", "CONN OK", "CONN ERR")
 	clean, colored := []string{header}, []string{bold + header + reset}
 	for _, row := range rows.Pool {
-		line := fmt.Sprintf("%-10s %-30s %-12s %7d %7d %10d %8d",
-			truncate(row.Hostgroup, 10), truncate(row.ServerHost, 30), truncate(row.Status, 12),
+		line := fmt.Sprintf("%-10s | %-35s | %-15s | %-11d | %-11d | %-11d | %-11d",
+			truncate(Sanitize(row.Hostgroup), 10), truncate(Sanitize(row.ServerHost), 35),
+			truncate(Sanitize(row.Status), 15),
 			row.ConnUsed, row.ConnFree, row.ConnOK, row.ConnErr)
 		color := red
 		if row.Status == "ONLINE" && row.ConnErr == 0 {
@@ -303,15 +327,17 @@ func FormatBackend(rows model.BackendRows) model.RenderedView {
 		}
 		clean, colored = append(clean, line), append(colored, color+line+reset)
 	}
-	pingHeader := fmt.Sprintf("%-30s %-20s %12s %s", "PING HOST", "LAST PING", "SUCCESS_US", "ERROR")
+	pingHeader := fmt.Sprintf("%-35s | %-25s | %-15s | %s",
+		"HOSTNAME", "LAST PING DATETIME", "SUCCESS (us)", "PING ERROR")
 	clean, colored = append(clean, pingHeader), append(colored, bold+pingHeader+reset)
 	for _, row := range rows.Ping {
 		success := ""
 		if row.SuccessUS != nil {
 			success = strconv.Itoa(*row.SuccessUS)
 		}
-		line := fmt.Sprintf("%-30s %-20s %12s %s",
-			truncate(row.Hostname, 30), truncate(row.LastPing, 20), success, Sanitize(row.Error))
+		line := fmt.Sprintf("%-35s | %-25s | %-15s | %s",
+			truncate(Sanitize(row.Hostname), 35), truncate(Sanitize(row.LastPing), 25),
+			success, Sanitize(row.Error))
 		color := green
 		if row.Error != "" {
 			color = red

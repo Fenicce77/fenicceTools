@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ type smokeSession struct {
 	loginPath string
 	responses map[model.View][]string
 	closed    bool
+	closeErr  error
 }
 
 func (s *smokeSession) ExecuteWithRetry(_ context.Context, sql string, _ time.Duration) ([]string, error) {
@@ -35,7 +37,7 @@ func (s *smokeSession) ExecuteWithRetry(_ context.Context, sql string, _ time.Du
 
 func (s *smokeSession) Close() error {
 	s.closed = true
-	return nil
+	return s.closeErr
 }
 
 func smokeResponses() map[model.View][]string {
@@ -119,5 +121,26 @@ func TestSmokeMissingBackendMarkersFails(t *testing.T) {
 	)
 	if results[3].Success {
 		t.Fatal("missing backend markers succeeded")
+	}
+}
+
+func TestSmokeCleanupFailureFailsNode(t *testing.T) {
+	results := RunSmokeWithResolver(
+		context.Background(),
+		model.Config{LoginPaths: []string{"node01"}, SmokeTest: true, Timeout: time.Second},
+		func(loginPath string) Session {
+			return &smokeSession{
+				loginPath: loginPath, responses: smokeResponses(),
+				closeErr: errors.New("cleanup failed"),
+			}
+		},
+		func(_ context.Context, loginPath string, _ Session) (string, error) {
+			return loginPath, nil
+		},
+	)
+	for _, result := range results {
+		if result.Success || !strings.Contains(result.Error, "cleanup failed") {
+			t.Fatalf("cleanup failure not propagated: %+v", result)
+		}
 	}
 }

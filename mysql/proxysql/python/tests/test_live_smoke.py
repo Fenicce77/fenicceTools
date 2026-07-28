@@ -14,12 +14,15 @@ class SmokeSession:
         self.login_path = login_path
         self.responses = responses
         self.closed = False
+        self.close_error: Exception | None = None
 
     def __enter__(self) -> "SmokeSession":
         return self
 
     def __exit__(self, *_args: object) -> None:
         self.closed = True
+        if self.close_error:
+            raise self.close_error
 
     def execute_with_retry(self, sql: str, timeout: float = 5.0) -> List[str]:
         del timeout
@@ -110,6 +113,21 @@ class LiveSmokeTests(unittest.TestCase):
             host_resolver=lambda login_path, _session: login_path,
         )
         self.assertFalse(results[-1].success)
+
+    def test_cleanup_failure_fails_node(self) -> None:
+        def factory(login_path: str) -> SmokeSession:
+            session = SmokeSession(login_path, self.responses())
+            session.close_error = OSError("cleanup failed")
+            return session
+
+        results = run_smoke(
+            Config(login_paths=("node01",), smoke_test=True),
+            session_factory=factory,
+            host_resolver=lambda login_path, _session: login_path,
+        )
+        self.assertTrue(
+            all(not item.success and "cleanup failed" in item.error for item in results)
+        )
 
 
 if __name__ == "__main__":

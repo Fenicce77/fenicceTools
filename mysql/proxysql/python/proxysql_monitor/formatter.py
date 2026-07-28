@@ -32,8 +32,11 @@ def _parse_int(value: str, field_name: str) -> int:
 def sanitize_text(value: str) -> str:
     """Flatten escaped and literal controls so every record stays on one line."""
     value = re.sub(r"\\[nrt]", " ", value)
-    value = re.sub(r"[\r\n\t]+", " ", value)
-    return value.strip()
+    value = "".join(
+        " " if ord(character) < 32 or 127 <= ord(character) <= 159 else character
+        for character in value
+    )
+    return re.sub(r" +", " ", value).strip()
 
 
 def truncate(value: str, width: int) -> str:
@@ -140,9 +143,10 @@ def parse_backend(lines: Sequence[str]) -> BackendRows:
         fields = line.split("\t", 3)
         if len(fields) != 4:
             raise ValueError(f"Malformed BACKEND ping row: {line!r}")
-        success: Optional[int] = (
-            _parse_int(fields[2], "ping_success_time_us") if fields[2] else None
-        )
+        success_value = fields[2].strip()
+        success: Optional[int] = None
+        if success_value and success_value.upper() != "NULL":
+            success = _parse_int(success_value, "ping_success_time_us")
         ping.append(PingRow(fields[0], fields[1], success, sanitize_text(fields[3])))
     return BackendRows(tuple(pool), tuple(ping))
 
@@ -164,25 +168,41 @@ def format_connections(
     user_filter: str,
 ) -> RenderedView:
     matcher = compile_user_filter(user_filter)
-    selected = [row for row in rows if matcher.search(row.user)]
+    selected = [row for row in rows if matcher.search(sanitize_text(row.user))]
     old = {
         (row.user, row.client_host, row.server_host, row.schema): row.connections
         for row in previous
     }
     output: List[Tuple[str, str]] = []
-    header = f"{'USER':<15} {'SOURCE (Cli)':<20} {'BACKEND (Srv)':<25} {'SCHEMA':<15} {'CONN':>6} {'DELTA':>7}"
+    header = (
+        f"{'USER':<20} | {'SOURCE (Cli)':<15} | {'BACKEND (Srv)':<28} | "
+        f"{'SCHEMA':<20} | {'CONN':<10} | {'DELTA':<10}"
+    )
     output.append((BOLD + header + RESET, header))
+    total_connections = 0
+    total_delta = 0
     for row in selected:
         key = (row.user, row.client_host, row.server_host, row.schema)
         delta = row.connections - old.get(key, row.connections)
         delta_text = f"{delta:+d}" if delta else "0"
+        total_connections += row.connections
+        total_delta += delta
         clean = (
-            f"{truncate(row.user, 15):<15} {truncate(row.client_host, 20):<20} "
-            f"{truncate(row.server_host, 25):<25} {truncate(row.schema, 15):<15} "
-            f"{row.connections:>6} {delta_text:>7}"
+            f"{truncate(sanitize_text(row.user), 20):<20} | "
+            f"{truncate(sanitize_text(row.client_host), 15):<15} | "
+            f"{truncate(sanitize_text(row.server_host), 28):<28} | "
+            f"{truncate(sanitize_text(row.schema), 20):<20} | "
+            f"{row.connections:<10} | {delta_text:<10}"
         )
         color = RED if threshold > 0 and row.connections >= threshold else GREEN
         output.append((color + clean + RESET, clean))
+    if total_connections > 0:
+        total_delta_text = f"{total_delta:+d}" if total_delta else "0"
+        clean = (
+            f"{'GLOBAL TOTALS':<20} | {'':<15} | {'':<28} | {'':<20} | "
+            f"{total_connections:<10} | {total_delta_text:<10}"
+        )
+        output.append((CYAN + BOLD + clean + RESET, clean))
     return _render(output, len(selected))
 
 
@@ -193,19 +213,22 @@ def format_queries(
     terminal_width: int = 130,
 ) -> RenderedView:
     matcher = compile_user_filter(user_filter)
-    selected = [row for row in rows if matcher.search(row.user)]
-    query_width = max(20, terminal_width - 84)
+    selected = [row for row in rows if matcher.search(sanitize_text(row.user))]
+    query_width = max(20, terminal_width - 97)
     output: List[Tuple[str, str]] = []
     header = (
-        f"{'PSID':<8} {'HG':<5} {'USER':<12} {'SOURCE':<16} {'BACKEND':<20} "
-        f"{'TIME':>8} {'ACTIVE QUERY':<{query_width}}"
+        f"{'PSID':<8} | {'HG':<4} | {'USER':<15} | {'SOURCE':<15} | "
+        f"{'BACKEND':<28} | {'TIME':<9} | {'ACTIVE QUERY':<{query_width}}"
     )
     output.append((BOLD + header + RESET, header))
     for row in selected:
         clean = (
-            f"{truncate(row.session_id, 8):<8} {truncate(row.hostgroup, 5):<5} "
-            f"{truncate(row.user, 12):<12} {truncate(row.client_host, 16):<16} "
-            f"{truncate(row.server_host, 20):<20} {row.time_ms:>8} "
+            f"{truncate(sanitize_text(row.session_id), 8):<8} | "
+            f"{truncate(sanitize_text(row.hostgroup), 4):<4} | "
+            f"{truncate(sanitize_text(row.user), 15):<15} | "
+            f"{truncate(sanitize_text(row.client_host), 15):<15} | "
+            f"{truncate(sanitize_text(row.server_host), 28):<28} | "
+            f"{str(row.time_ms) + 'ms':<9} | "
             f"{truncate(sanitize_text(row.query), query_width):<{query_width}}"
         )
         color = RED if row.time_ms > 1000 else YELLOW if row.time_ms > 500 else CYAN
@@ -220,17 +243,17 @@ def format_digests(
     terminal_width: int = 130,
 ) -> RenderedView:
     del user_filter
-    query_width = max(50, terminal_width - 60)
+    query_width = max(20, terminal_width - 73)
     output: List[Tuple[str, str]] = []
     header = (
-        f"{'DIGEST':<14} {'COUNT':>6} {'SUM_TIME':>10} {'MIN_TIME':>10} "
-        f"{'MAX_TIME':>10} {'QUERY TEXT':<{query_width}}"
+        f"{'DIGEST':<18} | {'COUNT':<10} | {'SUM_TIME':<10} | "
+        f"{'MIN_TIME':<10} | {'MAX_TIME':<10} | {'QUERY TEXT':<{query_width}}"
     )
     output.append((BOLD + header + RESET, header))
     for row in rows:
         clean = (
-            f"{truncate(row.digest, 14):<14} {row.count:>6} {row.sum_time:>10} "
-            f"{row.min_time:>10} {row.max_time:>10} "
+            f"{truncate(sanitize_text(row.digest), 18):<18} | {row.count:<10} | "
+            f"{row.sum_time:<10} | {row.min_time:<10} | {row.max_time:<10} | "
             f"{truncate(sanitize_text(row.query), query_width):<{query_width}}"
         )
         output.append((CYAN + clean + RESET, clean))
@@ -241,25 +264,31 @@ def format_backend(rows: BackendRows, terminal_width: int = 130) -> RenderedView
     del terminal_width
     output: List[Tuple[str, str]] = []
     pool_header = (
-        f"{'HOSTGROUP':<10} {'BACKEND HOST':<30} {'STATUS':<12} "
-        f"{'USED':>7} {'FREE':>7} {'OK':>10} {'ERR':>8}"
+        f"{'HOSTGROUP':<10} | {'BACKEND HOST':<35} | {'STATUS':<15} | "
+        f"{'CONN USED':<11} | {'CONN FREE':<11} | {'CONN OK':<11} | {'CONN ERR':<11}"
     )
     output.append((BOLD + pool_header + RESET, pool_header))
     for row in rows.pool:
         clean = (
-            f"{truncate(row.hostgroup, 10):<10} {truncate(row.server_host, 30):<30} "
-            f"{truncate(row.status, 12):<12} {row.conn_used:>7} {row.conn_free:>7} "
-            f"{row.conn_ok:>10} {row.conn_err:>8}"
+            f"{truncate(sanitize_text(row.hostgroup), 10):<10} | "
+            f"{truncate(sanitize_text(row.server_host), 35):<35} | "
+            f"{truncate(sanitize_text(row.status), 15):<15} | "
+            f"{row.conn_used:<11} | {row.conn_free:<11} | "
+            f"{row.conn_ok:<11} | {row.conn_err:<11}"
         )
         color = GREEN if row.status == "ONLINE" and row.conn_err == 0 else RED
         output.append((color + clean + RESET, clean))
-    ping_header = f"{'PING HOST':<30} {'LAST PING':<20} {'SUCCESS_US':>12} ERROR"
+    ping_header = (
+        f"{'HOSTNAME':<35} | {'LAST PING DATETIME':<25} | "
+        f"{'SUCCESS (us)':<15} | PING ERROR"
+    )
     output.append((BOLD + ping_header + RESET, ping_header))
     for row in rows.ping:
         success = "" if row.success_us is None else str(row.success_us)
         clean = (
-            f"{truncate(row.hostname, 30):<30} {truncate(row.last_ping, 20):<20} "
-            f"{success:>12} {sanitize_text(row.error)}"
+            f"{truncate(sanitize_text(row.hostname), 35):<35} | "
+            f"{truncate(sanitize_text(row.last_ping), 25):<25} | "
+            f"{success:<15} | {sanitize_text(row.error)}"
         )
         color = RED if row.error else GREEN
         output.append((color + clean + RESET, clean))

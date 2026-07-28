@@ -95,6 +95,14 @@ class AppTests(unittest.TestCase):
         app.handle_key("q")
         self.assertFalse(app.running)
 
+    def test_render_uses_resolved_target_and_version(self) -> None:
+        app, _session, terminal = self.make_app()
+        app.display_host = "proxysql01.internal"
+        app.proxy_version = "2.7.3"
+        screen = app.render()
+        self.assertIn("Server: proxysql01.internal", screen)
+        self.assertIn("Version: 2.7.3", screen)
+
     def test_failed_sample_preserves_last_valid_output(self) -> None:
         app, session, _terminal = self.make_app()
         app.state.last_rendered = "last valid"

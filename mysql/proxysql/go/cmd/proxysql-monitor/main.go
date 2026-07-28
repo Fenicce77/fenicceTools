@@ -10,6 +10,7 @@ import (
 
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/app"
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/cli"
+	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/queries"
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/terminal"
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/transport"
 )
@@ -64,13 +65,43 @@ func run(args []string) int {
 		return 1
 	}
 
-	controller := terminal.New(os.Stdin, os.Stdout)
-	if err := controller.Enter(); err != nil {
+	session := factory(config.LoginPaths[0])
+	versionRows, err := session.ExecuteWithRetry(ctx, queries.VersionSQL, config.Timeout)
+	if err == nil && len(versionRows) == 0 {
+		err = errors.New("ProxySQL returned an empty version")
+	}
+	displayHost := ""
+	if err == nil {
+		displayHost, err = app.ResolveDisplayHost(ctx, config.LoginPaths[0], session)
+	}
+	if err != nil {
+		_ = session.Close()
 		fmt.Fprintf(os.Stderr, "%sError: %v%s\n", red, err, reset)
 		return 1
 	}
-	session := factory(config.LoginPaths[0])
+
+	controller := terminal.New(os.Stdin, os.Stdout)
+	if err := controller.Enter(); err != nil {
+		_ = session.Close()
+		fmt.Fprintf(os.Stderr, "%sError: %v%s\n", red, err, reset)
+		return 1
+	}
 	monitor := app.New(config, session, controller, os.Stdout)
+	monitor.DisplayHost = displayHost
+	monitor.ProxyVersion = versionRows[0]
+	resize := make(chan os.Signal, 1)
+	signal.Notify(resize, syscall.SIGWINCH)
+	defer signal.Stop(resize)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-resize:
+				controller.MarkGeometryDirty()
+			}
+		}
+	}()
 	runErr := monitor.Run(ctx)
 	closeErr := monitor.Close()
 	if err := errors.Join(runErr, closeErr); err != nil {

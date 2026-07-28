@@ -19,6 +19,7 @@ from .formatter import (
     parse_connections,
     parse_digests,
     parse_queries,
+    sanitize_text,
 )
 from .models import Config, MonitorState, SmokeResult, SortMode, View
 from .queries import (
@@ -79,6 +80,8 @@ class MonitorApp:
         self.user_filter = config.user_filter
         self.threshold = config.threshold
         self.running = True
+        self.display_host = config.login_paths[0]
+        self.proxy_version = "Unknown"
         self.last_colored = ""
         self.last_row_count = 0
         self._closed = False
@@ -177,7 +180,8 @@ class MonitorApp:
             flags.append(f"STALE: {self.state.last_error or 'ProxySQL unavailable'}")
         flag_text = f" [{' | '.join(flags)}]" if flags else ""
         header = (
-            f"ProxySQL Monitor | Login path: {self.config.login_paths[0]} | "
+            f"ProxySQL Monitor | Server: {sanitize_text(self.display_host)} | "
+            f"Version: {sanitize_text(self.proxy_version)} | "
             f"Mode: {self.state.view.value} | Refresh: {self.refresh_time:g}s{flag_text}"
         )
         filters = []
@@ -277,6 +281,7 @@ def run_smoke(
     results = []
     views = (View.CONN, View.QUERY, View.DIGEST, View.BACKEND)
     for login_path in config.login_paths:
+        node_start = len(results)
         try:
             with session_factory(login_path) as session:
                 version = session.execute_with_retry(
@@ -309,7 +314,18 @@ def run_smoke(
                             )
                         )
         except (TransportError, ValueError, OSError) as exc:
-            completed = sum(1 for result in results if result.login_path == login_path)
+            completed = len(results) - node_start
+            if completed == len(views):
+                for index in range(node_start, len(results)):
+                    prior = results[index]
+                    results[index] = SmokeResult(
+                        prior.login_path,
+                        prior.view,
+                        prior.rows,
+                        prior.elapsed_seconds,
+                        False,
+                        str(exc),
+                    )
             for view in views[completed:]:
                 results.append(SmokeResult(login_path, view, 0, 0.0, False, str(exc)))
     return tuple(results)

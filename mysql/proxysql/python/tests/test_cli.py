@@ -57,6 +57,13 @@ class CLITests(unittest.TestCase):
         self.assertIn("ORDER BY COUNT(*) DESC", by_conn)
         self.assertIn("ORDER BY user ASC", by_user)
 
+    def test_help_contains_operational_examples(self) -> None:
+        from proxysql_monitor.cli import _parser
+
+        help_text = _parser().format_help()
+        for value in ("--output-file", "rmateos", "--smoke-test", "node03"):
+            self.assertIn(value, help_text)
+
 
 if __name__ == "__main__":
     unittest.main()

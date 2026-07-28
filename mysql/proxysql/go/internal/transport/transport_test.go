@@ -98,10 +98,25 @@ func TestStderrIsBounded(t *testing.T) {
 	}
 }
 
+func TestSQLErrorTerminatesFrameAndRetryFails(t *testing.T) {
+	t.Setenv("FAKE_MYSQL_EXIT_ON_TOKEN", "TEST_SQL_ERROR")
+	state := t.TempDir()
+	session := newFakeSession(t, state)
+	t.Cleanup(func() { _ = session.Close() })
+	if _, err := session.ExecuteWithRetry(
+		context.Background(), "SELECT 'TEST_SQL_ERROR';", 500*time.Millisecond,
+	); err == nil {
+		t.Fatal("SQL error reported success")
+	}
+	if got := launchCount(t, state); got != 2 {
+		t.Fatalf("launches = %d, want 2", got)
+	}
+}
+
 func TestClientKeepsBatchEscaping(t *testing.T) {
 	session := New(Config{LoginPath: "node01"})
 	args := session.commandArgs()
-	if !contains(args, "--batch") || contains(args, "--raw") {
+	if !contains(args, "--batch") || contains(args, "--raw") || contains(args, "--force") {
 		t.Fatalf("unexpected mysql args: %v", args)
 	}
 }

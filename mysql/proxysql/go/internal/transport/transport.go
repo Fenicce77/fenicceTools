@@ -69,7 +69,6 @@ func (s *Session) commandArgs() []string {
 		"--batch",
 		"--skip-column-names",
 		"--unbuffered",
-		"--force",
 	)
 }
 

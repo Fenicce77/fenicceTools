@@ -4,11 +4,12 @@ import signal
 import sys
 from typing import Optional, Sequence
 
-from .app import MonitorApp, run_smoke
+from .app import MonitorApp, resolve_display_host, run_smoke
 from .cli import parse_args
 from .formatter import GREEN, RED, RESET
 from .terminal import TerminalController
 from .transport import PersistentMySQLSession, TransportError
+from .queries import VERSION_SQL
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -35,13 +36,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     session = PersistentMySQLSession(config.login_paths[0])
     terminal = TerminalController()
+    try:
+        version_rows = session.execute_with_retry(
+            VERSION_SQL, timeout=config.query_timeout
+        )
+        if not version_rows:
+            raise TransportError("ProxySQL returned an empty version.")
+        display_host = resolve_display_host(config.login_paths[0], session)
+    except (TransportError, OSError, ValueError) as exc:
+        session.close()
+        print(f"{RED}Error: {exc}{RESET}", file=sys.stderr)
+        return 1
     app = MonitorApp(config, session=session, terminal=terminal)
+    app.proxy_version = version_rows[0]
+    app.display_host = display_host
 
     def stop(_signum: int, _frame: object) -> None:
         app.running = False
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
+    if hasattr(signal, "SIGWINCH"):
+        signal.signal(signal.SIGWINCH, lambda _signum, _frame: terminal.mark_geometry_dirty())
     try:
         with terminal:
             app.run()

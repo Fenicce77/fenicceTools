@@ -60,7 +60,10 @@ func TestParseRejectsInvalidValues(t *testing.T) {
 
 func TestHelpContainsOptionsAndExample(t *testing.T) {
 	help := Help("proxysql-monitor")
-	for _, value := range []string{"--login-path", "--refresh-time", "--smoke-test", "rmateos"} {
+	for _, value := range []string{
+		"--login-path", "--refresh-time", "--output-file", "--smoke-test",
+		"rmateos", "node03",
+	} {
 		if !strings.Contains(help, value) {
 			t.Fatalf("help missing %q", value)
 		}

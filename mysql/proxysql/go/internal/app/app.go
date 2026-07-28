@@ -32,12 +32,14 @@ type Terminal interface {
 }
 
 type App struct {
-	Config     model.Config
-	State      model.State
-	Refresh    time.Duration
-	UserFilter string
-	Threshold  int
-	Running    bool
+	Config       model.Config
+	State        model.State
+	Refresh      time.Duration
+	UserFilter   string
+	Threshold    int
+	Running      bool
+	DisplayHost  string
+	ProxyVersion string
 
 	session     Session
 	terminal    Terminal
@@ -53,6 +55,7 @@ func New(config model.Config, session Session, terminal Terminal, output io.Writ
 	return &App{
 		Config: config, State: model.NewState(), Refresh: config.Refresh,
 		UserFilter: config.UserFilter, Threshold: config.Threshold, Running: true,
+		DisplayHost: config.LoginPaths[0], ProxyVersion: "Unknown",
 		session: session, terminal: terminal, output: output, wallClock: time.Now,
 	}
 }
@@ -123,7 +126,7 @@ func (a *App) SampleCurrentView(ctx context.Context) bool {
 
 func (a *App) HandleKey(ctx context.Context, key rune) {
 	switch key {
-	case 'q', 'Q':
+	case 'q', 'Q', rune(3):
 		a.Running = false
 	case 'v', 'V':
 		views := []model.View{model.ViewConn, model.ViewQuery, model.ViewDigest, model.ViewBackend}
@@ -187,14 +190,30 @@ func (a *App) Render() error {
 		flags += " [STALE: " + a.State.LastError + "]"
 	}
 	header := fmt.Sprintf(
-		"ProxySQL Monitor | Login path: %s | Mode: %s | Refresh: %s%s\n",
-		a.Config.LoginPaths[0], a.State.View, a.Refresh, flags,
+		"ProxySQL Monitor | Server: %s | Version: %s | Mode: %s | Refresh: %s%s\n",
+		formatter.Sanitize(a.DisplayHost), formatter.Sanitize(a.ProxyVersion),
+		a.State.View, a.Refresh, flags,
 	)
+	filterLine := ""
+	if a.UserFilter != "" {
+		filterLine = "Filter: " + a.UserFilter
+	}
+	if a.Threshold > 0 {
+		if filterLine != "" {
+			filterLine += " | "
+		}
+		filterLine += fmt.Sprintf("Threshold: >= %d conn", a.Threshold)
+	}
+	if filterLine != "" {
+		filterLine += "\n"
+	}
 	body := a.lastColored
 	if body == "" {
 		body = "No active data to display."
 	}
-	_, err := fmt.Fprintf(a.output, "%s%s\n%s\n", header, strings.Repeat("=", 110), body)
+	_, err := fmt.Fprintf(
+		a.output, "%s%s%s\n%s\n", header, filterLine, strings.Repeat("=", 110), body,
+	)
 	return err
 }
 

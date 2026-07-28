@@ -4,9 +4,28 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
+
+type notifyingWriter struct {
+	bytes.Buffer
+	ready chan struct{}
+	once  sync.Once
+}
+
+func (w *notifyingWriter) Write(data []byte) (int, error) {
+	count, err := w.Buffer.Write(data)
+	w.once.Do(func() { close(w.ready) })
+	return count, err
+}
+
+func (w *notifyingWriter) WriteString(value string) (int, error) {
+	count, err := w.Buffer.WriteString(value)
+	w.once.Do(func() { close(w.ready) })
+	return count, err
+}
 
 func TestNonTTYClearAndFallbackSize(t *testing.T) {
 	input, err := os.Open(os.DevNull)
@@ -50,5 +69,54 @@ func TestNonTTYKeysCloseOnCancellation(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("cancelled key channel did not close within timeout")
+	}
+}
+
+func TestPromptDoesNotCompeteWithKeyReader(t *testing.T) {
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	output := &notifyingWriter{ready: make(chan struct{})}
+	controller := New(input, output)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	keys := controller.Keys(ctx)
+	if _, err := writer.Write([]byte{'r'}); err != nil {
+		t.Fatal(err)
+	}
+	if key := <-keys; key != 'r' {
+		t.Fatalf("key = %q, want r", key)
+	}
+
+	result := make(chan string, 1)
+	errs := make(chan error, 1)
+	go func() {
+		value, promptErr := controller.Prompt("refresh: ")
+		if promptErr != nil {
+			errs <- promptErr
+			return
+		}
+		result <- value
+	}()
+	select {
+	case <-output.ready:
+	case <-time.After(time.Second):
+		t.Fatal("prompt was not emitted")
+	}
+	if _, err := writer.Write([]byte("0.5\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case value := <-result:
+		if value != "0.5" {
+			t.Fatalf("prompt = %q, want 0.5", value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt timed out while key reader was active")
 	}
 }

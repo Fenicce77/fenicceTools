@@ -13,9 +13,13 @@ def _parser() -> argparse.ArgumentParser:
         description="Low-overhead interactive monitor for ProxySQL admin statistics.",
         epilog=(
             "Examples:\n"
+            "  %(prog)s --login-path=proxysql_admin\n"
             "  %(prog)s --login-path=proxysql_admin -r 0.5\n"
             "  %(prog)s --login-path=proxysql_admin -u app,report -t 20\n"
-            "  %(prog)s --smoke-test --login-path=node01 --login-path=node02"
+            "  %(prog)s --login-path=proxysql_admin --output-file=/tmp/proxysql.log\n"
+            "  su - rmateos -c '%(prog)s --login-path=proxysql_admin -r 0.5'\n"
+            "  %(prog)s --smoke-test --login-path=node01 --login-path=node02 "
+            "--login-path=node03"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

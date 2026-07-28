@@ -53,6 +53,20 @@ func TestBackendParsing(t *testing.T) {
 	}
 }
 
+func TestNullPingSuccessIsOptional(t *testing.T) {
+	rows, err := ParseBackend([]string{
+		"__PXMON_POOL__",
+		"__PXMON_PING__",
+		"backend\t2026-07-28 12:00:00\tNULL\tconnection refused",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.Ping[0].SuccessUS != nil {
+		t.Fatalf("success = %v, want nil", rows.Ping[0].SuccessUS)
+	}
+}
+
 func TestMalformedRowsFailAndEmptyRowsPass(t *testing.T) {
 	if _, err := ParseConnections(nil); err != nil {
 		t.Fatal(err)
@@ -84,5 +98,36 @@ func TestFilterAlternationAndDigestWidth(t *testing.T) {
 		if len(line) > 110 {
 			t.Fatalf("line length = %d, want <= 110", len(line))
 		}
+	}
+}
+
+func TestBashConnWidthsGlobalDeltaAndControlNeutralization(t *testing.T) {
+	previous, _ := ParseConnections([]string{"app\tclient\tbackend:3306\tappdb\t4"})
+	current, _ := ParseConnections([]string{"app\tclient\tbackend:3306\tappdb\t6"})
+	rendered, err := FormatConnections(current, previous, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(rendered.Clean, "\n")
+	if !strings.Contains(lines[len(lines)-1], "GLOBAL TOTALS") ||
+		!strings.Contains(lines[len(lines)-1], "+2") {
+		t.Fatalf("missing global delta: %q", lines[len(lines)-1])
+	}
+	if !strings.HasPrefix(lines[0], "USER                 | SOURCE (Cli)") {
+		t.Fatalf("unexpected Bash widths: %q", lines[0])
+	}
+
+	queries, err := ParseQueries([]string{
+		"11\t10\tapp\tclient\tbackend:3306\t1\tSELECT \x1b[31m bad\x7f",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryView, err := FormatQueries(queries, "", 130)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(queryView.Clean, "\x1b") || strings.Contains(queryView.Clean, "\x7f") {
+		t.Fatalf("clean output contains terminal controls: %q", queryView.Clean)
 	}
 }

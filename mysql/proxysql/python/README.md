@@ -37,7 +37,9 @@ The process keeps one persistent `mysql --login-path` child. A request timeout
 or broken child causes one reconnect and one retry. Reader queues and stderr
 history are bounded to prevent memory growth. Normal mode queries only the
 visible view. Batch escaping remains enabled so literal query newlines cannot
-break framed row boundaries; the formatter normalizes escaped controls.
+break framed row boundaries; `--force` is intentionally disabled so SQL errors
+terminate the frame and cannot be reported as empty successful samples. The
+formatter normalizes escaped controls and neutralizes terminal control bytes.
 Output logging writes fresh nonempty samples directly from clean logical data
 and never post-processes ANSI output.
 

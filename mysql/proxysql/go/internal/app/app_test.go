@@ -100,6 +100,25 @@ func TestViewPauseSortAndQuitTransitions(t *testing.T) {
 	}
 }
 
+func TestRawCtrlCStopsAndResolvedTargetRenders(t *testing.T) {
+	app, _, _ := newTestApp(t, "")
+	app.DisplayHost = "proxysql01.internal"
+	app.ProxyVersion = "2.7.3"
+	app.HandleKey(context.Background(), rune(3))
+	if app.Running {
+		t.Fatal("raw Ctrl-C did not stop")
+	}
+	var output bytes.Buffer
+	app.output = &output
+	if err := app.Render(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Server: proxysql01.internal") ||
+		!strings.Contains(output.String(), "Version: 2.7.3") {
+		t.Fatalf("resolved target absent: %q", output.String())
+	}
+}
+
 func TestFailedSamplePreservesLastOutput(t *testing.T) {
 	app, session, _ := newTestApp(t, "")
 	app.State.LastRendered = "last valid"

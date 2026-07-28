@@ -34,6 +34,7 @@ func RunSmokeWithResolver(
 	views := []model.View{model.ViewConn, model.ViewQuery, model.ViewDigest, model.ViewBackend}
 	results := make([]model.SmokeResult, 0, len(config.LoginPaths)*len(views))
 	for _, loginPath := range config.LoginPaths {
+		nodeStart := len(results)
 		session := factory(loginPath)
 		version, err := session.ExecuteWithRetry(ctx, queries.VersionSQL, config.Timeout)
 		if err == nil && len(version) == 0 {
@@ -48,7 +49,12 @@ func RunSmokeWithResolver(
 					LoginPath: loginPath, View: view, Success: false, Error: err.Error(),
 				})
 			}
-			_ = session.Close()
+			if closeErr := session.Close(); closeErr != nil {
+				for index := nodeStart; index < len(results); index++ {
+					results[index].Success = false
+					results[index].Error = errors.Join(err, closeErr).Error()
+				}
+			}
 			continue
 		}
 
@@ -72,7 +78,12 @@ func RunSmokeWithResolver(
 			}
 			results = append(results, result)
 		}
-		_ = session.Close()
+		if closeErr := session.Close(); closeErr != nil {
+			for index := nodeStart; index < len(results); index++ {
+				results[index].Success = false
+				results[index].Error = closeErr.Error()
+			}
+		}
 	}
 	return results
 }

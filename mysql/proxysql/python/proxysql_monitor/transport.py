@@ -69,7 +69,6 @@ class PersistentMySQLSession:
                     "--batch",
                     "--skip-column-names",
                     "--unbuffered",
-                    "--force",
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,

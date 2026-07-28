@@ -70,6 +70,15 @@ class TransportTests(unittest.TestCase):
             session.execute("SELECT @@version;")
             self.assertLessEqual(len(session.recent_stderr), 3)
 
+    def test_sql_error_terminates_frame_and_retry_fails(self) -> None:
+        os.environ["FAKE_MYSQL_EXIT_ON_TOKEN"] = "TEST_SQL_ERROR"
+        with PersistentMySQLSession("node01", mysql_bin=self.mysql_bin) as session:
+            with self.assertRaises(TransportError):
+                session.execute_with_retry(
+                    "SELECT 'TEST_SQL_ERROR';", timeout=0.5
+                )
+        self.assertEqual(2, self.launch_count())
+
     def test_mysql_bin_environment_override(self) -> None:
         os.environ["MYSQL_BIN"] = self.mysql_bin
         try:
@@ -92,6 +101,7 @@ class TransportTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertIn("--batch", command)
         self.assertNotIn("--raw", command)
+        self.assertNotIn("--force", command)
         mocked.poll.return_value = 0
         session.close()
 
