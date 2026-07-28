@@ -127,6 +127,62 @@ assert_eq "$((launches_before_backend + 1))" "$launches_after_backend" \
 stop_mysql_session
 [[ ! -e "$backend_session_dir" ]] || fail "BACKEND transport directory was not removed"
 
+TERM_WIDTH=120
+TERM_GEOMETRY_DIRTY=true
+refresh_terminal_geometry
+assert_eq "120" "${#SEP_LINE}" "wide separator length"
+assert_eq "120" "${#SEP_THIN}" "thin separator length"
+
+(
+    date_calls="$TRANSPORT_TEST_DIR/date-calls"
+    date() {
+        printf 'called\n' >> "$date_calls"
+        printf '2026-07-28 12:00:00\n'
+    }
+    TIMESTAMP=""
+    TIMESTAMP_SECOND=-1
+    SECONDS=10
+    refresh_timestamp
+    refresh_timestamp
+    assert_eq "2026-07-28 12:00:00" "$TIMESTAMP" \
+        "timestamp refresh stores local time"
+    calls=$(wc -l < "$date_calls")
+    calls=${calls// /}
+    assert_eq "1" "$calls" "timestamp is cached within the same second"
+)
+
+VIEW_MODE="CONN"
+PAUSED=false
+handle_key "v"
+assert_eq "QUERY" "$VIEW_MODE" "view toggle"
+handle_key "p"
+assert_eq "true" "$PAUSED" "pause toggle"
+handle_key "p"
+assert_eq "false" "$PAUSED" "resume toggle"
+
+if ! is_positive_refresh "0.5"; then
+    fail "positive fractional refresh was rejected"
+fi
+if is_positive_refresh "0"; then
+    fail "zero refresh was accepted"
+fi
+
+(
+    FORMATTED_OUTPUT="last valid row"
+    LAST_SAMPLE_STALE=false
+    LAST_DB_ERROR=""
+    execute_query_with_retry() {
+        LAST_DB_ERROR="ProxySQL unavailable"
+        return 1
+    }
+    VIEW_MODE="QUERY"
+    sample_current_view || true
+    assert_eq "last valid row" "$FORMATTED_OUTPUT" \
+        "failed sample preserves last data"
+    assert_eq "true" "$LAST_SAMPLE_STALE" \
+        "failed sample marks output stale"
+)
+
 rm -rf "$TRANSPORT_TEST_DIR"
 
 printf 'PASS: %s assertions\n' "$TEST_COUNT"

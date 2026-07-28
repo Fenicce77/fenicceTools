@@ -32,6 +32,13 @@ initialize_defaults() {
     F_PING=""
     PROXY_VERSION=""
     PROXY_HOSTNAME="Unknown"
+    TERM_WIDTH=130
+    TERM_GEOMETRY_DIRTY=true
+    SEP_LINE=""
+    SEP_THIN=""
+    TIMESTAMP=""
+    TIMESTAMP_SECOND=-1
+    RUNNING=true
 }
 
 initialize_colors() {
@@ -112,7 +119,7 @@ validate_arguments() {
         print_error "The --login-path parameter is mandatory."
         usage 1
     fi
-    if [[ ! "$REFRESH_TIME" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    if ! is_positive_refresh "$REFRESH_TIME"; then
         print_error "Refresh time must be an integer or a float (e.g., 0.5)."
         return 1
     fi
@@ -486,139 +493,285 @@ sample_current_view() {
 }
 
 # ==============================================================================
-# Main Monitoring Loop
+# Terminal, Rendering, and Interaction
 # ==============================================================================
-monitor_loop() {
-    clear
+mark_terminal_geometry_dirty() {
+    TERM_GEOMETRY_DIRTY=true
+}
 
-    while true; do
-    TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-    TERM_WIDTH=$(tput cols 2>/dev/null || echo 130)
-    [[ -z "$TERM_WIDTH" || "$TERM_WIDTH" -lt 110 ]] && TERM_WIDTH=130
-    SEP_LINE=$(printf "%*s" "$TERM_WIDTH" "" | tr " " "=")
-    SEP_THIN=$(printf "%*s" "$TERM_WIDTH" "" | tr " " "-")
-    
-    if [[ "$PAUSED" == false ]]; then
-        sample_current_view || true
+refresh_terminal_geometry() {
+    local spaces=""
+
+    if [[ "$TERM_GEOMETRY_DIRTY" != true ]]; then
+        return 0
+    fi
+    if [[ -t 1 ]]; then
+        TERM_WIDTH=$(tput cols 2>/dev/null || printf '130')
+    fi
+    [[ "$TERM_WIDTH" =~ ^[0-9]+$ ]] || TERM_WIDTH=130
+    [[ "$TERM_WIDTH" -ge 110 ]] || TERM_WIDTH=130
+    printf -v spaces '%*s' "$TERM_WIDTH" ''
+    SEP_LINE=${spaces// /=}
+    SEP_THIN=${spaces// /-}
+    TERM_GEOMETRY_DIRTY=false
+}
+
+refresh_timestamp() {
+    if [[ "$TIMESTAMP_SECOND" != "$SECONDS" ]]; then
+        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+        TIMESTAMP_SECOND=$SECONDS
+    fi
+}
+
+is_positive_refresh() {
+    [[ "$1" =~ ^([0-9]*[1-9][0-9]*)(\.[0-9]+)?$|^0\.[0-9]*[1-9][0-9]*$ ]]
+}
+
+render_screen() {
+    local mode_label=""
+    local pause_label=""
+    local stale_label=""
+    local filters=""
+
+    printf '\033[H\033[2J'
+    printf '%b\n' "${cyn}${SEP_LINE}${off}"
+
+    case "$VIEW_MODE" in
+        CONN)
+            mode_label="${blu}CONNECTIONS POOL${off} (Sort: $SORT_MODE)"
+            ;;
+        QUERY)
+            mode_label="${red}ACTIVE QUERIES IN FLIGHT${off}"
+            ;;
+        DIGEST)
+            mode_label="${mag}QUERY DIGEST (Top 15 by sum_time)${off}"
+            ;;
+        BACKEND)
+            mode_label="${yel}BACKEND HEALTH & PING${off}"
+            ;;
+    esac
+
+    if [[ "$PAUSED" == true ]]; then
+        pause_label="${bld}${blk}${red} [PAUSED] ${off}"
+    fi
+    if [[ "$LAST_SAMPLE_STALE" == true ]]; then
+        stale_label="${bld}${yel} [STALE: ${LAST_DB_ERROR:-ProxySQL unavailable}] ${off}"
     fi
 
-    # ==============================================================================
-    # Render Output
-    # ==============================================================================
-    clear; echo -e "${cyn}${SEP_LINE}${off}"
-    
-    if [[ "$VIEW_MODE" == "CONN" ]]; then MODE_LABEL="${blu}CONNECTIONS POOL${off} (Sort: $SORT_MODE)"
-    elif [[ "$VIEW_MODE" == "QUERY" ]]; then MODE_LABEL="${red}ACTIVE QUERIES IN FLIGHT${off}"
-    elif [[ "$VIEW_MODE" == "DIGEST" ]]; then MODE_LABEL="${mag}QUERY DIGEST (Top 15 by sum_time)${off}"
-    else MODE_LABEL="${yel}BACKEND HEALTH & PING${off}"; fi
-    
-    PAUSE_LBL=$([[ "$PAUSED" == true ]] && echo "${bld}${blk}${red} [PAUSED] ${off}" || echo "")
-    echo -e "${bld} ProxySQL Monitor${off} | Server: ${cyn}${bld}$PROXY_HOSTNAME${off} | Mode: $MODE_LABEL | Date: ${wht}$TIMESTAMP${off} | Refresh: ${mag}${REFRESH_TIME}s${off}${PAUSE_LBL}"
-    
-    FILTERS=""
-    [[ -n "$USER_FILTER" ]] && FILTERS=" ${bld}Filter:${off} ${grn}$USER_FILTER${off}"
-    [[ "$THRESHOLD" -gt 0 ]] && FILTERS="$FILTERS | ${bld}Threshold:${off} ${red}>=$THRESHOLD conn${off}"
-    [[ -n "$FILTERS" ]] && echo -e "$FILTERS"
-    echo -e "${cyn}${SEP_LINE}${off}"
-    
-    if [[ "$VIEW_MODE" == "CONN" ]]; then
-        printf "${cyn}${bld}%-20s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-28s${off} | ${cyn}${bld}%-20s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off}\n" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONN" "DELTA"
-        echo -e "${wht}${SEP_THIN}${off}"
-        [[ -z "$FORMATTED_OUTPUT" ]] && echo -e "${wht}No active data to display.${off}" || echo -e "$FORMATTED_OUTPUT"
-        
-    elif [[ "$VIEW_MODE" == "QUERY" ]]; then
-        printf "${cyn}${bld}%-8s${off} | ${cyn}${bld}%-4s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-28s${off} | ${cyn}${bld}%-9s${off} | ${cyn}${bld}%s${off}\n" "PSID" "HG" "USER" "SOURCE" "BACKEND" "TIME" "ACTIVE QUERY"
-        echo -e "${wht}${SEP_THIN}${off}"
-        [[ -z "$FORMATTED_OUTPUT" ]] && echo -e "${wht}No active data to display.${off}" || echo -e "$FORMATTED_OUTPUT"
+    printf '%b\n' "${bld} ProxySQL Monitor${off} | Server: ${cyn}${bld}$PROXY_HOSTNAME${off} | Mode: $mode_label | Date: ${wht}$TIMESTAMP${off} | Refresh: ${mag}${REFRESH_TIME}s${off}${pause_label}${stale_label}"
 
-    elif [[ "$VIEW_MODE" == "DIGEST" ]]; then
-        printf "${cyn}${bld}%-18s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%s${off}\n" "DIGEST" "COUNT" "SUM_TIME" "MIN_TIME" "MAX_TIME" "QUERY TEXT"
-        echo -e "${wht}${SEP_THIN}${off}"
-        [[ -z "$FORMATTED_OUTPUT" ]] && echo -e "${wht}No active data to display.${off}" || echo -e "$FORMATTED_OUTPUT"
-        
-    elif [[ "$VIEW_MODE" == "BACKEND" ]]; then
-        echo -e "${blu}${bld} MySQL Connection Pool (stats_mysql_connection_pool) ${off}"
-        printf "${cyn}${bld}%-10s${off} | ${cyn}${bld}%-35s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%s${off}\n" "HOSTGROUP" "BACKEND HOST" "STATUS" "CONN USED" "CONN FREE" "CONN OK" "CONN ERR"
-        echo -e "${wht}${SEP_THIN}${off}"
-        [[ -z "$F_POOL" ]] && echo -e "No pool data." || echo -e "$F_POOL"
-        echo -e "\n${blu}${bld} Server Ping Log (mysql_server_ping_log) ${off}"
-        printf "${cyn}${bld}%-35s${off} | ${cyn}${bld}%-25s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%s${off}\n" "HOSTNAME" "LAST PING DATETIME" "SUCCESS (us)" "PING ERROR"
-        echo -e "${wht}${SEP_THIN}${off}"
-        [[ -z "$F_PING" ]] && echo -e "No ping data." || echo -e "$F_PING"
+    if [[ -n "$USER_FILTER" ]]; then
+        filters=" ${bld}Filter:${off} ${grn}$USER_FILTER${off}"
     fi
-    echo -e "${wht}${SEP_THIN}${off}"
+    if [[ "$THRESHOLD" -gt 0 ]]; then
+        filters="$filters | ${bld}Threshold:${off} ${red}>=$THRESHOLD conn${off}"
+    fi
+    if [[ -n "$filters" ]]; then
+        printf '%b\n' "$filters"
+    fi
+    printf '%b\n' "${cyn}${SEP_LINE}${off}"
 
-    # ==============================================================================
-    # File Logging (Only if data exists & Clean ANSI/Control Characters)
-    # ==============================================================================
+    case "$VIEW_MODE" in
+        CONN)
+            printf "${cyn}${bld}%-20s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-28s${off} | ${cyn}${bld}%-20s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off}\n" \
+                "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONN" "DELTA"
+            printf '%b\n' "${wht}${SEP_THIN}${off}"
+            if [[ -z "$FORMATTED_OUTPUT" ]]; then
+                printf '%b\n' "${wht}No active data to display.${off}"
+            else
+                printf '%b\n' "$FORMATTED_OUTPUT"
+            fi
+            ;;
+        QUERY)
+            printf "${cyn}${bld}%-8s${off} | ${cyn}${bld}%-4s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-28s${off} | ${cyn}${bld}%-9s${off} | ${cyn}${bld}%s${off}\n" \
+                "PSID" "HG" "USER" "SOURCE" "BACKEND" "TIME" "ACTIVE QUERY"
+            printf '%b\n' "${wht}${SEP_THIN}${off}"
+            if [[ -z "$FORMATTED_OUTPUT" ]]; then
+                printf '%b\n' "${wht}No active data to display.${off}"
+            else
+                printf '%b\n' "$FORMATTED_OUTPUT"
+            fi
+            ;;
+        DIGEST)
+            printf "${cyn}${bld}%-18s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%-10s${off} | ${cyn}${bld}%s${off}\n" \
+                "DIGEST" "COUNT" "SUM_TIME" "MIN_TIME" "MAX_TIME" "QUERY TEXT"
+            printf '%b\n' "${wht}${SEP_THIN}${off}"
+            if [[ -z "$FORMATTED_OUTPUT" ]]; then
+                printf '%b\n' "${wht}No active data to display.${off}"
+            else
+                printf '%b\n' "$FORMATTED_OUTPUT"
+            fi
+            ;;
+        BACKEND)
+            printf '%b\n' "${blu}${bld} MySQL Connection Pool (stats_mysql_connection_pool) ${off}"
+            printf "${cyn}${bld}%-10s${off} | ${cyn}${bld}%-35s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%-11s${off} | ${cyn}${bld}%s${off}\n" \
+                "HOSTGROUP" "BACKEND HOST" "STATUS" "CONN USED" "CONN FREE" "CONN OK" "CONN ERR"
+            printf '%b\n' "${wht}${SEP_THIN}${off}"
+            if [[ -z "$F_POOL" ]]; then
+                printf '%s\n' "No pool data."
+            else
+                printf '%b\n' "$F_POOL"
+            fi
+            printf '\n%b\n' "${blu}${bld} Server Ping Log (mysql_server_ping_log) ${off}"
+            printf "${cyn}${bld}%-35s${off} | ${cyn}${bld}%-25s${off} | ${cyn}${bld}%-15s${off} | ${cyn}${bld}%s${off}\n" \
+                "HOSTNAME" "LAST PING DATETIME" "SUCCESS (us)" "PING ERROR"
+            printf '%b\n' "${wht}${SEP_THIN}${off}"
+            if [[ -z "$F_PING" ]]; then
+                printf '%s\n' "No ping data."
+            else
+                printf '%b\n' "$F_PING"
+            fi
+            ;;
+    esac
+
+    printf '%b\n' "${wht}${SEP_THIN}${off}"
+}
+
+log_current_view() {
+    local has_data=false
+
     if [[ -n "$OUTPUT_FILE" ]]; then
-        HAS_DATA=false
-        
         if [[ "$VIEW_MODE" == "CONN" || "$VIEW_MODE" == "QUERY" || "$VIEW_MODE" == "DIGEST" ]]; then
-            [[ -n "$FORMATTED_OUTPUT" ]] && HAS_DATA=true
+            [[ -n "$FORMATTED_OUTPUT" ]] && has_data=true
         elif [[ "$VIEW_MODE" == "BACKEND" ]]; then
-            [[ -n "$F_POOL" || -n "$F_PING" ]] && HAS_DATA=true
+            [[ -n "$F_POOL" || -n "$F_PING" ]] && has_data=true
         fi
 
-        if [[ "$HAS_DATA" == true ]]; then
+        if [[ "$has_data" == true ]]; then
             {
-                echo "=== $TIMESTAMP | MODE: $VIEW_MODE ==="
-                if [[ "$VIEW_MODE" == "CONN" ]]; then
-                    printf "%-20s | %-15s | %-28s | %-20s | %-10s | %-10s\n" "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONN" "DELTA"
-                    echo -e "$FORMATTED_OUTPUT"
-                elif [[ "$VIEW_MODE" == "QUERY" ]]; then
-                    printf "%-8s | %-4s | %-15s | %-15s | %-28s | %-9s | %s\n" "PSID" "HG" "USER" "SOURCE" "BACKEND" "TIME" "ACTIVE QUERY"
-                    echo -e "$FORMATTED_OUTPUT"
-                elif [[ "$VIEW_MODE" == "DIGEST" ]]; then
-                    printf "%-18s | %-10s | %-10s | %-10s | %-10s | %s\n" "DIGEST" "COUNT" "SUM_TIME" "MIN_TIME" "MAX_TIME" "QUERY TEXT"
-                    echo -e "$FORMATTED_OUTPUT"
-                elif [[ "$VIEW_MODE" == "BACKEND" ]]; then
-                    if [[ -n "$F_POOL" ]]; then
-                        echo -e "--- MySQL Connection Pool ---\n$(printf "%-10s | %-35s | %-15s | %-11s | %-11s | %-11s | %s\n" "HOSTGROUP" "BACKEND HOST" "STATUS" "CONN USED" "CONN FREE" "CONN OK" "CONN ERR")"
-                        echo -e "$F_POOL"
-                    fi
-                    if [[ -n "$F_PING" ]]; then
-                        echo -e "--- Server Ping Log ---\n$(printf "%-35s | %-25s | %-15s | %s\n" "HOSTNAME" "LAST PING DATETIME" "SUCCESS (us)" "PING ERROR")"
-                        echo -e "$F_PING"
-                    fi
-                fi
-            # sed regex strictly removes CSI codes, Charset definitions, Shift-In (\017) and Shift-Out (\016)
+                printf '=== %s | MODE: %s ===\n' "$TIMESTAMP" "$VIEW_MODE"
+                case "$VIEW_MODE" in
+                    CONN)
+                        printf "%-20s | %-15s | %-28s | %-20s | %-10s | %-10s\n" \
+                            "USER" "SOURCE (Cli)" "BACKEND (Srv)" "SCHEMA" "CONN" "DELTA"
+                        printf '%b\n' "$FORMATTED_OUTPUT"
+                        ;;
+                    QUERY)
+                        printf "%-8s | %-4s | %-15s | %-15s | %-28s | %-9s | %s\n" \
+                            "PSID" "HG" "USER" "SOURCE" "BACKEND" "TIME" "ACTIVE QUERY"
+                        printf '%b\n' "$FORMATTED_OUTPUT"
+                        ;;
+                    DIGEST)
+                        printf "%-18s | %-10s | %-10s | %-10s | %-10s | %s\n" \
+                            "DIGEST" "COUNT" "SUM_TIME" "MIN_TIME" "MAX_TIME" "QUERY TEXT"
+                        printf '%b\n' "$FORMATTED_OUTPUT"
+                        ;;
+                    BACKEND)
+                        if [[ -n "$F_POOL" ]]; then
+                            printf '%s\n' "--- MySQL Connection Pool ---"
+                            printf "%-10s | %-35s | %-15s | %-11s | %-11s | %-11s | %s\n" \
+                                "HOSTGROUP" "BACKEND HOST" "STATUS" "CONN USED" "CONN FREE" "CONN OK" "CONN ERR"
+                            printf '%b\n' "$F_POOL"
+                        fi
+                        if [[ -n "$F_PING" ]]; then
+                            printf '%s\n' "--- Server Ping Log ---"
+                            printf "%-35s | %-25s | %-15s | %s\n" \
+                                "HOSTNAME" "LAST PING DATETIME" "SUCCESS (us)" "PING ERROR"
+                            printf '%b\n' "$F_PING"
+                        fi
+                        ;;
+                esac
+            # Remove CSI codes, charset definitions, Shift-In, and Shift-Out.
             } | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g; s/\033([a-zA-Z]//g; s/\017//g; s/\016//g' >> "$OUTPUT_FILE" || true
         fi
     fi
+}
 
-    # ==============================================================================
-    # Interactivity
-    # ==============================================================================
-    echo -e "\n${bld}Interactive Options:${off}"
-    echo -e " [${mag}v${off}] ${blu}Toggle View${off} (Conn/Query/Digest/Backend) | [${mag}r${off}] ${grn}Refresh${off} | [${mag}s${off}] ${grn}Sort${off} | [${mag}p${off}] ${yel}Pause${off} | [${mag}u${off}] ${grn}Filter${off} | [${mag}t${off}] ${red}Threshold${off} | [${mag}q${off}] ${red}Quit${off}"
-    
-    read -t "$REFRESH_TIME" -n 1 -s key || true
-    
+toggle_view() {
+    PAUSED=false
+    case "$VIEW_MODE" in
+        CONN) VIEW_MODE="QUERY" ;;
+        QUERY) VIEW_MODE="DIGEST" ;;
+        DIGEST) VIEW_MODE="BACKEND" ;;
+        BACKEND)
+            VIEW_MODE="CONN"
+            PREV_DATA=""
+            ;;
+    esac
+}
+
+toggle_sort() {
+    PAUSED=false
+    [[ "$VIEW_MODE" == "CONN" ]] || return 0
+    if [[ "$SORT_MODE" == "CONN" ]]; then
+        SORT_MODE="USER"
+    else
+        SORT_MODE="CONN"
+    fi
+    PREV_DATA=""
+}
+
+toggle_pause() {
+    if [[ "$PAUSED" == true ]]; then
+        PAUSED=false
+    else
+        PAUSED=true
+    fi
+}
+
+handle_key() {
+    local key=${1:-}
+    local new_rt=""
+    local new_th=""
+
     case "$key" in
-        q|Q) 
-            echo -e "\n${bld}${red}Exiting monitor...${off}"; break ;;
-        v|V) 
-            PAUSED=false
-            if [[ "$VIEW_MODE" == "CONN" ]]; then VIEW_MODE="QUERY"
-            elif [[ "$VIEW_MODE" == "QUERY" ]]; then VIEW_MODE="DIGEST"
-            elif [[ "$VIEW_MODE" == "DIGEST" ]]; then VIEW_MODE="BACKEND"
-            else VIEW_MODE="CONN"; PREV_DATA=""; fi ;;
-        r|R) 
-            echo -e "\n"; read -p "Enter new refresh time (seconds, e.g. 0.5): " new_rt || true
-            if [[ "$new_rt" =~ ^[0-9]+(\.[0-9]+)?$ ]] && (( $(echo "$new_rt > 0" | bc -l 2>/dev/null || echo 1) )); then
+        q|Q)
+            printf '\n%b\n' "${bld}${red}Exiting monitor...${off}"
+            RUNNING=false
+            ;;
+        v|V)
+            toggle_view
+            ;;
+        r|R)
+            printf '\n'
+            read -r -p "Enter new refresh time (seconds, e.g. 0.5): " new_rt || true
+            if is_positive_refresh "$new_rt"; then
                 REFRESH_TIME=$new_rt
-            fi ;;
+            fi
+            ;;
         s|S)
-            PAUSED=false; [[ "$VIEW_MODE" == "CONN" ]] && SORT_MODE=$([[ "$SORT_MODE" == "CONN" ]] && echo "USER" || echo "CONN"); PREV_DATA="" ;;
+            toggle_sort
+            ;;
         p|P)
-            PAUSED=$([[ "$PAUSED" == true ]] && echo false || echo true) ;;
-        u|U) 
-            echo -e "\n"; read -p "Enter new user filter (empty to disable): " USER_FILTER || true ;;
+            toggle_pause
+            ;;
+        u|U)
+            printf '\n'
+            read -r -p "Enter new user filter (empty to disable): " USER_FILTER || true
+            ;;
         t|T)
-            echo -e "\n"; read -p "Enter connection threshold (0 to disable): " new_th || true
-            [[ "$new_th" =~ ^[0-9]+$ ]] && THRESHOLD=$new_th ;;
-        esac
+            printf '\n'
+            read -r -p "Enter connection threshold (0 to disable): " new_th || true
+            if [[ "$new_th" =~ ^[0-9]+$ ]]; then
+                THRESHOLD=$new_th
+            fi
+            ;;
+    esac
+}
+
+cleanup() {
+    stop_mysql_session
+    printf '%b' "${off:-}"
+}
+
+monitor_loop() {
+    local key=""
+
+    while [[ "$RUNNING" == true ]]; do
+        refresh_terminal_geometry
+        refresh_timestamp
+        if [[ "$PAUSED" == false ]]; then
+            sample_current_view || true
+        fi
+        render_screen
+        log_current_view
+
+        printf '\n%b\n' "${bld}Interactive Options:${off}"
+        printf '%b\n' " [${mag}v${off}] ${blu}Toggle View${off} (Conn/Query/Digest/Backend) | [${mag}r${off}] ${grn}Refresh${off} | [${mag}s${off}] ${grn}Sort${off} | [${mag}p${off}] ${yel}Pause${off} | [${mag}u${off}] ${grn}Filter${off} | [${mag}t${off}] ${red}Threshold${off} | [${mag}q${off}] ${red}Quit${off}"
+
+        key=""
+        read -r -t "$REFRESH_TIME" -n 1 -s key || true
+        handle_key "$key"
     done
 }
 
@@ -627,6 +780,10 @@ main() {
     initialize_colors
     parse_arguments "$@"
     validate_arguments
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap mark_terminal_geometry_dirty WINCH
     initialize_monitor
     monitor_loop
 }
