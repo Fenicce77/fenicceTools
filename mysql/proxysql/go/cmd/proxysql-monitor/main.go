@@ -10,6 +10,7 @@ import (
 
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/app"
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/cli"
+	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/formatter"
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/queries"
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/terminal"
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/transport"
@@ -51,11 +52,11 @@ func run(args []string) int {
 			}
 			errorText := ""
 			if result.Error != "" {
-				errorText = " | " + result.Error
+				errorText = " | " + formatter.Sanitize(result.Error)
 			}
 			fmt.Printf(
 				"%s%s%s | %-28s | %-7s | rows=%-5d | %8.1f ms%s\n",
-				color, status, reset, result.LoginPath, result.View, result.Rows,
+				color, status, reset, formatter.Sanitize(result.LoginPath), result.View, result.Rows,
 				float64(result.Elapsed.Microseconds())/1000, errorText,
 			)
 		}

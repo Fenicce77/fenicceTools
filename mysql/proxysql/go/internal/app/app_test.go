@@ -104,6 +104,9 @@ func TestRawCtrlCStopsAndResolvedTargetRenders(t *testing.T) {
 	app, _, _ := newTestApp(t, "")
 	app.DisplayHost = "proxysql01.internal"
 	app.ProxyVersion = "2.7.3"
+	app.State.Stale = true
+	app.State.LastError = "down\x1b[31m"
+	app.UserFilter = "app\x7f"
 	app.HandleKey(context.Background(), rune(3))
 	if app.Running {
 		t.Fatal("raw Ctrl-C did not stop")
@@ -116,6 +119,9 @@ func TestRawCtrlCStopsAndResolvedTargetRenders(t *testing.T) {
 	if !strings.Contains(output.String(), "Server: proxysql01.internal") ||
 		!strings.Contains(output.String(), "Version: 2.7.3") {
 		t.Fatalf("resolved target absent: %q", output.String())
+	}
+	if strings.Contains(output.String(), "\x1b[31m") || strings.Contains(output.String(), "\x7f") {
+		t.Fatalf("terminal controls survived header sanitization: %q", output.String())
 	}
 }
 

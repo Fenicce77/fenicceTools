@@ -187,7 +187,7 @@ func (a *App) Render() error {
 		flags += " [PAUSED]"
 	}
 	if a.State.Stale {
-		flags += " [STALE: " + a.State.LastError + "]"
+		flags += " [STALE: " + formatter.Sanitize(a.State.LastError) + "]"
 	}
 	header := fmt.Sprintf(
 		"ProxySQL Monitor | Server: %s | Version: %s | Mode: %s | Refresh: %s%s\n",
@@ -196,7 +196,7 @@ func (a *App) Render() error {
 	)
 	filterLine := ""
 	if a.UserFilter != "" {
-		filterLine = "Filter: " + a.UserFilter
+		filterLine = "Filter: " + formatter.Sanitize(a.UserFilter)
 	}
 	if a.Threshold > 0 {
 		if filterLine != "" {

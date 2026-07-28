@@ -6,7 +6,7 @@ from typing import Optional, Sequence
 
 from .app import MonitorApp, resolve_display_host, run_smoke
 from .cli import parse_args
-from .formatter import GREEN, RED, RESET
+from .formatter import GREEN, RED, RESET, sanitize_text
 from .terminal import TerminalController
 from .transport import PersistentMySQLSession, TransportError
 from .queries import VERSION_SQL
@@ -26,9 +26,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for result in results:
             status = "PASS" if result.success else "FAIL"
             color = GREEN if result.success else RED
-            error = f" | {result.error}" if result.error else ""
+            error = f" | {sanitize_text(result.error)}" if result.error else ""
             print(
-                f"{color}{status}{RESET} | {result.login_path:<28} | "
+                f"{color}{status}{RESET} | {sanitize_text(result.login_path):<28} | "
                 f"{result.view.value:<7} | rows={result.rows:<5} | "
                 f"{result.elapsed_seconds * 1000:>8.1f} ms{error}"
             )

@@ -177,7 +177,9 @@ class MonitorApp:
         if self.state.paused:
             flags.append("PAUSED")
         if self.state.stale:
-            flags.append(f"STALE: {self.state.last_error or 'ProxySQL unavailable'}")
+            flags.append(
+                f"STALE: {sanitize_text(self.state.last_error) or 'ProxySQL unavailable'}"
+            )
         flag_text = f" [{' | '.join(flags)}]" if flags else ""
         header = (
             f"ProxySQL Monitor | Server: {sanitize_text(self.display_host)} | "
@@ -186,7 +188,7 @@ class MonitorApp:
         )
         filters = []
         if self.user_filter:
-            filters.append(f"Filter: {self.user_filter}")
+            filters.append(f"Filter: {sanitize_text(self.user_filter)}")
         if self.threshold:
             filters.append(f"Threshold: >= {self.threshold} conn")
         body = self.last_colored or "No active data to display."

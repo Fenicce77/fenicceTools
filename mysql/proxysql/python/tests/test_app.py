@@ -99,9 +99,14 @@ class AppTests(unittest.TestCase):
         app, _session, terminal = self.make_app()
         app.display_host = "proxysql01.internal"
         app.proxy_version = "2.7.3"
+        app.state.stale = True
+        app.state.last_error = "down\x1b[31m"
+        app.user_filter = "app\x7f"
         screen = app.render()
         self.assertIn("Server: proxysql01.internal", screen)
         self.assertIn("Version: 2.7.3", screen)
+        self.assertNotIn("\x1b[31m", screen)
+        self.assertNotIn("\x7f", screen)
 
     def test_failed_sample_preserves_last_valid_output(self) -> None:
         app, session, _terminal = self.make_app()
