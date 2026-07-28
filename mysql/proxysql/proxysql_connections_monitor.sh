@@ -123,6 +123,10 @@ validate_arguments() {
         print_error "Refresh time must be an integer or a float (e.g., 0.5)."
         return 1
     fi
+    if [[ ! "$THRESHOLD" =~ ^[0-9]+$ ]]; then
+        print_error "Connection threshold must be a non-negative integer."
+        return 1
+    fi
 }
 
 initialize_monitor() {
@@ -131,6 +135,11 @@ initialize_monitor() {
         return 1
     fi
     PROXY_VERSION=$QUERY_RESULT
+    if [[ -z "$PROXY_VERSION" ]]; then
+        LAST_DB_ERROR="ProxySQL returned an empty version"
+        printf '%b\n' "${red}Critical Error: ProxySQL returned an empty version.${off}" >&2
+        return 1
+    fi
 
     PROXY_HOSTNAME=$(mysql_config_editor print --login-path="$LOGIN_PATH" 2>/dev/null |
         awk -F= 'tolower($1) ~ /host/ { gsub(/[ "]/, "", $2); print $2; exit }' || true)
@@ -171,7 +180,11 @@ stop_mysql_session() {
 
     case "${MYSQL_SESSION_DIR:-}" in
         "${TMPDIR:-/tmp}"/proxysql-monitor.*)
-            rm -rf "$MYSQL_SESSION_DIR"
+            rm -f \
+                "$MYSQL_SESSION_DIR/input" \
+                "$MYSQL_SESSION_DIR/output" \
+                "$MYSQL_SESSION_DIR/mysql.stderr"
+            rmdir "$MYSQL_SESSION_DIR" 2>/dev/null || true
             ;;
     esac
     MYSQL_SESSION_DIR=""
@@ -524,7 +537,8 @@ refresh_timestamp() {
 }
 
 is_positive_refresh() {
-    [[ "$1" =~ ^([0-9]*[1-9][0-9]*)(\.[0-9]+)?$|^0\.[0-9]*[1-9][0-9]*$ ]]
+    [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] &&
+        [[ ! "$1" =~ ^0+(\.0+)?$ ]]
 }
 
 render_screen() {
@@ -629,6 +643,10 @@ render_screen() {
 
 log_current_view() {
     local has_data=false
+
+    if [[ "$LAST_SAMPLE_STALE" == true ]]; then
+        return 0
+    fi
 
     if [[ -n "$OUTPUT_FILE" ]]; then
         if [[ "$VIEW_MODE" == "CONN" || "$VIEW_MODE" == "QUERY" || "$VIEW_MODE" == "DIGEST" ]]; then

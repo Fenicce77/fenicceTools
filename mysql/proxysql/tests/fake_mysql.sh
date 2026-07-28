@@ -18,6 +18,14 @@ while IFS= read -r sql; do
         *TEST_SECOND_SAMPLE*)
             printf 'app\t10.0.0.10\t10.0.0.20:3306\tappdb\t6\n'
             ;;
+        *"SELECT @@version"*)
+            if [[ "${FAKE_MYSQL_EMPTY_VERSION:-0}" != "1" ]]; then
+                printf '2.7.3\n'
+            fi
+            ;;
+        *"SELECT @@hostname"*)
+            printf 'proxysql-test\n'
+            ;;
         *"SELECT '__PXMON_POOL__'"*)
             printf '__PXMON_POOL__\n'
             ;;

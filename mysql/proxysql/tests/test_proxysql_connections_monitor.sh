@@ -39,6 +39,19 @@ assert_eq "app" "$USER_FILTER" "user filter parsing"
 assert_eq "12" "$THRESHOLD" "threshold parsing"
 
 TRANSPORT_TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pxmon-test.XXXXXX")
+
+cleanup_test_environment() {
+    if type stop_mysql_session >/dev/null 2>&1; then
+        stop_mysql_session
+    fi
+    case "${TRANSPORT_TEST_DIR:-}" in
+        "${TMPDIR:-/tmp}"/pxmon-test.*)
+            rm -rf "$TRANSPORT_TEST_DIR"
+            ;;
+    esac
+}
+trap cleanup_test_environment EXIT INT TERM
+
 FAKE_MYSQL_STATE_DIR="$TRANSPORT_TEST_DIR/state"
 mkdir "$FAKE_MYSQL_STATE_DIR"
 export FAKE_MYSQL_STATE_DIR
@@ -163,9 +176,24 @@ assert_eq "false" "$PAUSED" "resume toggle"
 if ! is_positive_refresh "0.5"; then
     fail "positive fractional refresh was rejected"
 fi
+if ! is_positive_refresh "00.5"; then
+    fail "zero-padded positive fractional refresh was rejected"
+fi
 if is_positive_refresh "0"; then
     fail "zero refresh was accepted"
 fi
+if is_positive_refresh "0.0"; then
+    fail "zero fractional refresh was accepted"
+fi
+
+(
+    initialize_defaults
+    LOGIN_PATH="proxysql_admin"
+    THRESHOLD="invalid"
+    if validate_arguments 2>/dev/null; then
+        fail "non-numeric connection threshold was accepted"
+    fi
+)
 
 (
     FORMATTED_OUTPUT="last valid row"
@@ -183,6 +211,87 @@ fi
         "failed sample marks output stale"
 )
 
-rm -rf "$TRANSPORT_TEST_DIR"
+(
+    OUTPUT_FILE="$TRANSPORT_TEST_DIR/stale.log"
+    VIEW_MODE="QUERY"
+    FORMATTED_OUTPUT="last valid row"
+    LAST_SAMPLE_STALE=true
+    TIMESTAMP="2026-07-28 12:00:00"
+    log_current_view
+    [[ ! -e "$OUTPUT_FILE" ]] ||
+        fail "stale data was appended to the continuous log"
+)
+
+(
+    OUTPUT_FILE="$TRANSPORT_TEST_DIR/clean.log"
+    VIEW_MODE="QUERY"
+    FORMATTED_OUTPUT="${red}SELECT 1${off}"
+    LAST_SAMPLE_STALE=false
+    TIMESTAMP="2026-07-28 12:00:00"
+    log_current_view
+    clean_log=$(< "$OUTPUT_FILE")
+    case "$clean_log" in
+        *$'\033'*) fail "continuous log contains ANSI escape sequences" ;;
+        *"SELECT 1"*) : ;;
+        *) fail "continuous log lost formatted query data" ;;
+    esac
+)
+
+(
+    clear() { fail "render invoked external clear"; }
+    tr() { fail "render invoked external tr"; }
+    tput() { fail "cached render invoked external tput"; }
+    sed() { fail "render invoked sed without -o"; }
+
+    TERM_WIDTH=130
+    TERM_GEOMETRY_DIRTY=false
+    SEP_LINE="=================================================================================================================================="
+    SEP_THIN="----------------------------------------------------------------------------------------------------------------------------------"
+    TIMESTAMP="2026-07-28 12:00:00"
+    PROXY_HOSTNAME="proxysql-test"
+    VIEW_MODE="QUERY"
+    FORMATTED_OUTPUT="No test rows"
+    OUTPUT_FILE=""
+    LAST_SAMPLE_STALE=false
+    refresh_terminal_geometry
+    render_screen >/dev/null
+    log_current_view
+)
+
+help_output=$(usage_text)
+case "$help_output" in
+    *"--login-path=NAME"*"-r, --refresh-time=N"*"su - rmateos"*) : ;;
+    *) fail "help text lost required options or example" ;;
+esac
+
+FULL_RUN_STATE_DIR="$TRANSPORT_TEST_DIR/full-run-state"
+mkdir "$FULL_RUN_STATE_DIR"
+full_run_output=$(
+    FAKE_MYSQL_STATE_DIR="$FULL_RUN_STATE_DIR" \
+    MYSQL_BIN="$TEST_DIR/fake_mysql.sh" \
+        "$SCRIPT_PATH" --login-path=proxysql_admin --refresh-time=0.01 <<< "q"
+)
+case "$full_run_output" in
+    *"ProxySQL Monitor"*"Exiting monitor"*) : ;;
+    *) fail "full monitor run did not initialize, render, and quit cleanly" ;;
+esac
+full_run_launches=$(wc -l < "$FULL_RUN_STATE_DIR/launches")
+full_run_launches=${full_run_launches// /}
+assert_eq "1" "$full_run_launches" \
+    "full monitor run keeps one MySQL client"
+
+(
+    EMPTY_VERSION_STATE_DIR="$TRANSPORT_TEST_DIR/empty-version-state"
+    mkdir "$EMPTY_VERSION_STATE_DIR"
+    export FAKE_MYSQL_STATE_DIR="$EMPTY_VERSION_STATE_DIR"
+    export FAKE_MYSQL_EMPTY_VERSION=1
+    MYSQL_BIN="$TEST_DIR/fake_mysql.sh"
+    LOGIN_PATH="proxysql_admin"
+    if initialize_monitor 2>/dev/null; then
+        stop_mysql_session
+        fail "monitor accepted an empty ProxySQL version response"
+    fi
+    stop_mysql_session
+)
 
 printf 'PASS: %s assertions\n' "$TEST_COUNT"
