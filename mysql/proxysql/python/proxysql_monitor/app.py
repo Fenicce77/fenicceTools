@@ -32,6 +32,29 @@ from .queries import (
 from .terminal import TerminalController
 from .transport import PersistentMySQLSession, TransportError
 
+_BOLD = "\x1b[1m"
+_BLUE = "\x1b[1;34m"
+_GREEN = "\x1b[1;32m"
+_YELLOW = "\x1b[1;33m"
+_RED = "\x1b[1;31m"
+_MAGENTA = "\x1b[1;35m"
+_RESET = "\x1b[0m"
+
+
+def _interactive_legend() -> str:
+    """Return the fixed-width colored controls shown below interactive data."""
+    return (
+        f"{_BOLD}Interactive Options:{_RESET}\n"
+        f" [{_MAGENTA}v{_RESET}] {_BLUE}Toggle View{_RESET} "
+        f"(Conn/Query/Digest/Backend) | "
+        f"[{_MAGENTA}r{_RESET}] {_GREEN}Refresh{_RESET} | "
+        f"[{_MAGENTA}s{_RESET}] {_GREEN}Sort{_RESET} | "
+        f"[{_MAGENTA}p{_RESET}] {_YELLOW}Pause{_RESET}\n"
+        f" [{_MAGENTA}u{_RESET}] {_GREEN}Filter{_RESET} | "
+        f"[{_MAGENTA}t{_RESET}] {_RED}Threshold{_RESET} | "
+        f"[{_MAGENTA}q{_RESET}] {_RED}Quit{_RESET}"
+    )
+
 
 class Session(Protocol):
     def execute_with_retry(self, sql: str, timeout: float = 5.0) -> Sequence[str]:
@@ -195,6 +218,7 @@ class MonitorApp:
         screen = "\n".join(
             part for part in (header, " | ".join(filters), "=" * 110, body) if part
         )
+        screen = f"{screen}\n\n{_interactive_legend()}"
         self.terminal.clear()
         output = getattr(self.terminal, "stdout", None)
         if output is not None:
