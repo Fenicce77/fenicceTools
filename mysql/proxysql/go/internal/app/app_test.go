@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,26 @@ func TestRawCtrlCStopsAndResolvedTargetRenders(t *testing.T) {
 	}
 }
 
+func TestRenderIncludesTwoLineColoredKeyLegend(t *testing.T) {
+	application, _, _ := newTestApp(t, "")
+	var output bytes.Buffer
+	application.output = &output
+	if err := application.Render(); err != nil {
+		t.Fatal(err)
+	}
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(output.String(), "")
+	want := "Interactive Options:\n" +
+		" [v] Toggle View (Conn/Query/Digest/Backend) | [r] Refresh | [s] Sort | [p] Pause\n" +
+		" [u] Filter | [t] Threshold | [q] Quit\n"
+	if !strings.HasSuffix(plain, want) {
+		t.Fatalf("legend absent or malformed: %q", plain)
+	}
+	if !strings.Contains(output.String(), "\x1b[1;35m") ||
+		!strings.Contains(output.String(), "\x1b[1;34m") {
+		t.Fatalf("legend colors absent: %q", output.String())
+	}
+}
+
 func TestFailedSamplePreservesLastOutput(t *testing.T) {
 	app, session, _ := newTestApp(t, "")
 	app.State.LastRendered = "last valid"
@@ -157,6 +178,9 @@ func TestPromptsAndCleanFreshLogging(t *testing.T) {
 	}
 	if bytes.Contains(first, []byte("\x1b[")) {
 		t.Fatal("log contains ANSI")
+	}
+	if bytes.Contains(first, []byte("Interactive Options:")) {
+		t.Fatal("log contains interactive legend")
 	}
 	session.err = errors.New("down")
 	app.SampleCurrentView(context.Background())

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -108,6 +109,22 @@ class AppTests(unittest.TestCase):
         self.assertNotIn("\x1b[31m", screen)
         self.assertNotIn("\x7f", screen)
 
+    def test_render_includes_two_line_colored_key_legend(self) -> None:
+        app, _session, _terminal = self.make_app()
+        screen = app.render()
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", screen)
+        self.assertEqual(
+            [
+                "Interactive Options:",
+                " [v] Toggle View (Conn/Query/Digest/Backend) | "
+                "[r] Refresh | [s] Sort | [p] Pause",
+                " [u] Filter | [t] Threshold | [q] Quit",
+            ],
+            plain.splitlines()[-3:],
+        )
+        self.assertIn("\x1b[1;35m", screen)
+        self.assertIn("\x1b[1;34m", screen)
+
     def test_failed_sample_preserves_last_valid_output(self) -> None:
         app, session, _terminal = self.make_app()
         app.state.last_rendered = "last valid"
@@ -137,6 +154,7 @@ class AppTests(unittest.TestCase):
             self.assertTrue(app.sample_current_view())
             first = path.read_text()
             self.assertNotIn("\x1b[", first)
+            self.assertNotIn("Interactive Options:", first)
             session.error = TransportError("down")
             self.assertFalse(app.sample_current_view())
             self.assertEqual(first, path.read_text())
