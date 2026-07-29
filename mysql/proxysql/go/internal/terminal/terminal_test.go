@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type notifyingWriter struct {
@@ -70,6 +72,57 @@ func TestNonTTYKeysCloseOnCancellation(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("cancelled key channel did not close within timeout")
+	}
+}
+
+func TestKeyReaderDoesNotEnableNonblockingMode(t *testing.T) {
+	socketFDs, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := os.NewFile(uintptr(socketFDs[0]), "terminal-input")
+	writer := os.NewFile(uintptr(socketFDs[1]), "terminal-writer")
+	if input == nil || writer == nil {
+		t.Fatal("failed to wrap socket pair")
+	}
+	defer input.Close()
+	defer writer.Close()
+
+	if err := unix.SetNonblock(int(input.Fd()), false); err != nil {
+		t.Fatal(err)
+	}
+	initialFlags, err := unix.FcntlInt(input.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := New(input, &bytes.Buffer{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		if stopErr := controller.Stop(); stopErr != nil {
+			t.Error(stopErr)
+		}
+	})
+
+	keys := controller.Keys(ctx)
+	if _, err := writer.Write([]byte{'v'}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case key := <-keys:
+		if key != 'v' {
+			t.Fatalf("key = %q, want v", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("key reader did not consume input")
+	}
+
+	activeFlags, err := unix.FcntlInt(input.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeFlags&unix.O_NONBLOCK != initialFlags&unix.O_NONBLOCK {
+		t.Fatalf("O_NONBLOCK changed while reader was active: initial=%#x active=%#x", initialFlags, activeFlags)
 	}
 }
 
