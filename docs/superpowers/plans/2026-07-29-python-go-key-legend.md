@@ -30,7 +30,7 @@
 - Consumes: `MonitorApp.render() -> str`, `MonitorApp.last_colored`, and the existing terminal writer.
 - Produces: `_interactive_legend() -> str`, called only by the normal interactive render path.
 
-- [ ] **Step 1: Write the failing Python render test**
+- [x] **Step 1: Write the failing Python render test**
 
 Add `import re` and this regression test to `AppTests`:
 
@@ -57,7 +57,7 @@ Extend `test_logging_occurs_only_for_fresh_nonempty_samples` with:
 self.assertNotIn("Interactive Options:", first)
 ```
 
-- [ ] **Step 2: Run the focused Python test and verify RED**
+- [x] **Step 2: Run the focused Python test and verify RED**
 
 Run:
 
@@ -67,7 +67,7 @@ python3 -m unittest tests.test_app.AppTests.test_render_includes_two_line_colore
 
 Expected: FAIL because the final three screen lines do not contain the legend.
 
-- [ ] **Step 3: Implement the Python legend helper and render integration**
+- [x] **Step 3: Implement the Python legend helper and render integration**
 
 Add application-level ANSI constants and a typed helper:
 
@@ -101,7 +101,7 @@ After assembling the existing header/body frame in `MonitorApp.render`, append:
 screen = f"{screen}\n\n{_interactive_legend()}"
 ```
 
-- [ ] **Step 4: Run the focused and complete Python tests and verify GREEN**
+- [x] **Step 4: Run the focused and complete Python tests and verify GREEN**
 
 Run:
 
@@ -112,7 +112,7 @@ python3 -m unittest discover -s tests -v
 
 Expected: PASS, including the log assertion.
 
-- [ ] **Step 5: Commit the Python implementation**
+- [x] **Step 5: Commit the Python implementation**
 
 ```bash
 git add mysql/proxysql/python/proxysql_monitor/app.py mysql/proxysql/python/tests/test_app.py
@@ -129,7 +129,7 @@ git commit -m "feat(python): show interactive key legend"
 - Consumes: `(*App).Render() error`, `App.lastColored`, and `App.output`.
 - Produces: `interactiveLegend() string`, called only by the normal interactive render path.
 
-- [ ] **Step 1: Write the failing Go render test**
+- [x] **Step 1: Write the failing Go render test**
 
 Add `regexp` to the test imports and add:
 
@@ -163,7 +163,7 @@ if bytes.Contains(first, []byte("Interactive Options:")) {
 }
 ```
 
-- [ ] **Step 2: Run the focused Go test and verify RED**
+- [x] **Step 2: Run the focused Go test and verify RED**
 
 Run:
 
@@ -173,7 +173,7 @@ go test ./internal/app -run TestRenderIncludesTwoLineColoredKeyLegend -count=1
 
 Expected: FAIL because `Render` does not emit the legend.
 
-- [ ] **Step 3: Implement the Go legend helper and render integration**
+- [x] **Step 3: Implement the Go legend helper and render integration**
 
 Add private application-level color constants and:
 
@@ -205,7 +205,7 @@ _, err := fmt.Fprintf(
 )
 ```
 
-- [ ] **Step 4: Run the focused and complete Go tests and verify GREEN**
+- [x] **Step 4: Run the focused and complete Go tests and verify GREEN**
 
 Run:
 
@@ -217,7 +217,7 @@ go test ./...
 
 Expected: PASS, including the clean-log assertion.
 
-- [ ] **Step 5: Commit the Go source implementation**
+- [x] **Step 5: Commit the Go source implementation**
 
 ```bash
 git add mysql/proxysql/go/internal/app/app.go mysql/proxysql/go/internal/app/app_test.go
@@ -235,7 +235,7 @@ git commit -m "feat(go): show interactive key legend"
 - Consumes: verified Python and Go render implementations.
 - Produces: a refreshed tracked Darwin arm64 `proxysql-monitor` binary and release-ready verification evidence.
 
-- [ ] **Step 1: Run full language verification**
+- [x] **Step 1: Run full language verification**
 
 Run:
 
@@ -252,7 +252,7 @@ go vet ./...
 
 Expected: all commands exit zero with no test failures, race reports, or vet findings.
 
-- [ ] **Step 2: Cross-build supported Go targets**
+- [x] **Step 2: Cross-build supported Go targets**
 
 Run:
 
@@ -264,7 +264,7 @@ file /private/tmp/proxysql-monitor-darwin-arm64-legend /private/tmp/proxysql-mon
 
 Expected: one Mach-O arm64 executable and one ELF x86-64 executable.
 
-- [ ] **Step 3: Run Python and Go live PTY tests**
+- [x] **Step 3: Run Python and Go live PTY tests**
 
 Run each monitor in a PTY with:
 
@@ -277,7 +277,7 @@ Observe two refreshes and send `q` to each.
 
 Expected: both screens show the colored two-line legend without wrapping, key input remains immediate, and each process exits zero.
 
-- [ ] **Step 4: Rebuild and commit the tracked Darwin arm64 binary**
+- [x] **Step 4: Rebuild and commit the tracked Darwin arm64 binary**
 
 Run:
 
@@ -290,7 +290,7 @@ git commit -m "build(go): refresh monitor binary"
 
 Expected: the tracked executable is Mach-O arm64 and contains the verified source behavior.
 
-- [ ] **Step 5: Verify the final branch**
+- [x] **Step 5: Verify the final branch**
 
 Run:
 
