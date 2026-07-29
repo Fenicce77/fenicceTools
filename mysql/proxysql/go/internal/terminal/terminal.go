@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -46,6 +46,14 @@ func (c *Controller) Enter() error {
 	}
 	state, err := term.MakeRaw(fd)
 	if err != nil {
+		return err
+	}
+	if err := enableInteractiveOutput(fd); err != nil {
+		if restoreErr := term.Restore(fd, state); restoreErr != nil {
+			c.state = state
+			c.raw = true
+			return errors.Join(err, restoreErr)
+		}
 		return err
 	}
 	c.state = state
@@ -167,33 +175,42 @@ func (c *Controller) finishPrompt() {
 
 func (c *Controller) readInput(ctx context.Context) {
 	fd := int(c.input.Fd())
-	if err := syscall.SetNonblock(fd, true); err != nil {
-		c.finishInput()
-		return
-	}
-	defer func() {
-		_ = syscall.SetNonblock(fd, false)
-		c.finishInput()
-	}()
+	defer c.finishInput()
+	pollDescriptors := []unix.PollFd{{
+		Fd:     int32(fd),
+		Events: unix.POLLIN,
+	}}
 	buffer := make([]byte, 1)
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		default:
 		}
-		count, err := syscall.Read(fd, buffer)
-		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
-			timer := time.NewTimer(25 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
+
+		pollDescriptors[0].Revents = 0
+		ready, err := unix.Poll(pollDescriptors, 25)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		if ready == 0 {
+			continue
+		}
+
+		events := pollDescriptors[0].Revents
+		if events&(unix.POLLERR|unix.POLLNVAL) != 0 {
+			return
+		}
+		if events&unix.POLLIN == 0 {
+			if events&unix.POLLHUP != 0 {
 				return
-			case <-timer.C:
-				continue
 			}
+			continue
 		}
-		if errors.Is(err, syscall.EINTR) {
+
+		count, err := unix.Read(fd, buffer)
+		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EINTR) {
 			continue
 		}
 		if err != nil || count == 0 {
