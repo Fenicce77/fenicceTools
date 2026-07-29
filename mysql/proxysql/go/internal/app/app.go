@@ -17,6 +17,16 @@ import (
 	"github.com/Fenicce77/fenicceTools/mysql/proxysql/go/internal/queries"
 )
 
+const (
+	appBold    = "\x1b[1m"
+	appBlue    = "\x1b[1;34m"
+	appGreen   = "\x1b[1;32m"
+	appYellow  = "\x1b[1;33m"
+	appRed     = "\x1b[1;31m"
+	appMagenta = "\x1b[1;35m"
+	appReset   = "\x1b[0m"
+)
+
 type Session interface {
 	ExecuteWithRetry(context.Context, string, time.Duration) ([]string, error)
 	Close() error
@@ -59,6 +69,23 @@ func New(config model.Config, session Session, terminal Terminal, output io.Writ
 		DisplayHost: config.LoginPaths[0], ProxyVersion: "Unknown",
 		session: session, terminal: terminal, output: output, wallClock: time.Now,
 	}
+}
+
+func interactiveLegend() string {
+	return fmt.Sprintf(
+		"%sInteractive Options:%s\n"+
+			" [%sv%s] %sToggle View%s (Conn/Query/Digest/Backend) | "+
+			"[%sr%s] %sRefresh%s | [%ss%s] %sSort%s | [%sp%s] %sPause%s\n"+
+			" [%su%s] %sFilter%s | [%st%s] %sThreshold%s | [%sq%s] %sQuit%s",
+		appBold, appReset,
+		appMagenta, appReset, appBlue, appReset,
+		appMagenta, appReset, appGreen, appReset,
+		appMagenta, appReset, appGreen, appReset,
+		appMagenta, appReset, appYellow, appReset,
+		appMagenta, appReset, appGreen, appReset,
+		appMagenta, appReset, appRed, appReset,
+		appMagenta, appReset, appRed, appReset,
+	)
 }
 
 func (a *App) SampleCurrentView(ctx context.Context) bool {
@@ -213,7 +240,8 @@ func (a *App) Render() error {
 		body = "No active data to display."
 	}
 	_, err := fmt.Fprintf(
-		a.output, "%s%s%s\n%s\n", header, filterLine, strings.Repeat("=", 110), body,
+		a.output, "%s%s%s\n%s\n\n%s\n",
+		header, filterLine, strings.Repeat("=", 110), body, interactiveLegend(),
 	)
 	return err
 }
