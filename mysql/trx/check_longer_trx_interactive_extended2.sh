@@ -91,7 +91,7 @@ tput civis
 PLAIN_FILE=$(mktemp /tmp/mysql_monitor_plain.XXXXXX)
 trap 'tput cvvis; rm -f "$PLAIN_FILE"; clear; echo -e "\n${yel}Monitorización finalizada.${off}"; exit 0' SIGINT SIGTERM
 
-EXCLUDED_USERS="'root','gsancliment','pmm_monitor','proxysql-monitor','rmateos','coms_rpl_gh_primary','cloudsqlreplica','devel-migration-job','event_scheduler'"
+EXCLUDED_USERS="'root','gsancliment','pmm_monitor','proxysql-monitor','coms_rpl_gh_primary','cloudsqlreplica','devel-migration-job','event_scheduler'"
 
 # ==============================================================================
 # Bucle Interactivo Principal
