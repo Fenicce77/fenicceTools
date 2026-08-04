@@ -11,6 +11,7 @@ BOLD = "\x1b[1m"
 RED = "\x1b[1;31m"
 GREEN = "\x1b[1;32m"
 YELLOW = "\x1b[1;33m"
+ORANGE = "\x1b[1;38;5;208m"
 CYAN = "\x1b[1;36m"
 RESET = "\x1b[0m"
 
@@ -160,6 +161,15 @@ def _render(lines: Iterable[Tuple[str, str]], row_count: int) -> RenderedView:
     )
 
 
+def _backend_status_color(status: str) -> str:
+    return {
+        "ONLINE": GREEN,
+        "SHUNNED": YELLOW,
+        "OFFLINE_SOFT": ORANGE,
+        "OFFLINE_HARD": RED,
+    }.get(status.strip().upper(), RED)
+
+
 def format_connections(
     rows: Sequence[ConnectionRow],
     previous: Sequence[ConnectionRow],
@@ -276,7 +286,7 @@ def format_backend(rows: BackendRows, terminal_width: int = 130) -> RenderedView
             f"{row.conn_used:<11} | {row.conn_free:<11} | "
             f"{row.conn_ok:<11} | {row.conn_err:<11}"
         )
-        color = GREEN if row.status == "ONLINE" and row.conn_err == 0 else RED
+        color = _backend_status_color(row.status)
         output.append((color + clean + RESET, clean))
     ping_header = (
         f"{'HOSTNAME':<35} | {'LAST PING DATETIME':<25} | "
@@ -290,6 +300,7 @@ def format_backend(rows: BackendRows, terminal_width: int = 130) -> RenderedView
             f"{truncate(sanitize_text(row.last_ping), 25):<25} | "
             f"{success:<15} | {sanitize_text(row.error)}"
         )
-        color = RED if row.error else GREEN
+        normalized_error = row.error.strip().upper()
+        color = GREEN if normalized_error in ("", "NULL") else RED
         output.append((color + clean + RESET, clean))
     return _render(output, len(rows.pool) + len(rows.ping))
