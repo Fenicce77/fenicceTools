@@ -47,6 +47,7 @@ initialize_colors() {
     red=${bld}$(tput setaf 1 2>/dev/null || true)
     grn=${bld}$(tput setaf 2 2>/dev/null || true)
     yel=${bld}$(tput setaf 3 2>/dev/null || true)
+    ora=$'\033[1;38;5;208m'
     blu=${bld}$(tput setaf 4 2>/dev/null || true)
     mag=${bld}$(tput setaf 5 2>/dev/null || true)
     cyn=${bld}$(tput setaf 6 2>/dev/null || true)
@@ -358,17 +359,29 @@ BEGIN { FS="\t"; }
 
 AWK_SCRIPT_BACKEND='
 BEGIN { FS="\t"; section = "" }
+function trimmed_upper(value) {
+    gsub(/^[ \t]+|[ \t]+$/, "", value)
+    return toupper(value)
+}
+function pool_color(status, normalized) {
+    normalized = trimmed_upper(status)
+    if (normalized == "ONLINE") return color_ok
+    if (normalized == "SHUNNED") return color_warn
+    if (normalized == "OFFLINE_SOFT") return color_soft
+    return color_err
+}
 $0 == "__PXMON_POOL__" { section = "P"; next }
 $0 == "__PXMON_PING__" { section = "G"; next }
 {
     if (NF > 0 && section == "P") {
-        status_color = ($3 == "ONLINE") ? color_ok : color_err;
+        status_color = pool_color($3)
         hg = substr($1, 1, 10); bhost = substr($2, 1, 35); status_txt = substr($3, 1, 15)
-        printf "P\t%-10s | %-35s | %s%-15s%s | %-11s | %-11s | %-11s | %s\n", hg, bhost, status_color, status_txt, color_off, $4, $5, $6, $7
+        printf "P\t%s%-10s | %-35s | %-15s | %-11s | %-11s | %-11s | %s%s\n", status_color, hg, bhost, status_txt, $4, $5, $6, $7, color_off
     } else if (NF > 0 && section == "G") {
-        ping_err = ($4 == "NULL" || $4 != "") ? color_err $4 color_off : color_ok "None" color_off
+        ping_key = trimmed_upper($4)
+        ping_color = (ping_key == "" || ping_key == "NULL") ? color_ok : color_err
         hostname = substr($1, 1, 35); last_ping = substr($2, 1, 25); success = substr($3"us", 1, 15)
-        printf "G\t%-35s | %-25s | %-15s | %s\n", hostname, last_ping, success, ping_err
+        printf "G\t%s%-35s | %-25s | %-15s | %s%s\n", ping_color, hostname, last_ping, success, $4, color_off
     }
 }'
 
@@ -425,6 +438,8 @@ format_backend_data() {
     F_PING=""
     formatted=$(awk \
         -v color_ok="$grn" \
+        -v color_warn="$yel" \
+        -v color_soft="$ora" \
         -v color_err="$red" \
         -v color_off="$off" \
         "$AWK_SCRIPT_BACKEND" <<< "$data")

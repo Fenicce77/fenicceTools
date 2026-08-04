@@ -16,6 +16,7 @@ const (
 	red    = "\x1b[1;31m"
 	green  = "\x1b[1;32m"
 	yellow = "\x1b[1;33m"
+	orange = "\x1b[1;38;5;208m"
 	cyan   = "\x1b[1;36m"
 	reset  = "\x1b[0m"
 )
@@ -312,6 +313,21 @@ func FormatDigests(rows []model.DigestRow, terminalWidth int) model.RenderedView
 	return render(clean, colored, len(rows))
 }
 
+func backendStatusColor(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "ONLINE":
+		return green
+	case "SHUNNED":
+		return yellow
+	case "OFFLINE_SOFT":
+		return orange
+	case "OFFLINE_HARD":
+		return red
+	default:
+		return red
+	}
+}
+
 func FormatBackend(rows model.BackendRows) model.RenderedView {
 	header := fmt.Sprintf("%-10s | %-35s | %-15s | %-11s | %-11s | %-11s | %-11s",
 		"HOSTGROUP", "BACKEND HOST", "STATUS", "CONN USED", "CONN FREE", "CONN OK", "CONN ERR")
@@ -321,10 +337,7 @@ func FormatBackend(rows model.BackendRows) model.RenderedView {
 			truncate(Sanitize(row.Hostgroup), 10), truncate(Sanitize(row.ServerHost), 35),
 			truncate(Sanitize(row.Status), 15),
 			row.ConnUsed, row.ConnFree, row.ConnOK, row.ConnErr)
-		color := red
-		if row.Status == "ONLINE" && row.ConnErr == 0 {
-			color = green
-		}
+		color := backendStatusColor(row.Status)
 		clean, colored = append(clean, line), append(colored, color+line+reset)
 	}
 	pingHeader := fmt.Sprintf("%-35s | %-25s | %-15s | %s",
@@ -338,8 +351,9 @@ func FormatBackend(rows model.BackendRows) model.RenderedView {
 		line := fmt.Sprintf("%-35s | %-25s | %-15s | %s",
 			truncate(Sanitize(row.Hostname), 35), truncate(Sanitize(row.LastPing), 25),
 			success, Sanitize(row.Error))
+		normalizedError := strings.ToUpper(strings.TrimSpace(row.Error))
 		color := green
-		if row.Error != "" {
+		if normalizedError != "" && normalizedError != "NULL" {
 			color = red
 		}
 		clean, colored = append(clean, line), append(colored, color+line+reset)

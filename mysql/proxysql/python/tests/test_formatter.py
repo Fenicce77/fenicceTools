@@ -4,6 +4,9 @@ import re
 import unittest
 
 from proxysql_monitor.formatter import (
+    GREEN,
+    RED,
+    YELLOW,
     compile_user_filter,
     format_backend,
     format_connections,
@@ -50,6 +53,38 @@ class FormatterTests(unittest.TestCase):
             "backend\t2026-07-28 12:00:00\tNULL\tconnection refused",
         ])
         self.assertIsNone(backend.ping[0].success_us)
+
+    def test_backend_status_colors_ignore_cumulative_conn_errors(self) -> None:
+        backend = parse_backend([
+            "__PXMON_POOL__",
+            "10\tonline:3306\tONLINE\t2\t3\t50\t9",
+            "11\tshunned:3306\tSHUNNED\t0\t0\t0\t1",
+            "12\tsoft:3306\tOFFLINE_SOFT\t0\t0\t0\t2",
+            "13\thard:3306\tOFFLINE_HARD\t0\t0\t0\t3",
+            "14\tunknown:3306\tNEW_STATE\t0\t0\t0\t4",
+            "__PXMON_PING__",
+        ])
+        lines = format_backend(backend).colored.splitlines()[1:]
+        self.assertTrue(lines[0].startswith(GREEN))
+        self.assertTrue(lines[1].startswith(YELLOW))
+        self.assertTrue(lines[2].startswith("\x1b[1;38;5;208m"))
+        self.assertTrue(lines[3].startswith(RED))
+        self.assertTrue(lines[4].startswith(RED))
+
+    def test_backend_ping_null_and_empty_are_success(self) -> None:
+        backend = parse_backend([
+            "__PXMON_POOL__",
+            "__PXMON_PING__",
+            "ok-null\t2026-08-04 12:00:00\t500\tNULL",
+            "ok-empty\t2026-08-04 12:00:01\t600\t",
+            "bad\t2026-08-04 12:00:02\tNULL\tconnection refused",
+        ])
+        rendered = format_backend(backend)
+        lines = rendered.colored.splitlines()[2:]
+        self.assertTrue(lines[0].startswith(GREEN))
+        self.assertTrue(lines[1].startswith(GREEN))
+        self.assertTrue(lines[2].startswith(RED))
+        self.assertNotIn("\x1b", rendered.clean)
 
     def test_digest_query_truncates_to_terminal_width(self) -> None:
         rows = parse_digests([

@@ -67,6 +67,51 @@ func TestNullPingSuccessIsOptional(t *testing.T) {
 	}
 }
 
+func TestBackendStatusColorsIgnoreCumulativeConnErrors(t *testing.T) {
+	rows, err := ParseBackend([]string{
+		"__PXMON_POOL__",
+		"10\tonline:3306\tONLINE\t2\t3\t50\t9",
+		"11\tshunned:3306\tSHUNNED\t0\t0\t0\t1",
+		"12\tsoft:3306\tOFFLINE_SOFT\t0\t0\t0\t2",
+		"13\thard:3306\tOFFLINE_HARD\t0\t0\t0\t3",
+		"14\tunknown:3306\tNEW_STATE\t0\t0\t0\t4",
+		"__PXMON_PING__",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(FormatBackend(rows).Colored, "\n")[1:]
+	wants := []string{green, yellow, "\x1b[1;38;5;208m", red, red}
+	for index, want := range wants {
+		if !strings.HasPrefix(lines[index], want) {
+			t.Fatalf("line %d color = %q, want prefix %q", index, lines[index], want)
+		}
+	}
+}
+
+func TestBackendPingNullAndEmptyAreSuccess(t *testing.T) {
+	rows, err := ParseBackend([]string{
+		"__PXMON_POOL__", "__PXMON_PING__",
+		"ok-null\t2026-08-04 12:00:00\t500\tNULL",
+		"ok-empty\t2026-08-04 12:00:01\t600\t",
+		"bad\t2026-08-04 12:00:02\tNULL\tconnection refused",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := FormatBackend(rows)
+	lines := strings.Split(rendered.Colored, "\n")[2:]
+	wants := []string{green, green, red}
+	for index, want := range wants {
+		if !strings.HasPrefix(lines[index], want) {
+			t.Fatalf("line %d color = %q, want prefix %q", index, lines[index], want)
+		}
+	}
+	if strings.Contains(rendered.Clean, "\x1b") {
+		t.Fatal("clean backend output contains ANSI")
+	}
+}
+
 func TestMalformedRowsFailAndEmptyRowsPass(t *testing.T) {
 	if _, err := ParseConnections(nil); err != nil {
 		t.Fatal(err)
