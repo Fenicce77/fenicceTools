@@ -20,6 +20,25 @@ assert_eq() {
         fail "$message: expected [$expected], got [$actual]"
 }
 
+assert_line_color() {
+    local output=$1
+    local token=$2
+    local color=$3
+    local line=""
+
+    while IFS= read -r line; do
+        case "$line" in
+            *"$token"*)
+                case "$line" in
+                    "$color"*"$off") return 0 ;;
+                    *) fail "$token has the wrong row color: [$line]" ;;
+                esac
+                ;;
+        esac
+    done <<< "$output"
+    fail "missing formatter row for $token"
+}
+
 PROXYSQL_MONITOR_TESTING=1
 # shellcheck source=../proxysql_connections_monitor.sh
 source "$SCRIPT_PATH"
@@ -112,6 +131,24 @@ case "$FORMATTED_OUTPUT" in
     *"SELECT col FROM very_long_table"*) : ;;
     *) fail "DIGEST formatter did not sanitize escaped controls" ;;
 esac
+
+(
+    grn='<GREEN>'
+    yel='<YELLOW>'
+    ora='<ORANGE>'
+    red='<RED>'
+    off='<RESET>'
+    backend_payload=$'__PXMON_POOL__\n10\tonline:3306\tONLINE\t2\t3\t50\t9\n11\tshunned:3306\tSHUNNED\t0\t0\t0\t1\n12\tsoft:3306\tOFFLINE_SOFT\t0\t0\t0\t2\n13\thard:3306\tOFFLINE_HARD\t0\t0\t0\t3\n14\tunknown:3306\tNEW_STATE\t0\t0\t0\t4\n__PXMON_PING__\nok-null\t2026-08-04 12:00:00\t500\tNULL\nok-empty\t2026-08-04 12:00:01\t600\t\nbad\t2026-08-04 12:00:02\tNULL\tconnection refused'
+    format_backend_data "$backend_payload"
+    assert_line_color "$F_POOL" 'ONLINE' "$grn"
+    assert_line_color "$F_POOL" 'SHUNNED' "$yel"
+    assert_line_color "$F_POOL" 'OFFLINE_SOFT' "$ora"
+    assert_line_color "$F_POOL" 'OFFLINE_HARD' "$red"
+    assert_line_color "$F_POOL" 'NEW_STATE' "$red"
+    assert_line_color "$F_PING" 'ok-null' "$grn"
+    assert_line_color "$F_PING" 'ok-empty' "$grn"
+    assert_line_color "$F_PING" 'bad' "$red"
+)
 
 backend_payload=$'__PXMON_POOL__\n10\tbackend:3306\tONLINE\t2\t3\t50\t1\n__PXMON_PING__\nbackend\t2026-07-28 12:00:00\t500\t'
 format_backend_data "$backend_payload"
