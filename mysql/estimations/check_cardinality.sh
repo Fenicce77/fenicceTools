@@ -48,43 +48,51 @@ initialize_colors() {
 }
 
 show_help() {
-    cat <<EOF
-MySQL Cardinality Analyzer
+    local help_title help_section help_option help_value help_warning help_error help_reset
+    help_title=$(printf '\033[1;36m')
+    help_section=$(printf '\033[1;33m')
+    help_option=$(printf '\033[0;32m')
+    help_value=$(printf '\033[0;36m')
+    help_warning=$(printf '\033[0;33m')
+    help_error=$(printf '\033[0;31m')
+    help_reset=$(printf '\033[0m')
 
-Usage:
-  $0 -l LOGIN_PATH -d DATABASE (-t TABLES | -f FILE) [OPTIONS]
+    printf '%s%s%s\n\n' "$help_title" 'MySQL Cardinality Analyzer' "$help_reset"
+    printf '%sUsage:%s\n' "$help_section" "$help_reset"
+    printf '  %s%s -l LOGIN_PATH -d DATABASE (-t TABLES | -f FILE) [OPTIONS]%s\n\n' \
+        "$help_value" "$0" "$help_reset"
 
-Required:
-  -l, --login-path PATH              MySQL login-path for the remote server
-  -d, --database NAME                Database to analyze
-  -t, --tables LIST                  Comma-separated table names
-  -f, --table-file FILE              Table names, one per line; comments use #
+    printf '%sRequired:%s\n' "$help_section" "$help_reset"
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-l, --login-path' "$help_reset" "$help_value" 'PATH' "$help_reset" 'MySQL login-path for the remote server'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-d, --database' "$help_reset" "$help_value" 'NAME' "$help_reset" 'Database to analyze'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-t, --tables' "$help_reset" "$help_value" 'LIST' "$help_reset" 'Comma-separated table names'
+    printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-f, --table-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Table names, one per line; comments use #'
 
-Analysis:
-      --mode auto|metadata|exact     Analysis mode (default: auto)
-  -p, --performance-threshold ROWS   Maximum estimate eligible for exact auto mode (default: 500000)
-  -r, --drift-threshold PERCENT      Drift warning threshold (default: 10)
-      --max-execution-time-ms MS     Exact-query timeout hint (default: 30000)
-      --analyze-table                Run ANALYZE LOCAL TABLE before collection
-      --environment ENV              development, test, staging, or production
+    printf '%sAnalysis:%s\n' "$help_section" "$help_reset"
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '--mode' "$help_reset" "$help_value" 'auto|metadata|exact' "$help_reset" 'Analysis mode (default: ' "$help_value" 'auto' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '-p, --performance-threshold' "$help_reset" "$help_value" 'ROWS' "$help_reset" 'Maximum estimate eligible for exact auto mode (default: ' "$help_value" '500000' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '-r, --drift-threshold' "$help_reset" "$help_value" 'PERCENT' "$help_reset" 'Drift warning threshold (default: ' "$help_value" '10' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '--max-execution-time-ms' "$help_reset" "$help_value" 'MS' "$help_reset" 'Exact-query timeout hint (default: ' "$help_value" '30000' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--analyze-table' "$help_reset" "$help_value" '' "$help_reset" 'Run ANALYZE LOCAL TABLE before collection'
+    printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '--environment' "$help_reset" "$help_value" 'ENV' "$help_reset" 'development, test, staging, or production'
 
-Output and runtime:
-  -o, --output-file FILE             Atomic CSV or TSV report
-      --format csv|tsv               Report format; inferred from extension when omitted
-      --mysql-bin PATH               Local MySQL client executable (optional)
-      --no-color                     Disable ANSI colors
-  -h, --help                         Show this help and exit
+    printf '%sOutput and runtime:%s\n' "$help_section" "$help_reset"
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-o, --output-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Atomic CSV or TSV report'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--format' "$help_reset" "$help_value" 'csv|tsv' "$help_reset" 'Report format; inferred from extension when omitted'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--mysql-bin' "$help_reset" "$help_value" 'PATH' "$help_reset" 'Local MySQL client executable (optional)'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--no-color' "$help_reset" "$help_value" '' "$help_reset" 'Disable ANSI colors'
+    printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-h, --help' "$help_reset" "$help_value" '' "$help_reset" 'Show this help and exit'
 
-Examples:
-  $0 -l devel-mysql01 -d app -t users,orders
-  $0 --login-path=staging-mysql --database=app --tables=users --mode=metadata
-  $0 -l test-mysql -d app -t users --mode exact -o cardinality.csv
-  $0 -l test-mysql -d app -t users --analyze-table --environment test
+    printf '%sExamples:%s\n' "$help_section" "$help_reset"
+    printf '  %s%s -l devel-mysql01 -d app -t users,orders%s\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s --login-path=staging-mysql --database=app --tables=users --mode=metadata%s\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --mode exact -o cardinality.csv%s\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --analyze-table --environment test%s\n\n' "$help_value" "$0" "$help_reset"
 
-Safety:
-  metadata mode never scans user tables. ANALYZE requires explicit development,
-  test, or staging and is always refused for production.
-EOF
+    printf '%sSafety:%s\n' "$help_section" "$help_reset"
+    printf '%s  metadata mode never scans user tables. ANALYZE requires explicit development,%s\n' "$help_warning" "$help_reset"
+    printf '%s  test, or staging and is always %s%srefused for production%s%s.%s\n' \
+        "$help_warning" "$help_reset" "$help_error" "$help_reset" "$help_warning" "$help_reset"
 }
 
 cli_error() { printf 'ERROR: %s\nTry --help for usage.\n' "$1" >&2; exit 2; }

@@ -18,6 +18,21 @@ assert_contains() { [[ "$1" == *"$2"* ]] || fail "$LAST_CASE: missing [$2] in [$
 assert_not_contains() { [[ "$1" != *"$2"* ]] || fail "$LAST_CASE: unexpected [$2]"; }
 assert_query_contains() { grep -F "$1" "$QUERY_LOG" >/dev/null 2>&1 || fail "$LAST_CASE: query log missing [$1]"; }
 assert_query_not_contains() { if grep -F "$1" "$QUERY_LOG" >/dev/null 2>&1; then fail "$LAST_CASE: query log contains [$1]"; fi; }
+assert_has_ansi() {
+    case "$1" in
+        *$'\033['*) : ;;
+        *) fail "$LAST_CASE: expected ANSI color sequences" ;;
+    esac
+}
+assert_no_ansi() {
+    case "$1" in
+        *$'\033['*) fail "$LAST_CASE: unexpected ANSI color sequences" ;;
+        *) : ;;
+    esac
+}
+strip_ansi() {
+    STRIPPED_OUTPUT=$(printf '%s' "$1" | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g' | awk '{$1=$1; print}')
+}
 
 run_case() {
     LAST_CASE=$1; shift
@@ -38,10 +53,53 @@ run_scenario() {
 }
 
 test_cli_help_and_compatibility() {
-    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; assert_contains "$OUTPUT" '--mode auto|metadata|exact'
+    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'
     run_case help --help; assert_status 0
     run_case short -l test -d app -t users -p 500000 -r 10 --no-color; assert_status 0
     run_case long --login-path=test --database=app --tables=users --performance-threshold=500000 --drift-threshold=10 --mode=auto --max-execution-time-ms=30000 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
+}
+
+test_help_is_always_colored_and_runtime_no_color_is_preserved() {
+    run_case no_args
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+    assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'
+    assert_contains "$OUTPUT" 'Usage:'
+    assert_contains "$OUTPUT" 'Required:'
+    assert_contains "$OUTPUT" 'Analysis:'
+    assert_contains "$OUTPUT" 'Output and runtime:'
+    assert_contains "$OUTPUT" 'Examples:'
+    assert_contains "$OUTPUT" 'Safety:'
+    assert_contains "$OUTPUT" 'Disable ANSI colors'
+    assert_not_contains "$OUTPUT" 'Disable ANSI colors for runtime reports'
+    assert_contains "$OUTPUT" 'Show this help and exit'
+    assert_not_contains "$OUTPUT" 'Show this always-colored help and exit'
+    assert_contains "$OUTPUT" 'metadata mode never scans user tables. ANALYZE requires explicit development,'
+    assert_contains "$OUTPUT" $'\033[0;32m-l, --login-path'
+    assert_contains "$OUTPUT" $'\033[0;36mauto|metadata|exact\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;36m500000\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;33m  test, or staging and is always \033[0m'
+    assert_contains "$OUTPUT" $'\033[0;31mrefused for production\033[0m'
+
+    run_case short_help -h
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+
+    run_case long_help --help
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+
+    run_case no_color_before_help --no-color --help
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+
+    run_case no_color_after_help --help --no-color
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+
+    run_case runtime_no_color -l test -d app -t users --mode metadata --no-color
+    assert_status 0
+    assert_no_ansi "$OUTPUT"
 }
 
 test_cli_validation_and_client_failures() {
@@ -182,6 +240,7 @@ run_test() {
 }
 
 run_test cli_help test_cli_help_and_compatibility
+run_test help_color test_help_is_always_colored_and_runtime_no_color_is_preserved
 run_test cli_validation test_cli_validation_and_client_failures
 run_test cli_tables test_cli_table_file_and_deduplication
 run_test mode_metadata test_mode_metadata_is_scan_safe
