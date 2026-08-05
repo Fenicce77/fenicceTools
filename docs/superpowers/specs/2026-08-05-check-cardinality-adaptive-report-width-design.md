@@ -72,7 +72,7 @@ exact_key_shortcut      -> exact/key
 exact_unique_nullable   -> exact/uniq
 exact                   -> exact
 metadata                -> metadata
-UNAVAILABLE             -> unavailable
+UNAVAILABLE             -> unavail
 ```
 
 Unknown future source values are truncated normally rather than discarded.
