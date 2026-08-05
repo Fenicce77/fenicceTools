@@ -264,11 +264,12 @@ selected key/access type or `N/A` when the server does not expose one.
 
 Exact analysis uses these shortcuts:
 
-- A primary-key column reuses the exact table row count.
+- A single-column primary-key column reuses the exact table row count.
 - A single-column `UNIQUE NOT NULL` key reuses the exact table row count.
 - A single-column nullable unique key uses `COUNT(column)`; distinct processing
   is unnecessary because non-NULL values are unique.
-- Composite unique indexes provide no shortcut for an individual component.
+- Composite primary and unique indexes provide no shortcut for an individual
+  component.
 - Other columns use an exact distinct count plus an eligible-row count.
 
 Eligibility predicates are type-aware:
@@ -453,8 +454,8 @@ Coverage includes:
 - Metadata mode never scanning user tables.
 - Exact mode running `EXPLAIN` and optimizer-selected `COUNT(*)` without a
   forced index.
-- Primary, unique-not-null, unique-nullable, composite, and ordinary-column
-  paths.
+- Single-column primary, unique-not-null, unique-nullable, composite-key, and
+  ordinary-column paths.
 - Leading-index metadata selection and unavailable nonleading cardinality.
 - Type-aware eligible-row predicates.
 - Exact empty-table drift and metadata `N/A` drift.
