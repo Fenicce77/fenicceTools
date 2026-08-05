@@ -1,224 +1,463 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-# ==============================================================================
-# Color and Environment Variables
-# ==============================================================================
-red='\033[0;31m'
-yel='\033[1;33m'
-cyn='\033[0;36m'
-grn='\033[0;32m'
-off='\033[0m'
-
-# Default values
-PERF_THRESHOLD=500000 
-DRIFT_THRESHOLD=10    
-TABLE_ARRAY=()
-
-# ==============================================================================
-# Help Function (Usage)
-# ==============================================================================
-usage() {
-    echo -e "${yel}Usage: $0 -l <login-path> -d <database> [-t <tables>] [-f <file>] [-p <perf_threshold>] [-r <drift_threshold>]${off}"
-    echo -e "  -l  MySQL login-path (Required)"
-    echo -e "  -d  Database (Required)"
-    echo -e "  -t  Table Name(s), comma-separated (e.g., 'users,orders')"
-    echo -e "  -f  File containing table names (one per line)"
-    echo -e "  -p  Row limit to force live scan (Default: 500000)"
-    echo -e "  -r  Allowed % of desync (Drift) limit (Default: 10)"
-    echo -e "\n${cyn}Note: You must provide either -t or -f (or both).${off}"
-    exit 1
+initialize_defaults() {
+    MYSQL_BIN_ENV=${MYSQL_BIN:-}
+    LOGIN_PATH=""
+    DATABASE=""
+    TABLE_STRING=""
+    TABLE_FILE=""
+    PERF_THRESHOLD=500000
+    DRIFT_THRESHOLD=10
+    REQUESTED_MODE="auto"
+    MAX_EXECUTION_TIME_MS=30000
+    ANALYZE_TABLE=false
+    ENVIRONMENT=""
+    OUTPUT_FILE=""
+    OUTPUT_FORMAT=""
+    MYSQL_BIN_OPTION=""
+    MYSQL_BIN=""
+    NO_COLOR=false
+    TABLE_ARRAY=()
+    UNIQUE_TABLES=()
+    WORK_DIR=""
+    EXPORT_TEMP=""
+    FINAL_STATUS=0
+    SERVER_VERSION="N/A"
+    SERVER_HOSTNAME="N/A"
+    TABLES_REQUESTED=0
+    TABLES_COMPLETED=0
+    TABLES_WARNED=0
+    TABLES_FAILED=0
+    TABLES_EXACT=0
+    TABLES_METADATA=0
+    MYSQL_OUTPUT=""
+    MYSQL_ERROR=""
 }
 
-# ==============================================================================
-# Parameter Parsing
-# ==============================================================================
-while getopts "l:d:t:f:p:r:h" opt; do
-    case ${opt} in
-        l ) LOGIN_PATH="$OPTARG" ;;
-        d ) DATABASE="$OPTARG" ;;
-        t ) TABLE_STRING="$OPTARG" ;;
-        f ) TABLE_FILE="$OPTARG" ;;
-        p ) PERF_THRESHOLD="$OPTARG" ;;
-        r ) DRIFT_THRESHOLD="$OPTARG" ;;
-        h ) usage ;;
-        \? ) usage ;;
+initialize_colors() {
+    COLOR_RED=""; COLOR_YELLOW=""; COLOR_CYAN=""; COLOR_GREEN=""; COLOR_BOLD=""; COLOR_RESET=""
+    if [[ "$NO_COLOR" == false && -t 1 && "${TERM:-dumb}" != dumb ]]; then
+        COLOR_RED=$(printf '\033[0;31m')
+        COLOR_YELLOW=$(printf '\033[1;33m')
+        COLOR_CYAN=$(printf '\033[0;36m')
+        COLOR_GREEN=$(printf '\033[0;32m')
+        COLOR_BOLD=$(printf '\033[1m')
+        COLOR_RESET=$(printf '\033[0m')
+    fi
+}
+
+show_help() {
+    cat <<EOF
+MySQL Cardinality Analyzer
+
+Usage:
+  $0 -l LOGIN_PATH -d DATABASE (-t TABLES | -f FILE) [OPTIONS]
+
+Required:
+  -l, --login-path PATH              MySQL login-path for the remote server
+  -d, --database NAME                Database to analyze
+  -t, --tables LIST                  Comma-separated table names
+  -f, --table-file FILE              Table names, one per line; comments use #
+
+Analysis:
+      --mode auto|metadata|exact     Analysis mode (default: auto)
+  -p, --performance-threshold ROWS   Maximum estimate eligible for exact auto mode (default: 500000)
+  -r, --drift-threshold PERCENT      Drift warning threshold (default: 10)
+      --max-execution-time-ms MS     Exact-query timeout hint (default: 30000)
+      --analyze-table                Run ANALYZE LOCAL TABLE before collection
+      --environment ENV              development, test, staging, or production
+
+Output and runtime:
+  -o, --output-file FILE             Atomic CSV or TSV report
+      --format csv|tsv               Report format; inferred from extension when omitted
+      --mysql-bin PATH               Local MySQL client executable (optional)
+      --no-color                     Disable ANSI colors
+  -h, --help                         Show this help and exit
+
+Examples:
+  $0 -l devel-mysql01 -d app -t users,orders
+  $0 --login-path=staging-mysql --database=app --tables=users --mode=metadata
+  $0 -l test-mysql -d app -t users --mode exact -o cardinality.csv
+  $0 -l test-mysql -d app -t users --analyze-table --environment test
+
+Safety:
+  metadata mode never scans user tables. ANALYZE requires explicit development,
+  test, or staging and is always refused for production.
+EOF
+}
+
+cli_error() { printf 'ERROR: %s\nTry --help for usage.\n' "$1" >&2; exit 2; }
+runtime_error() { printf 'ERROR: %s\n' "$2" >&2; exit "$1"; }
+require_value() { [[ -n "${2-}" && "${2-}" != -* ]] || cli_error "Option $1 requires a value."; }
+
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help; exit 0 ;;
+            --login-path=*) LOGIN_PATH=${1#*=} ;;
+            -l|--login-path) require_value "$1" "${2-}"; LOGIN_PATH=$2; shift ;;
+            --database=*) DATABASE=${1#*=} ;;
+            -d|--database) require_value "$1" "${2-}"; DATABASE=$2; shift ;;
+            --tables=*) TABLE_STRING=${1#*=} ;;
+            -t|--tables) require_value "$1" "${2-}"; TABLE_STRING=$2; shift ;;
+            --table-file=*) TABLE_FILE=${1#*=} ;;
+            -f|--table-file) require_value "$1" "${2-}"; TABLE_FILE=$2; shift ;;
+            --performance-threshold=*) PERF_THRESHOLD=${1#*=} ;;
+            -p|--performance-threshold) require_value "$1" "${2-}"; PERF_THRESHOLD=$2; shift ;;
+            --drift-threshold=*) DRIFT_THRESHOLD=${1#*=} ;;
+            -r|--drift-threshold) require_value "$1" "${2-}"; DRIFT_THRESHOLD=$2; shift ;;
+            --mode=*) REQUESTED_MODE=${1#*=} ;;
+            --mode) require_value "$1" "${2-}"; REQUESTED_MODE=$2; shift ;;
+            --max-execution-time-ms=*) MAX_EXECUTION_TIME_MS=${1#*=} ;;
+            --max-execution-time-ms) require_value "$1" "${2-}"; MAX_EXECUTION_TIME_MS=$2; shift ;;
+            --analyze-table) ANALYZE_TABLE=true ;;
+            --environment=*) ENVIRONMENT=${1#*=} ;;
+            --environment) require_value "$1" "${2-}"; ENVIRONMENT=$2; shift ;;
+            --output-file=*) OUTPUT_FILE=${1#*=} ;;
+            -o|--output-file) require_value "$1" "${2-}"; OUTPUT_FILE=$2; shift ;;
+            --format=*) OUTPUT_FORMAT=${1#*=} ;;
+            --format) require_value "$1" "${2-}"; OUTPUT_FORMAT=$2; shift ;;
+            --mysql-bin=*) MYSQL_BIN_OPTION=${1#*=} ;;
+            --mysql-bin) require_value "$1" "${2-}"; MYSQL_BIN_OPTION=$2; shift ;;
+            --no-color) NO_COLOR=true ;;
+            --) shift; break ;;
+            -*) cli_error "Unknown option: $1" ;;
+            *) cli_error "Unexpected argument: $1" ;;
+        esac
+        shift
+    done
+}
+
+validate_arguments() {
+    [[ -n "$LOGIN_PATH" ]] || cli_error "--login-path is required."
+    [[ -n "$DATABASE" ]] || cli_error "--database is required."
+    [[ -n "$TABLE_STRING" || -n "$TABLE_FILE" ]] || cli_error "Provide --tables or --table-file."
+    [[ "$PERF_THRESHOLD" =~ ^[0-9]+$ && "$PERF_THRESHOLD" -gt 0 ]] || cli_error "Performance threshold must be a positive integer."
+    [[ "$DRIFT_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]] || cli_error "Drift threshold must be a nonnegative number."
+    [[ "$MAX_EXECUTION_TIME_MS" =~ ^[0-9]+$ && "$MAX_EXECUTION_TIME_MS" -gt 0 ]] || cli_error "Execution timeout must be a positive integer."
+    case "$REQUESTED_MODE" in auto|metadata|exact) : ;; *) cli_error "Invalid mode: $REQUESTED_MODE" ;; esac
+    case "$ENVIRONMENT" in ""|development|test|staging|production) : ;; *) cli_error "Invalid environment: $ENVIRONMENT" ;; esac
+    case "$OUTPUT_FORMAT" in ""|csv|tsv) : ;; *) cli_error "Invalid output format: $OUTPUT_FORMAT" ;; esac
+    [[ -z "$OUTPUT_FORMAT" || -n "$OUTPUT_FILE" ]] || cli_error "--format requires --output-file."
+    if [[ "$ANALYZE_TABLE" == true ]]; then
+        case "$ENVIRONMENT" in
+            development|test|staging) : ;;
+            production) cli_error "--analyze-table is forbidden for production." ;;
+            "") cli_error "--analyze-table requires --environment development|test|staging." ;;
+        esac
+    fi
+    if [[ -n "$TABLE_FILE" ]]; then [[ -f "$TABLE_FILE" && -r "$TABLE_FILE" ]] || cli_error "Table file is not readable: $TABLE_FILE"; fi
+    if [[ -n "$OUTPUT_FILE" && -z "$OUTPUT_FORMAT" ]]; then
+        case "$OUTPUT_FILE" in *.tsv) OUTPUT_FORMAT=tsv ;; *) OUTPUT_FORMAT=csv ;; esac
+    fi
+}
+
+resolve_mysql_bin() {
+    if [[ -n "$MYSQL_BIN_OPTION" ]]; then MYSQL_BIN=$MYSQL_BIN_OPTION
+    elif [[ -n "$MYSQL_BIN_ENV" ]]; then MYSQL_BIN=$MYSQL_BIN_ENV
+    else MYSQL_BIN=$(command -v mysql 2>/dev/null || true)
+    fi
+    [[ -n "$MYSQL_BIN" && -x "$MYSQL_BIN" ]] || runtime_error 3 "MySQL client not found or not executable."
+}
+
+create_workspace() {
+    WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/check-cardinality.XXXXXX") || runtime_error 3 "Unable to create temporary workspace."
+}
+cleanup() {
+    [[ -z "${EXPORT_TEMP:-}" ]] || rm -f "$EXPORT_TEMP"
+    case "${WORK_DIR:-}" in "${TMPDIR:-/tmp}"/check-cardinality.*) rm -rf "$WORK_DIR" ;; esac
+}
+
+trim() { TRIMMED=$(printf '%s' "$1" | awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }'); }
+build_table_list() {
+    local item line list_file="$WORK_DIR/tables.all"
+    : > "$list_file"
+    if [[ -n "$TABLE_STRING" ]]; then
+        while IFS= read -r item; do trim "$item"; [[ -z "$TRIMMED" ]] || printf '%s\n' "$TRIMMED" >> "$list_file"; done <<EOF
+$(printf '%s' "$TABLE_STRING" | tr ',' '\n')
+EOF
+    fi
+    if [[ -n "$TABLE_FILE" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            trim "$line"; [[ -z "$TRIMMED" || "$TRIMMED" == \#* ]] || printf '%s\n' "$TRIMMED" >> "$list_file"
+        done < "$TABLE_FILE"
+    fi
+    sort -u "$list_file" > "$WORK_DIR/tables.unique"
+    while IFS= read -r item || [[ -n "$item" ]]; do [[ -z "$item" ]] || UNIQUE_TABLES+=("$item"); done < "$WORK_DIR/tables.unique"
+    [[ ${#UNIQUE_TABLES[@]} -gt 0 ]] || cli_error "No valid tables were provided."
+    TABLES_REQUESTED=${#UNIQUE_TABLES[@]}
+}
+
+sql_literal() { SQL_LITERAL=$(printf '%s' "$1" | sed "s/'/''/g"); }
+quote_identifier() { QUOTED_IDENTIFIER=$(printf '%s' "$1" | sed 's/`/``/g'); QUOTED_IDENTIFIER="\`$QUOTED_IDENTIFIER\`"; }
+
+mysql_query() {
+    local sql=$1 stderr_file="$WORK_DIR/mysql.stderr"
+    MYSQL_OUTPUT=""; MYSQL_ERROR=""
+    if MYSQL_OUTPUT=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --raw --skip-column-names -e "$sql" 2>"$stderr_file"); then return 0; fi
+    MYSQL_ERROR=$(<"$stderr_file"); return 1
+}
+mysql_query_headers() {
+    local sql=$1 stderr_file="$WORK_DIR/mysql.stderr"
+    MYSQL_OUTPUT=""; MYSQL_ERROR=""
+    if MYSQL_OUTPUT=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --raw --column-names -e "$sql" 2>"$stderr_file"); then return 0; fi
+    MYSQL_ERROR=$(<"$stderr_file"); return 1
+}
+
+check_connection() {
+    if ! mysql_query "SELECT /* cardinality:connection */ 1, VERSION(), @@hostname;"; then runtime_error 3 "Unable to connect using login path '$LOGIN_PATH': $MYSQL_ERROR"; fi
+    SERVER_VERSION=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {print $2}')
+    SERVER_HOSTNAME=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {print $3}')
+}
+
+run_analyze_table() {
+    local table=$1 row msg_type msg_text ok=true
+    quote_identifier "$DATABASE"; local qdb=$QUOTED_IDENTIFIER
+    quote_identifier "$table"; local qtable=$QUOTED_IDENTIFIER
+    if ! mysql_query "ANALYZE LOCAL TABLE $qdb.$qtable;"; then printf '%sERROR%s: ANALYZE failed for %s.%s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" "$MYSQL_ERROR" >&2; return 1; fi
+    while IFS=$'\t' read -r _ _ msg_type msg_text; do
+        printf 'ANALYZE: %s - %s\n' "$msg_type" "$msg_text"
+        [[ "$(printf '%s' "$msg_type" | tr '[:upper:]' '[:lower:]')" == status && "$(printf '%s' "$msg_text" | tr '[:lower:]' '[:upper:]')" == OK ]] || ok=false
+    done <<EOF
+$MYSQL_OUTPUT
+EOF
+    [[ "$ok" == true ]]
+}
+
+load_table_metadata() {
+    local table=$1 sql
+    sql_literal "$DATABASE"; local ldb=$SQL_LITERAL
+    sql_literal "$table"; local ltable=$SQL_LITERAL
+    sql="SELECT /* cardinality:table_metadata */ ENGINE, COALESCE(CAST(TABLE_ROWS AS CHAR), 'NULL') FROM information_schema.TABLES WHERE TABLE_SCHEMA='$ldb' AND TABLE_NAME='$ltable';"
+    mysql_query "$sql" || return 1
+    [[ -n "$MYSQL_OUTPUT" ]] || { MYSQL_ERROR="Table not found or inaccessible"; return 1; }
+    TABLE_ENGINE=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {print $1}')
+    ESTIMATED_ROWS=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {print $2}')
+    [[ "$ESTIMATED_ROWS" != NULL && -n "$ESTIMATED_ROWS" ]] || ESTIMATED_ROWS=N/A
+}
+
+load_column_metadata() {
+    local table=$1 sql
+    sql_literal "$DATABASE"; local ldb=$SQL_LITERAL
+    sql_literal "$table"; local ltable=$SQL_LITERAL
+    sql="WITH index_sizes AS (
+  SELECT TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, COUNT(*) AS index_columns
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA='$ldb' AND TABLE_NAME='$ltable'
+  GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
+), ranked AS (
+  SELECT s.COLUMN_NAME, s.CARDINALITY, s.INDEX_NAME, s.NON_UNIQUE,
+         s.SEQ_IN_INDEX, z.index_columns,
+         ROW_NUMBER() OVER (PARTITION BY s.COLUMN_NAME ORDER BY
+           CASE WHEN s.SEQ_IN_INDEX=1 AND z.index_columns=1 AND s.NON_UNIQUE=0 THEN 1
+                WHEN s.SEQ_IN_INDEX=1 AND z.index_columns=1 THEN 2
+                WHEN s.SEQ_IN_INDEX=1 THEN 3 ELSE 4 END,
+           CASE WHEN s.INDEX_NAME='PRIMARY' THEN 0 ELSE 1 END, s.INDEX_NAME) AS rn
+  FROM information_schema.STATISTICS s JOIN index_sizes z
+    ON z.TABLE_SCHEMA=s.TABLE_SCHEMA AND z.TABLE_NAME=s.TABLE_NAME AND z.INDEX_NAME=s.INDEX_NAME
+), index_lists AS (
+  SELECT COLUMN_NAME, GROUP_CONCAT(CONCAT(INDEX_NAME,'(#',SEQ_IN_INDEX,')') ORDER BY INDEX_NAME,SEQ_IN_INDEX SEPARATOR ', ') AS indexes
+  FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='$ldb' AND TABLE_NAME='$ltable' GROUP BY COLUMN_NAME
+)
+SELECT /* cardinality:column_metadata */ c.COLUMN_NAME, c.COLUMN_TYPE, c.DATA_TYPE, c.IS_NULLABLE,
+       CASE WHEN r.SEQ_IN_INDEX=1 THEN COALESCE(CAST(r.CARDINALITY AS CHAR),'N/A') ELSE 'N/A' END,
+       CASE WHEN r.SEQ_IN_INDEX=1 THEN r.INDEX_NAME ELSE 'N/A' END,
+       CASE WHEN r.SEQ_IN_INDEX<>1 OR r.SEQ_IN_INDEX IS NULL THEN 'UNAVAILABLE'
+            WHEN r.index_columns=1 AND r.INDEX_NAME='PRIMARY' THEN 'PRIMARY_SINGLE'
+            WHEN r.index_columns=1 AND r.NON_UNIQUE=0 THEN 'UNIQUE_SINGLE'
+            WHEN r.index_columns=1 THEN 'LEADING_SINGLE' ELSE 'LEADING_COMPOSITE' END,
+       COALESCE(r.index_columns,0), COALESCE(i.indexes,'---')
+FROM information_schema.COLUMNS c
+LEFT JOIN ranked r ON r.COLUMN_NAME=c.COLUMN_NAME AND r.rn=1
+LEFT JOIN index_lists i ON i.COLUMN_NAME=c.COLUMN_NAME
+WHERE c.TABLE_SCHEMA='$ldb' AND c.TABLE_NAME='$ltable' ORDER BY c.ORDINAL_POSITION;"
+    mysql_query "$sql"
+}
+
+choose_effective_mode() {
+    case "$REQUESTED_MODE" in
+        exact|metadata) EFFECTIVE_MODE=$REQUESTED_MODE ;;
+        auto) if [[ "$ESTIMATED_ROWS" =~ ^[0-9]+$ && "$ESTIMATED_ROWS" -le "$PERF_THRESHOLD" ]]; then EFFECTIVE_MODE=exact; else EFFECTIVE_MODE=metadata; fi ;;
     esac
-done
+}
 
-if [[ -z "$LOGIN_PATH" ]] || [[ -z "$DATABASE" ]]; then
-    echo -e "${red}[ERROR] Missing mandatory parameters (-l, -d).${off}\n"
-    usage
-fi
-
-if [[ -z "$TABLE_STRING" ]] && [[ -z "$TABLE_FILE" ]]; then
-    echo -e "${red}[ERROR] You must specify tables using -t or -f.${off}\n"
-    usage
-fi
-
-# ==============================================================================
-# Initialization and Detection
-# ==============================================================================
-MYSQLBIN=$(command -v mysql)
-if [[ -z "$MYSQLBIN" ]]; then
-    echo -e "${red}[ERROR] MySQL binary not found in the system.${off}"
-    exit 1
-fi
-
-BCBIN=$(command -v bc)
-if [[ -z "$BCBIN" ]]; then
-    echo -e "${red}[ERROR] 'bc' utility not found. Please install it for mathematical calculations.${off}"
-    exit 1
-fi
-
-echo -e "${cyn}Connecting to MySQL and verifying connection...${off}"
-CONNECTION_CHECK=$($MYSQLBIN --login-path="${LOGIN_PATH}" -B -N -e "SELECT 1;" 2>/dev/null)
-
-if [[ -z "$CONNECTION_CHECK" ]]; then
-    echo -e "${red}[ERROR] Could not connect to MySQL. Check your login-path or credentials.${off}"
-    exit 1
-fi
-
-# ==============================================================================
-# Build Table List
-# ==============================================================================
-# 1. Add tables from command line string (-t)
-if [[ -n "$TABLE_STRING" ]]; then
-    # Replace commas with spaces and convert to array
-    IFS=',' read -r -a TEMP_ARR <<< "$TABLE_STRING"
-    for t in "${TEMP_ARR[@]}"; do
-        TABLE_ARRAY+=("$(echo "$t" | xargs)") # xargs safely trims whitespace
-    done
-fi
-
-# 2. Add tables from file (-f)
-if [[ -n "$TABLE_FILE" ]]; then
-    if [[ ! -f "$TABLE_FILE" ]]; then
-        echo -e "${red}[ERROR] File '$TABLE_FILE' not found.${off}"
-        exit 1
+calculate_metrics() {
+    local card=$1 denominator=$2
+    if [[ "$card" =~ ^[0-9]+$ && "$denominator" =~ ^[0-9]+$ && "$denominator" -gt 0 ]]; then
+        METRICS=$(awk -v c="$card" -v d="$denominator" 'BEGIN { printf "%.4f\t%.2f", c/d, (c/d)*100 }')
+        RATIO=${METRICS%%$'\t'*}; SELECTIVITY_PCT=${METRICS#*$'\t'}
+    else RATIO=N/A; SELECTIVITY_PCT=N/A
     fi
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        # Ignore empty lines and comments
-        [[ -z "$line" || "$line" == \#* ]] && continue
-        TABLE_ARRAY+=("$(echo "$line" | xargs)")
-    done < "$TABLE_FILE"
-fi
+}
+calculate_drift() {
+    local exact=$1 estimate=$2
+    if [[ ! "$estimate" =~ ^[0-9]+$ ]]; then DRIFT_PCT=N/A; return; fi
+    DRIFT_PCT=$(awk -v exact="$exact" -v estimate="$estimate" 'BEGIN { if (exact==0) {printf "0.00"; exit} d=exact-estimate; if(d<0)d=-d; printf "%.2f",(d/exact)*100 }')
+}
+drift_exceeds_threshold() { awk -v d="$1" -v t="$DRIFT_THRESHOLD" 'BEGIN { exit !(d>t) }'; }
 
-if [[ ${#TABLE_ARRAY[@]} -eq 0 ]]; then
-    echo -e "${red}[ERROR] No valid tables provided to process.${off}"
-    exit 1
-fi
-
-# Remove duplicates (Cross-Platform compatible via sort -u)
-UNIQUE_TABLES=()
-for tbl in $(printf '%s\n' "${TABLE_ARRAY[@]}" | sort -u); do
-    UNIQUE_TABLES+=("$tbl")
-done
-
-# ==============================================================================
-# Main Processing Loop
-# ==============================================================================
-for TABLE in "${UNIQUE_TABLES[@]}"; do
-    
-    echo -e "\n${yel}================================================================================================================${off}"
-    echo -e "${cyn}  ANALYZING TABLE: $DATABASE.$TABLE ${off}"
-    echo -e "${yel}================================================================================================================${off}"
-
-    # Verify if table exists
-    TABLE_EXISTS=$($MYSQLBIN --login-path="${LOGIN_PATH}" -N -s -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DATABASE' AND table_name='$TABLE';")
-    if [[ "$TABLE_EXISTS" -eq 0 ]]; then
-        echo -e "${red}[WARNING] Table '$DATABASE.$TABLE' does not exist or you do not have permissions. Skipping...${off}"
-        continue
+run_exact_count() {
+    local table=$1 sql
+    quote_identifier "$DATABASE"; local qdb=$QUOTED_IDENTIFIER
+    quote_identifier "$table"; local qtable=$QUOTED_IDENTIFIER
+    sql="EXPLAIN SELECT /*+ MAX_EXECUTION_TIME($MAX_EXECUTION_TIME_MS) */ /* cardinality:count_explain */ COUNT(*) FROM $qdb.$qtable;"
+    if mysql_query_headers "$sql"; then
+        COUNT_ACCESS=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {for(i=1;i<=NF;i++){if($i=="type")t=i;if($i=="key")k=i}} NR==2 {if(t)type=$t;if(k)key=$k} END{print (type==""?"N/A":type) "\t" (key==""||key=="NULL"?"N/A":key)}')
+        COUNT_INDEX=${COUNT_ACCESS#*$'\t'}; COUNT_ACCESS=${COUNT_ACCESS%%$'\t'*}
+    else COUNT_ACCESS=N/A; COUNT_INDEX=N/A
     fi
+    sql="SELECT /*+ MAX_EXECUTION_TIME($MAX_EXECUTION_TIME_MS) */ /* cardinality:exact_count */ COUNT(*) FROM $qdb.$qtable;"
+    mysql_query "$sql" || return 1
+    EXACT_ROWS=$(printf '%s\n' "$MYSQL_OUTPUT" | awk 'NR==1 {print $1}')
+    [[ "$EXACT_ROWS" =~ ^[0-9]+$ ]]
+}
 
-    # ==============================================================================
-    # Statistics and Drift Verification
-    # ==============================================================================
-    META_ROWS=$($MYSQLBIN --login-path="$LOGIN_PATH" -N -s -e "SELECT TABLE_ROWS FROM information_schema.tables WHERE table_schema='$DATABASE' AND table_name='$TABLE';")
-    LIVE_ROWS=$($MYSQLBIN --login-path="$LOGIN_PATH" -N -s -e "SELECT COUNT(*) FROM $DATABASE.$TABLE;")
+build_eligibility_predicate() {
+    local quoted_column=$1 data_type=$2
+    case "$data_type" in
+        char|varchar|tinytext|text|mediumtext|longtext|binary|varbinary|tinyblob|blob|mediumblob|longblob)
+            ELIGIBILITY_PREDICATE="$quoted_column IS NOT NULL AND OCTET_LENGTH($quoted_column) > 0" ;;
+        date|datetime|timestamp)
+            ELIGIBILITY_PREDICATE="$quoted_column IS NOT NULL AND CAST($quoted_column AS CHAR) NOT LIKE '0000-00-00%'" ;;
+        *) ELIGIBILITY_PREDICATE="$quoted_column IS NOT NULL" ;;
+    esac
+}
 
-    [[ -z "$META_ROWS" || "$META_ROWS" -eq 0 ]] && META_ROWS=1 
-    [[ -z "$LIVE_ROWS" ]] && LIVE_ROWS=0
+append_result() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >> "$RESULT_FILE"; }
 
-    DIFF=$(echo "$LIVE_ROWS - $META_ROWS" | bc | tr -d '-')
-    DRIFT_PCT=$(echo "scale=2; ($DIFF / $LIVE_ROWS) * 100" | bc 2>/dev/null || echo 0)
+analyze_columns() {
+    local table=$1 column column_type data_type nullable metadata_card source_index key_kind index_columns existing_indexes
+    local eligible card source status error qcol qdb qtable sql value
+    RESULT_FILE="$WORK_DIR/results.$TABLES_COMPLETED.tsv"; : > "$RESULT_FILE"
+    while IFS=$'\t' read -r column column_type data_type nullable metadata_card source_index key_kind index_columns existing_indexes; do
+        [[ -n "$column" ]] || continue
+        eligible=$ESTIMATED_ROWS; card=$metadata_card; source=metadata; status=OK; error=""
+        if [[ "$EFFECTIVE_MODE" == exact ]]; then
+            source=exact
+            if [[ "$key_kind" == PRIMARY_SINGLE || ( "$key_kind" == UNIQUE_SINGLE && "$nullable" == NO ) ]]; then
+                eligible=$EXACT_ROWS; card=$EXACT_ROWS; source=exact_key_shortcut
+            else
+                quote_identifier "$column"; qcol=$QUOTED_IDENTIFIER
+                quote_identifier "$DATABASE"; qdb=$QUOTED_IDENTIFIER
+                quote_identifier "$table"; qtable=$QUOTED_IDENTIFIER
+                if [[ "$key_kind" == UNIQUE_SINGLE && "$nullable" == YES ]]; then
+                    sql="SELECT /*+ MAX_EXECUTION_TIME($MAX_EXECUTION_TIME_MS) */ /* cardinality:exact_unique_nullable */ COUNT($qcol) FROM $qdb.$qtable;"
+                    if mysql_query "$sql"; then value=$(printf '%s\n' "$MYSQL_OUTPUT" | awk 'NR==1 {print $1}'); eligible=$value; card=$value; source=exact_unique_nullable
+                    else eligible=N/A; card=N/A; status=ERROR; error=$MYSQL_ERROR; FINAL_STATUS=4; fi
+                else
+                    build_eligibility_predicate "$qcol" "$data_type"
+                    sql="SELECT /*+ MAX_EXECUTION_TIME($MAX_EXECUTION_TIME_MS) */ /* cardinality:exact_column */ COUNT(DISTINCT CASE WHEN $ELIGIBILITY_PREDICATE THEN $qcol END), COUNT(CASE WHEN $ELIGIBILITY_PREDICATE THEN 1 END) FROM $qdb.$qtable;"
+                    if mysql_query "$sql"; then card=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {print $1}'); eligible=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {print $2}')
+                    else eligible=N/A; card=N/A; status=ERROR; error=$MYSQL_ERROR; FINAL_STATUS=4; fi
+                fi
+            fi
+        elif [[ "$key_kind" == UNAVAILABLE ]]; then source=UNAVAILABLE; source_index=N/A; eligible=$ESTIMATED_ROWS; card=N/A; status=WARNING
+        fi
+        calculate_metrics "$card" "$eligible"
+        append_result "$column" "$column_type" "$nullable" "$eligible" "$card" "$RATIO" "$SELECTIVITY_PCT" "$source" "$source_index" "$existing_indexes" "$status|$error"
+    done <<EOF
+$COLUMN_METADATA
+EOF
+}
 
-    echo -e "${grn}--- Stats Sync Check ---${off}"
-    echo "Metadata Rows : $META_ROWS"
-    echo "Live Rows     : $LIVE_ROWS"
-    echo "Drift Variance: $DRIFT_PCT%"
+truncate_text() { local text=$1 width=$2; if [[ ${#text} -le $width ]]; then TRUNCATED=$text; elif [[ $width -le 3 ]]; then TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w)}'); else TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w-3) "..."}'); fi; }
+refresh_terminal_width() {
+    TERM_WIDTH=120
+    local cols
+    cols=$(tput cols 2>/dev/null || true)
+    if [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 120 ]]; then TERM_WIDTH=$cols; fi
+    return 0
+}
 
-    FORCE_LIVE=false
-    if (( $(echo "$DRIFT_PCT > $DRIFT_THRESHOLD" | bc -l) )) || [[ "$LIVE_ROWS" -lt "$PERF_THRESHOLD" ]]; then
-        echo -e "${yel}Status: Forcing live calculations (Excluding NULL/Empty/Zero-Dates).${off}"
-        FORCE_LIVE=true
-        TOTAL_ROWS=$LIVE_ROWS
+format_table_report() {
+    local table=$1 row_color line column type nullable eligible card ratio pct source source_index indexes status_error status error
+    local column_width=18 type_width=16 source_width=22 indexes_width
+    refresh_terminal_width; indexes_width=$((TERM_WIDTH - 18 - 16 - 13 - 11 - 8 - 11 - 22 - 28)); [[ $indexes_width -ge 18 ]] || indexes_width=18
+    printf '\n%sTABLE%s: %s.%s\n' "$COLOR_BOLD" "$COLOR_RESET" "$DATABASE" "$table"
+    printf 'Engine: %s | Requested: %s | Effective: %s | Estimated rows: %s | Exact rows: %s | Drift: %s%% | Count access/key: %s/%s\n' "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$DRIFT_PCT" "$COUNT_ACCESS" "$COUNT_INDEX"
+    line=$(printf "%-${column_width}s | %-${type_width}s | %13s | %11s | %8s | %11s | %-${source_width}s | %-${indexes_width}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECTIVITY SOURCE INDEXES)
+    printf '%s%s%s\n' "$COLOR_BOLD" "$line" "$COLOR_RESET"
+    while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
+        status=${status_error%%|*}; error=${status_error#*|}
+        truncate_text "$column" "$column_width"; column=$TRUNCATED; truncate_text "$type" "$type_width"; type=$TRUNCATED
+        truncate_text "$source:$source_index" "$source_width"; source=$TRUNCATED; truncate_text "$indexes" "$indexes_width"; indexes=$TRUNCATED
+        [[ "$pct" == N/A ]] || pct="${pct}%"
+        line=$(printf "%-${column_width}s | %-${type_width}s | %13s | %11s | %8s | %11s | %-${source_width}s | %-${indexes_width}s" "$column" "$type" "$eligible" "$card" "$ratio" "$pct" "$source" "$indexes")
+        case "$status" in ERROR) row_color=$COLOR_RED ;; WARNING) row_color=$COLOR_YELLOW ;; *) [[ "$EFFECTIVE_MODE" == exact ]] && row_color=$COLOR_GREEN || row_color=$COLOR_CYAN ;; esac
+        printf '%s%s%s\n' "$row_color" "$line" "$COLOR_RESET"
+        [[ -z "$error" ]] || printf '%s  Error: %s%s\n' "$COLOR_RED" "$error" "$COLOR_RESET"
+    done < "$RESULT_FILE"
+}
+
+csv_escape() { CSV_ESCAPED=$(printf '%s' "$1" | awk '{gsub(/"/,"\"\""); printf "\"%s\"",$0}'); }
+tsv_sanitize() { TSV_SANITIZED=$(printf '%s' "$1" | awk '{gsub(/[\t\r\n]/," "); printf "%s",$0}'); }
+export_row() {
+    local first=true value
+    if [[ "$OUTPUT_FORMAT" == csv ]]; then
+        for value in "$@"; do csv_escape "$value"; [[ "$first" == true ]] || printf ',' >> "$EXPORT_TEMP"; printf '%s' "$CSV_ESCAPED" >> "$EXPORT_TEMP"; first=false; done
     else
-        echo -e "${cyn}Status: Using Metadata estimates.${off}"
-        FORCE_LIVE=false
-        TOTAL_ROWS=$META_ROWS
+        for value in "$@"; do tsv_sanitize "$value"; [[ "$first" == true ]] || printf '\t' >> "$EXPORT_TEMP"; printf '%s' "$TSV_SANITIZED" >> "$EXPORT_TEMP"; first=false; done
     fi
+    printf '\n' >> "$EXPORT_TEMP"
+}
+initialize_export() {
+    [[ -n "$OUTPUT_FILE" ]] || return 0
+    local output_dir; output_dir=$(dirname "$OUTPUT_FILE")
+    [[ -d "$output_dir" && -w "$output_dir" ]] || runtime_error 3 "Output directory is not writable: $output_dir"
+    EXPORT_TEMP=$(mktemp "$output_dir/.check-cardinality.XXXXXX") || runtime_error 3 "Unable to create report temporary file."
+    export_row database table engine requested_mode effective_mode estimated_rows exact_rows drift_pct column data_type nullable eligible_rows cardinality ratio selectivity_pct source source_index existing_indexes status error
+}
+append_export_results() {
+    [[ -n "$OUTPUT_FILE" ]] || return 0
+    local table=$1 column type nullable eligible card ratio pct source source_index indexes status_error status error
+    while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
+        status=${status_error%%|*}; error=${status_error#*|}
+        export_row "$DATABASE" "$table" "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$DRIFT_PCT" "$column" "$type" "$nullable" "$eligible" "$card" "$ratio" "$pct" "$source" "$source_index" "$indexes" "$status" "$error"
+    done < "$RESULT_FILE"
+}
 
-    echo "----------------------------------------------------------------------------------------------------------------"
-    
-    # Safe temp file creation for both GNU and BSD
-    TEMP_REPORT=$(mktemp "${TMPDIR:-/tmp}/cardinality_XXXXXX")
+process_table() {
+    local table=$1 warned=false
+    if [[ "$ANALYZE_TABLE" == true ]] && ! run_analyze_table "$table"; then TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
+    if ! load_table_metadata "$table"; then printf '%sERROR%s: %s.%s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" "$MYSQL_ERROR" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
+    choose_effective_mode
+    EXACT_ROWS=N/A; DRIFT_PCT=N/A; COUNT_ACCESS=N/A; COUNT_INDEX=N/A
+    if [[ "$EFFECTIVE_MODE" == exact ]]; then
+        TABLES_EXACT=$((TABLES_EXACT + 1))
+        if ! run_exact_count "$table"; then printf '%sERROR%s: exact count failed for %s.%s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" "$MYSQL_ERROR" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
+        calculate_drift "$EXACT_ROWS" "$ESTIMATED_ROWS"
+        if [[ "$DRIFT_PCT" != N/A ]] && drift_exceeds_threshold "$DRIFT_PCT"; then warned=true; printf '%sWARNING%s: row-estimate drift %s%% exceeds %s%%; consider guarded ANALYZE.\n' "$COLOR_YELLOW" "$COLOR_RESET" "$DRIFT_PCT" "$DRIFT_THRESHOLD"; fi
+    else TABLES_METADATA=$((TABLES_METADATA + 1))
+    fi
+    if ! load_column_metadata "$table"; then printf '%sERROR%s: column metadata failed for %s.%s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" "$MYSQL_ERROR" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
+    COLUMN_METADATA=$MYSQL_OUTPUT
+    analyze_columns "$table"
+    format_table_report "$table"
+    append_export_results "$table"
+    TABLES_COMPLETED=$((TABLES_COMPLETED + 1))
+    if [[ "$warned" == true ]] || grep -F 'WARNING|' "$RESULT_FILE" >/dev/null 2>&1; then TABLES_WARNED=$((TABLES_WARNED + 1)); fi
+}
 
-    # ==============================================================================
-    # Column Analysis and Cardinality
-    # ==============================================================================
-    COLUMNS=$($MYSQLBIN --login-path="$LOGIN_PATH" -N -s -e "SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema='$DATABASE' AND table_name='$TABLE';")
+main() {
+    initialize_defaults
+    if [[ $# -eq 0 ]]; then show_help; exit 0; fi
+    parse_arguments "$@"
+    validate_arguments
+    initialize_colors
+    resolve_mysql_bin
+    create_workspace
+    trap cleanup EXIT
+    trap 'exit 130' INT TERM
+    build_table_list
+    check_connection
+    initialize_export
+    printf '%sMySQL Cardinality Analyzer%s | Server: %s | Version: %s\n' "$COLOR_BOLD" "$COLOR_RESET" "$SERVER_HOSTNAME" "$SERVER_VERSION"
+    local table
+    for table in "${UNIQUE_TABLES[@]}"; do process_table "$table"; done
+    printf '\nSummary: requested=%s completed=%s warned=%s failed=%s exact=%s metadata=%s\n' "$TABLES_REQUESTED" "$TABLES_COMPLETED" "$TABLES_WARNED" "$TABLES_FAILED" "$TABLES_EXACT" "$TABLES_METADATA"
+    if [[ "$FINAL_STATUS" -eq 0 && -n "$OUTPUT_FILE" ]]; then mv "$EXPORT_TEMP" "$OUTPUT_FILE"; EXPORT_TEMP=""; printf 'Report: %s\n' "$OUTPUT_FILE"; fi
+    exit "$FINAL_STATUS"
+}
 
-    for COL in $COLUMNS; do
-        INDEX_INFO=$($MYSQLBIN --login-path="$LOGIN_PATH" -N -s -e "
-            SELECT GROUP_CONCAT(CONCAT(INDEX_NAME, '(#', SEQ_IN_INDEX, ')') SEPARATOR ', ') 
-            FROM information_schema.STATISTICS 
-            WHERE TABLE_SCHEMA='$DATABASE' AND TABLE_NAME='$TABLE' AND COLUMN_NAME='$COL';")
-        
-        [[ -z "$INDEX_INFO" ]] && INDEX_INFO="---"
-
-        if [[ "$FORCE_LIVE" == true ]]; then
-            STATS=$($MYSQLBIN --login-path="$LOGIN_PATH" -N -s -e "
-                SELECT 
-                    COUNT(DISTINCT CASE WHEN \`$COL\` IS NOT NULL AND CHAR_LENGTH(\`$COL\`) > 0 THEN \`$COL\` END), 
-                    COUNT(CASE WHEN \`$COL\` IS NOT NULL AND CHAR_LENGTH(\`$COL\`) > 0 THEN 1 END) 
-                FROM $DATABASE.$TABLE;")
-            
-            CARD=$(echo "$STATS" | awk '{print $1}')
-            CLEAN_ROWS=$(echo "$STATS" | awk '{print $2}')
-            
-            [[ -z "$CARD" ]] && CARD=0
-            [[ -z "$CLEAN_ROWS" ]] && CLEAN_ROWS=0
-            CURRENT_DENOMINATOR=$CLEAN_ROWS
-        else
-            CARD=$($MYSQLBIN --login-path="$LOGIN_PATH" -N -s -e "SELECT CARDINALITY FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='$DATABASE' AND TABLE_NAME='$TABLE' AND COLUMN_NAME='$COL' LIMIT 1;")
-            [[ -z "$CARD" ]] && CARD=0
-            CURRENT_DENOMINATOR=$TOTAL_ROWS
-        fi
-
-        if [[ "$CURRENT_DENOMINATOR" -gt 0 ]]; then
-            RATIO=$(echo "scale=4; $CARD / $CURRENT_DENOMINATOR" | bc)
-            PCT=$(echo "scale=2; ($CARD / $CURRENT_DENOMINATOR) * 100" | bc)
-        else
-            RATIO="0.0000"; PCT="0.00"
-        fi
-
-        echo "$COL|$CARD|$RATIO|$PCT|$INDEX_INFO" >> "$TEMP_REPORT"
-    done
-
-    # ==============================================================================
-    # Final Table Report
-    # ==============================================================================
-    printf "${grn}%-20s | %-12s | %-10s | %-12s | %-30s${off}\n" "Column Name" "Cardinality" "Ratio" "Selectivity" "Existing Indexes (Pos)"
-    echo "----------------------------------------------------------------------------------------------------------------"
-
-    # Standard POSIX sort implementation
-    sort -t'|' -k2 -rn "$TEMP_REPORT" | while IFS='|' read -r NAME CARD RAT PCT IDX; do
-        printf "%-20s | %-12s | %-10s | %-11s%% | %-30s\n" "$NAME" "$CARD" "$RAT" "$PCT" "$IDX"
-    done
-
-    # Clean up temp file safely
-    rm -f "$TEMP_REPORT"
-
-done # End of Main Loop
-
-echo -e "\n${grn}[SUCCESS] All requested tables have been processed.${off}"
+main "$@"
