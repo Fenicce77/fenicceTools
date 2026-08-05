@@ -63,25 +63,25 @@ show_help() {
         "$help_value" "$0" "$help_reset"
 
     printf '%sRequired:%s\n' "$help_section" "$help_reset"
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '-l, --login-path' "$help_reset" "$help_value" 'PATH' "$help_reset" 'MySQL login-path for the remote server'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '-d, --database' "$help_reset" "$help_value" 'NAME' "$help_reset" 'Database to analyze'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '-t, --tables' "$help_reset" "$help_value" 'LIST' "$help_reset" 'Comma-separated table names'
-    printf '  %s%-32s%s %s%-13s%s %s\n\n' "$help_option" '-f, --table-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Table names, one per line; comments use #'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-l, --login-path' "$help_reset" "$help_value" 'PATH' "$help_reset" 'MySQL login-path for the remote server'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-d, --database' "$help_reset" "$help_value" 'NAME' "$help_reset" 'Database to analyze'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-t, --tables' "$help_reset" "$help_value" 'LIST' "$help_reset" 'Comma-separated table names'
+    printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-f, --table-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Table names, one per line; comments use #'
 
     printf '%sAnalysis:%s\n' "$help_section" "$help_reset"
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '--mode auto|metadata|exact' "$help_reset" "$help_value" '' "$help_reset" 'Analysis mode (default: auto)'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '-p, --performance-threshold' "$help_reset" "$help_value" 'ROWS' "$help_reset" 'Maximum estimate eligible for exact auto mode (default: 500000)'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '-r, --drift-threshold' "$help_reset" "$help_value" 'PERCENT' "$help_reset" 'Drift warning threshold (default: 10)'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '--max-execution-time-ms' "$help_reset" "$help_value" 'MS' "$help_reset" 'Exact-query timeout hint (default: 30000)'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '--analyze-table' "$help_reset" "$help_value" '' "$help_reset" 'Run ANALYZE LOCAL TABLE before collection'
-    printf '  %s%-32s%s %s%-13s%s %s\n\n' "$help_option" '--environment' "$help_reset" "$help_value" 'ENV' "$help_reset" 'development, test, staging, or production'
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '--mode' "$help_reset" "$help_value" 'auto|metadata|exact' "$help_reset" 'Analysis mode (default: ' "$help_value" 'auto' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '-p, --performance-threshold' "$help_reset" "$help_value" 'ROWS' "$help_reset" 'Maximum estimate eligible for exact auto mode (default: ' "$help_value" '500000' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '-r, --drift-threshold' "$help_reset" "$help_value" 'PERCENT' "$help_reset" 'Drift warning threshold (default: ' "$help_value" '10' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s%s%s%s\n' "$help_option" '--max-execution-time-ms' "$help_reset" "$help_value" 'MS' "$help_reset" 'Exact-query timeout hint (default: ' "$help_value" '30000' "$help_reset)"
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--analyze-table' "$help_reset" "$help_value" '' "$help_reset" 'Run ANALYZE LOCAL TABLE before collection'
+    printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '--environment' "$help_reset" "$help_value" 'ENV' "$help_reset" 'development, test, staging, or production'
 
     printf '%sOutput and runtime:%s\n' "$help_section" "$help_reset"
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '-o, --output-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Atomic CSV or TSV report'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '--format' "$help_reset" "$help_value" 'csv|tsv' "$help_reset" 'Report format; inferred from extension when omitted'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '--mysql-bin' "$help_reset" "$help_value" 'PATH' "$help_reset" 'Local MySQL client executable (optional)'
-    printf '  %s%-32s%s %s%-13s%s %s\n' "$help_option" '--no-color' "$help_reset" "$help_value" '' "$help_reset" 'Disable ANSI colors for runtime reports'
-    printf '  %s%-32s%s %s%-13s%s %s\n\n' "$help_option" '-h, --help' "$help_reset" "$help_value" '' "$help_reset" 'Show this always-colored help and exit'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-o, --output-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Atomic CSV or TSV report'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--format' "$help_reset" "$help_value" 'csv|tsv' "$help_reset" 'Report format; inferred from extension when omitted'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--mysql-bin' "$help_reset" "$help_value" 'PATH' "$help_reset" 'Local MySQL client executable (optional)'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--no-color' "$help_reset" "$help_value" '' "$help_reset" 'Disable ANSI colors'
+    printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-h, --help' "$help_reset" "$help_value" '' "$help_reset" 'Show this help and exit'
 
     printf '%sExamples:%s\n' "$help_section" "$help_reset"
     printf '  %s%s -l devel-mysql01 -d app -t users,orders%s\n' "$help_value" "$0" "$help_reset"
@@ -90,9 +90,9 @@ show_help() {
     printf '  %s%s -l test-mysql -d app -t users --analyze-table --environment test%s\n\n' "$help_value" "$0" "$help_reset"
 
     printf '%sSafety:%s\n' "$help_section" "$help_reset"
-    printf '  %sMetadata mode never scans user tables.%s\n' "$help_warning" "$help_reset"
-    printf '  %sANALYZE requires an explicit development, test, or staging environment;%s\n' "$help_warning" "$help_reset"
-    printf '  it is always %srefused for production%s.\n' "$help_error" "$help_reset"
+    printf '%s  metadata mode never scans user tables. ANALYZE requires explicit development,%s\n' "$help_warning" "$help_reset"
+    printf '%s  test, or staging and is always %s%srefused for production%s%s.%s\n' \
+        "$help_warning" "$help_reset" "$help_error" "$help_reset" "$help_warning" "$help_reset"
 }
 
 cli_error() { printf 'ERROR: %s\nTry --help for usage.\n' "$1" >&2; exit 2; }

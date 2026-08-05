@@ -30,6 +30,9 @@ assert_no_ansi() {
         *) : ;;
     esac
 }
+strip_ansi() {
+    STRIPPED_OUTPUT=$(printf '%s' "$1" | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g' | awk '{$1=$1; print}')
+}
 
 run_case() {
     LAST_CASE=$1; shift
@@ -50,7 +53,7 @@ run_scenario() {
 }
 
 test_cli_help_and_compatibility() {
-    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; assert_contains "$OUTPUT" '--mode auto|metadata|exact'
+    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'
     run_case help --help; assert_status 0
     run_case short -l test -d app -t users -p 500000 -r 10 --no-color; assert_status 0
     run_case long --login-path=test --database=app --tables=users --performance-threshold=500000 --drift-threshold=10 --mode=auto --max-execution-time-ms=30000 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
@@ -67,6 +70,16 @@ test_help_is_always_colored_and_runtime_no_color_is_preserved() {
     assert_contains "$OUTPUT" 'Output and runtime:'
     assert_contains "$OUTPUT" 'Examples:'
     assert_contains "$OUTPUT" 'Safety:'
+    assert_contains "$OUTPUT" 'Disable ANSI colors'
+    assert_not_contains "$OUTPUT" 'Disable ANSI colors for runtime reports'
+    assert_contains "$OUTPUT" 'Show this help and exit'
+    assert_not_contains "$OUTPUT" 'Show this always-colored help and exit'
+    assert_contains "$OUTPUT" 'metadata mode never scans user tables. ANALYZE requires explicit development,'
+    assert_contains "$OUTPUT" $'\033[0;32m-l, --login-path'
+    assert_contains "$OUTPUT" $'\033[0;36mauto|metadata|exact\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;36m500000\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;33m  test, or staging and is always \033[0m'
+    assert_contains "$OUTPUT" $'\033[0;31mrefused for production\033[0m'
 
     run_case short_help -h
     assert_status 0
