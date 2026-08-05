@@ -41,9 +41,10 @@ TOTAL       120
 ```
 
 The shorter `SELECT.` heading is display-only; exported field names do not
-change. Numeric values are never truncated. When an eligible-row count,
-cardinality, ratio, or selectivity value exceeds its minimum, the formatter
-measures the complete display value and expands that numeric field.
+change. Eligible-row and cardinality counts are never truncated. When either
+count exceeds its minimum, the formatter measures and expands that numeric
+field. Extremely large derived ratios and selectivity percentages use compact
+scientific notation in the terminal; exports retain their full decimal values.
 
 ## Adaptive Allocation
 
@@ -57,9 +58,10 @@ find the longest column name and the visible width of every numeric field.
 4. `INDEXES` must never shrink below 12 characters.
 5. At terminal widths above 120, the additional text budget goes to `INDEXES`.
    `COLUMN` still grows only as required by actual names, up to 32 characters.
-6. Numeric expansion takes width from `INDEXES`, then `COLUMN`, `TYPE`, and
-   `SOURCE`, in that order. Exact numeric values are preserved and `INDEXES`
-   remains at least 12 characters for valid MySQL count ranges.
+6. Count expansion takes width from `INDEXES`, then `COLUMN`, `TYPE`, and
+   `SOURCE`, in that order. Counts are preserved and `INDEXES` remains at least
+   12 characters. After the normal display minima are exhausted, text fields
+   may shrink to three characters before any width can become negative.
 7. Text values exceeding their allocated widths continue to use deterministic
    `...` truncation, so no table row exceeds the chosen terminal width.
 
@@ -110,6 +112,8 @@ Tests will verify:
 - a 25-32 character column borrows width while leaving at least 12 for indexes;
 - 9-digit and larger numeric values remain complete without moving separators
   or exceeding the fallback width;
+- divergent metadata ratios use terminal-only scientific notation while raw
+  counts and exported metrics remain complete;
 - terminal widths above 120 allocate their surplus to the index list;
 - compact source labels are rendered without `source_index` duplication;
 - header and row separators have identical visible offsets;

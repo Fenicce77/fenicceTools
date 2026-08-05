@@ -297,6 +297,21 @@ test_adaptive_report_assigns_wider_terminal_to_indexes() {
     assert_contains "$REPORT_LINE" 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction'
 }
 
+test_adaptive_report_handles_divergent_metadata_metrics() {
+    run_scenario layout_divergent -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    report_line 'vendor'
+    divergent_row=$REPORT_LINE
+    assert_contains "$divergent_row" '18446744073709551615'
+    assert_contains "$divergent_row" 'e+'
+    [[ ${#divergent_row} -eq 120 ]] || fail "divergent metadata row is not 120 columns: ${#divergent_row}"
+    header_pipes=$(printf '%s' "$header" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    row_pipes=$(printf '%s' "$divergent_row" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    [[ "$header_pipes" == "$row_pipes" ]] || fail "divergent metadata separator offsets differ"
+}
+
 test_adaptive_report_does_not_compact_exports() {
     out="$TMP_ROOT/layout.csv"
     run_scenario layout_common -l x -d app -t transactions --mode exact \
@@ -336,6 +351,7 @@ run_test adaptive_priority test_adaptive_report_prioritizes_column_and_indexes
 run_test adaptive_borrow test_adaptive_report_borrows_from_indexes_for_long_columns
 run_test adaptive_numeric test_adaptive_report_preserves_large_numeric_alignment
 run_test adaptive_wide test_adaptive_report_assigns_wider_terminal_to_indexes
+run_test adaptive_divergent test_adaptive_report_handles_divergent_metadata_metrics
 run_test adaptive_export test_adaptive_report_does_not_compact_exports
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

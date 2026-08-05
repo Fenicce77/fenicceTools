@@ -26,10 +26,14 @@ Code review identified that `printf` field widths are minimums: a 9-digit
 eligible count would expand an 8-character field and produce a 121-character
 row. The implementation must therefore measure full eligible, cardinality,
 ratio, and rendered selectivity values before allocating the text budget.
-Numeric values are never truncated. Any extra numeric width is recovered from
+Eligible/cardinality counts are never truncated. Any extra count width is recovered from
 `INDEXES`, then `COLUMN`, `TYPE`, and `SOURCE`, while preserving a 12-character
 index minimum for valid MySQL count ranges. Additional regression scenarios
 must cover a 9-digit count, the exact 32/12 boundary, and a 160-column terminal.
+If highly divergent metadata makes derived ratios wider than the reclaim
+budget, terminal ratio/selectivity values use scientific notation; raw counts
+and CSV/TSV decimal metrics remain unchanged. A divergent metadata fixture must
+prove the 12-character index invariant and prevent negative dynamic widths.
 
 ---
 

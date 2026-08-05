@@ -386,7 +386,7 @@ refresh_terminal_width() {
 
 calculate_report_widths() {
     local max_column=0 name name_length text_budget desired_column
-    local eligible card ratio pct pct_display indexes_shortage reducible reduction
+    local eligible card ratio pct pct_display indexes_shortage reducible reduction metric_length
 
     ELIGIBLE_WIDTH=8
     CARDINALITY_WIDTH=11
@@ -398,9 +398,13 @@ calculate_report_widths() {
         if [[ "$name_length" -gt "$max_column" ]]; then max_column=$name_length; fi
         [[ ${#eligible} -le $ELIGIBLE_WIDTH ]] || ELIGIBLE_WIDTH=${#eligible}
         [[ ${#card} -le $CARDINALITY_WIDTH ]] || CARDINALITY_WIDTH=${#card}
-        [[ ${#ratio} -le $RATIO_WIDTH ]] || RATIO_WIDTH=${#ratio}
+        metric_length=${#ratio}
+        [[ "$metric_length" -le 8 ]] || metric_length=8
+        [[ "$metric_length" -le "$RATIO_WIDTH" ]] || RATIO_WIDTH=$metric_length
         if [[ "$pct" == N/A ]]; then pct_display=$pct; else pct_display="${pct}%"; fi
-        [[ ${#pct_display} -le $SELECTIVITY_WIDTH ]] || SELECTIVITY_WIDTH=${#pct_display}
+        metric_length=${#pct_display}
+        [[ "$metric_length" -le 10 ]] || metric_length=10
+        [[ "$metric_length" -le "$SELECTIVITY_WIDTH" ]] || SELECTIVITY_WIDTH=$metric_length
     done < "$RESULT_FILE"
 
     TYPE_WIDTH=12
@@ -436,6 +440,31 @@ calculate_report_widths() {
         SOURCE_WIDTH=$((SOURCE_WIDTH - reduction))
         INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
     fi
+    if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
+        indexes_shortage=$((12 - INDEXES_WIDTH))
+        reducible=$((COLUMN_WIDTH - 3))
+        reduction=$indexes_shortage
+        [[ "$reduction" -le "$reducible" ]] || reduction=$reducible
+        COLUMN_WIDTH=$((COLUMN_WIDTH - reduction))
+        INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
+    fi
+    if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
+        indexes_shortage=$((12 - INDEXES_WIDTH))
+        reducible=$((TYPE_WIDTH - 3))
+        reduction=$indexes_shortage
+        [[ "$reduction" -le "$reducible" ]] || reduction=$reducible
+        TYPE_WIDTH=$((TYPE_WIDTH - reduction))
+        INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
+    fi
+    if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
+        indexes_shortage=$((12 - INDEXES_WIDTH))
+        reducible=$((SOURCE_WIDTH - 3))
+        reduction=$indexes_shortage
+        [[ "$reduction" -le "$reducible" ]] || reduction=$reducible
+        SOURCE_WIDTH=$((SOURCE_WIDTH - reduction))
+        INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
+    fi
+    [[ "$INDEXES_WIDTH" -ge 12 ]] || INDEXES_WIDTH=12
 }
 
 compact_source_label() {
@@ -447,6 +476,21 @@ compact_source_label() {
         UNAVAILABLE) DISPLAY_SOURCE=unavail ;;
         *) DISPLAY_SOURCE=$1 ;;
     esac
+}
+
+compact_derived_metric() {
+    local value=$1 suffix=$2 width=$3
+    DISPLAY_METRIC="${value}${suffix}"
+    if [[ ${#DISPLAY_METRIC} -gt "$width" && "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        DISPLAY_METRIC=$(awk -v value="$value" -v suffix="$suffix" 'BEGIN {printf "%.2e%s", value, suffix}')
+    fi
+    if [[ ${#DISPLAY_METRIC} -gt "$width" && "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        DISPLAY_METRIC=$(awk -v value="$value" -v suffix="$suffix" 'BEGIN {printf "%.1e%s", value, suffix}')
+    fi
+    if [[ ${#DISPLAY_METRIC} -gt "$width" ]]; then
+        truncate_text "$DISPLAY_METRIC" "$width"
+        DISPLAY_METRIC=$TRUNCATED
+    fi
 }
 
 format_table_report() {
@@ -463,7 +507,13 @@ format_table_report() {
         truncate_text "$column" "$COLUMN_WIDTH"; column=$TRUNCATED; truncate_text "$type" "$TYPE_WIDTH"; type=$TRUNCATED
         compact_source_label "$source"; truncate_text "$DISPLAY_SOURCE" "$SOURCE_WIDTH"; source=$TRUNCATED
         truncate_text "$indexes" "$INDEXES_WIDTH"; indexes=$TRUNCATED
-        [[ "$pct" == N/A ]] || pct="${pct}%"
+        compact_derived_metric "$ratio" "" "$RATIO_WIDTH"; ratio=$DISPLAY_METRIC
+        if [[ "$pct" == N/A ]]; then
+            compact_derived_metric "$pct" "" "$SELECTIVITY_WIDTH"
+        else
+            compact_derived_metric "$pct" "%" "$SELECTIVITY_WIDTH"
+        fi
+        pct=$DISPLAY_METRIC
         line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %${ELIGIBLE_WIDTH}s | %${CARDINALITY_WIDTH}s | %${RATIO_WIDTH}s | %${SELECTIVITY_WIDTH}s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" "$column" "$type" "$eligible" "$card" "$ratio" "$pct" "$source" "$indexes")
         case "$status" in ERROR) row_color=$COLOR_RED ;; WARNING) row_color=$COLOR_YELLOW ;; *) [[ "$EFFECTIVE_MODE" == exact ]] && row_color=$COLOR_GREEN || row_color=$COLOR_CYAN ;; esac
         printf '%s%s%s\n' "$row_color" "$line" "$COLOR_RESET"

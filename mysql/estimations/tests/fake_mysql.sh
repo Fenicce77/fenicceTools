@@ -37,6 +37,7 @@ case "$query" in
             empty) printf 'InnoDB\t0\n' ;;
             threshold) printf 'InnoDB\t500000\n' ;;
             drift) printf 'InnoDB\t50\n' ;;
+            layout_divergent) printf 'InnoDB\t1\n' ;;
             *) printf 'InnoDB\t100\n' ;;
         esac
         ;;
@@ -68,6 +69,9 @@ case "$query" in
                 ;;
             layout_numeric)
                 printf 'vendor_transaction_id\tvarchar(128)\tvarchar\tNO\t123456789\tuk_vendor_transaction\tUNIQUE_SINGLE\t1\tidx_aviator_vendor_transaction(#1)\n'
+                ;;
+            layout_divergent)
+                printf 'vendor_transaction_id\tvarchar(128)\tvarchar\tNO\t18446744073709551615\tidx_divergent_cardinality\tLEADING_SINGLE\t1\tidx_divergent_cardinality(#1)\n'
                 ;;
             *) printf 'id\tbigint\tbigint\tNO\t100\tPRIMARY\tPRIMARY_SINGLE\t1\tPRIMARY(#1)\n' ;;
         esac
