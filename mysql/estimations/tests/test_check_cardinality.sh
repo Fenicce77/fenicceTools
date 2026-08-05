@@ -267,10 +267,34 @@ test_adaptive_report_prioritizes_column_and_indexes() {
 test_adaptive_report_borrows_from_indexes_for_long_columns() {
     run_scenario layout_borrow -l x -d app -t transactions --mode exact --no-color
     assert_status 0
-    report_line 'applied_multiplier_reference'
-    assert_contains "$REPORT_LINE" 'applied_multiplier_reference'
-    assert_contains "$REPORT_LINE" 'idx_aviator_a...'
+    report_line 'applied_multiplier_reference_key'
+    assert_contains "$REPORT_LINE" 'applied_multiplier_reference_key'
+    assert_contains "$REPORT_LINE" 'idx_aviat...'
     [[ ${#REPORT_LINE} -eq 120 ]] || fail "borrowed-width row is not 120 columns"
+}
+
+test_adaptive_report_preserves_large_numeric_alignment() {
+    run_scenario layout_numeric -l x -d app -t transactions --mode exact --no-color
+    assert_status 0
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    report_line 'vendor_transaction_id'
+    numeric_row=$REPORT_LINE
+    assert_contains "$numeric_row" '123456789'
+    [[ ${#numeric_row} -eq 120 ]] || fail "large-numeric row is not 120 columns: ${#numeric_row}"
+    header_pipes=$(printf '%s' "$header" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    row_pipes=$(printf '%s' "$numeric_row" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    [[ "$header_pipes" == "$row_pipes" ]] || fail "large-numeric separator offsets differ"
+}
+
+test_adaptive_report_assigns_wider_terminal_to_indexes() {
+    TERM=xterm COLUMNS=160 run_scenario layout_common -l x -d app -t transactions --mode exact --no-color
+    assert_status 0
+    report_line 'COLUMN'
+    [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide header is not 160 columns: ${#REPORT_LINE}"
+    report_line 'vendor_transaction_id'
+    [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide row is not 160 columns: ${#REPORT_LINE}"
+    assert_contains "$REPORT_LINE" 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction'
 }
 
 test_adaptive_report_does_not_compact_exports() {
@@ -310,6 +334,8 @@ run_test analyze_empty test_empty_analyze_result_is_failure
 run_test alignment_fallback test_terminal_rows_align_within_fallback_width
 run_test adaptive_priority test_adaptive_report_prioritizes_column_and_indexes
 run_test adaptive_borrow test_adaptive_report_borrows_from_indexes_for_long_columns
+run_test adaptive_numeric test_adaptive_report_preserves_large_numeric_alignment
+run_test adaptive_wide test_adaptive_report_assigns_wider_terminal_to_indexes
 run_test adaptive_export test_adaptive_report_does_not_compact_exports
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

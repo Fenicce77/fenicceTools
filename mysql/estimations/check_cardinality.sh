@@ -386,10 +386,21 @@ refresh_terminal_width() {
 
 calculate_report_widths() {
     local max_column=0 name name_length text_budget desired_column
+    local eligible card ratio pct pct_display indexes_shortage reducible reduction
 
-    while IFS=$'\t' read -r name _; do
+    ELIGIBLE_WIDTH=8
+    CARDINALITY_WIDTH=11
+    RATIO_WIDTH=6
+    SELECTIVITY_WIDTH=8
+
+    while IFS=$'\t' read -r name _ _ eligible card ratio pct _; do
         name_length=${#name}
         if [[ "$name_length" -gt "$max_column" ]]; then max_column=$name_length; fi
+        [[ ${#eligible} -le $ELIGIBLE_WIDTH ]] || ELIGIBLE_WIDTH=${#eligible}
+        [[ ${#card} -le $CARDINALITY_WIDTH ]] || CARDINALITY_WIDTH=${#card}
+        [[ ${#ratio} -le $RATIO_WIDTH ]] || RATIO_WIDTH=${#ratio}
+        if [[ "$pct" == N/A ]]; then pct_display=$pct; else pct_display="${pct}%"; fi
+        [[ ${#pct_display} -le $SELECTIVITY_WIDTH ]] || SELECTIVITY_WIDTH=${#pct_display}
     done < "$RESULT_FILE"
 
     TYPE_WIDTH=12
@@ -398,12 +409,32 @@ calculate_report_widths() {
     if [[ "$max_column" -gt "$desired_column" ]]; then desired_column=$max_column; fi
     [[ "$desired_column" -le 32 ]] || desired_column=32
 
-    text_budget=$((TERM_WIDTH - 54))
+    text_budget=$((TERM_WIDTH - 21 - ELIGIBLE_WIDTH - CARDINALITY_WIDTH - RATIO_WIDTH - SELECTIVITY_WIDTH))
     COLUMN_WIDTH=$desired_column
     INDEXES_WIDTH=$((text_budget - TYPE_WIDTH - SOURCE_WIDTH - COLUMN_WIDTH))
     if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
-        COLUMN_WIDTH=$((COLUMN_WIDTH - (12 - INDEXES_WIDTH)))
-        INDEXES_WIDTH=12
+        indexes_shortage=$((12 - INDEXES_WIDTH))
+        reducible=$((COLUMN_WIDTH - 8))
+        reduction=$indexes_shortage
+        [[ "$reduction" -le "$reducible" ]] || reduction=$reducible
+        COLUMN_WIDTH=$((COLUMN_WIDTH - reduction))
+        INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
+    fi
+    if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
+        indexes_shortage=$((12 - INDEXES_WIDTH))
+        reducible=$((TYPE_WIDTH - 8))
+        reduction=$indexes_shortage
+        [[ "$reduction" -le "$reducible" ]] || reduction=$reducible
+        TYPE_WIDTH=$((TYPE_WIDTH - reduction))
+        INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
+    fi
+    if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
+        indexes_shortage=$((12 - INDEXES_WIDTH))
+        reducible=$((SOURCE_WIDTH - 6))
+        reduction=$indexes_shortage
+        [[ "$reduction" -le "$reducible" ]] || reduction=$reducible
+        SOURCE_WIDTH=$((SOURCE_WIDTH - reduction))
+        INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
     fi
 }
 
@@ -425,7 +456,7 @@ format_table_report() {
     printf '\n%sTABLE%s: %s.%s\n' "$COLOR_BOLD" "$COLOR_RESET" "$DATABASE" "$table"
     if [[ "$DRIFT_PCT" == N/A ]]; then drift_display=N/A; else drift_display="${DRIFT_PCT}%"; fi
     printf 'Engine: %s | Requested: %s | Effective: %s | Estimated rows: %s | Exact rows: %s | Drift: %s | Count access/key: %s/%s\n' "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$drift_display" "$COUNT_ACCESS" "$COUNT_INDEX"
-    line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %8s | %11s | %6s | %8s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECT. SOURCE INDEXES)
+    line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %${ELIGIBLE_WIDTH}s | %${CARDINALITY_WIDTH}s | %${RATIO_WIDTH}s | %${SELECTIVITY_WIDTH}s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECT. SOURCE INDEXES)
     printf '%s%s%s\n' "$COLOR_BOLD" "$line" "$COLOR_RESET"
     while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
         status=${status_error%%|*}; error=${status_error#*|}
@@ -433,7 +464,7 @@ format_table_report() {
         compact_source_label "$source"; truncate_text "$DISPLAY_SOURCE" "$SOURCE_WIDTH"; source=$TRUNCATED
         truncate_text "$indexes" "$INDEXES_WIDTH"; indexes=$TRUNCATED
         [[ "$pct" == N/A ]] || pct="${pct}%"
-        line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %8s | %11s | %6s | %8s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" "$column" "$type" "$eligible" "$card" "$ratio" "$pct" "$source" "$indexes")
+        line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %${ELIGIBLE_WIDTH}s | %${CARDINALITY_WIDTH}s | %${RATIO_WIDTH}s | %${SELECTIVITY_WIDTH}s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" "$column" "$type" "$eligible" "$card" "$ratio" "$pct" "$source" "$indexes")
         case "$status" in ERROR) row_color=$COLOR_RED ;; WARNING) row_color=$COLOR_YELLOW ;; *) [[ "$EFFECTIVE_MODE" == exact ]] && row_color=$COLOR_GREEN || row_color=$COLOR_CYAN ;; esac
         printf '%s%s%s\n' "$row_color" "$line" "$COLOR_RESET"
         [[ -z "$error" ]] || printf '%s  Error: %s%s\n' "$COLOR_RED" "$error" "$COLOR_RESET"
