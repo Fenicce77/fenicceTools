@@ -17,6 +17,7 @@ root-ke-primary
 root-ke-virtual
 root-mw-primary
 root-mw-virtual
+root-tz-primary
 root-tz-virtual
 root-ug-primary
 root-ug-virtual

@@ -149,7 +149,7 @@ fi
 ERR_FILE=$(mktemp /tmp/tmp_search.XXXXXX)
 trap "rm -f $ERR_FILE" EXIT
 
-BASEDIR="${HOME}/git/myrepos/myToolsBetika"
+BASEDIR="${HOME}/git/myrepos/fenicceTools"
 DBSERVERLIST="${BASEDIR}/lists/servers_login_list.hex.txt"
 
 if [[ ! -f "$DBSERVERLIST" ]]; then
