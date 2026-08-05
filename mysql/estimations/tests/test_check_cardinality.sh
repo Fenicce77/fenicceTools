@@ -66,7 +66,7 @@ test_mode_metadata_is_scan_safe() {
     run_scenario large -l x -d app -t users --mode auto --no-color; assert_status 0
     assert_query_not_contains 'cardinality:exact_count'; assert_query_not_contains 'cardinality:exact_column'; assert_contains "$OUTPUT" 'metadata'
     run_scenario missing_estimate -l x -d app -t users --mode auto --no-color; assert_status 0; assert_query_not_contains 'cardinality:exact_count'
-    run_scenario large -l x -d app -t users --mode metadata --no-color; assert_contains "$OUTPUT" 'tenant_id'; assert_contains "$OUTPUT" 'UNAVAILABLE'; assert_contains "$OUTPUT" 'N/A'
+    run_scenario large -l x -d app -t users --mode metadata --no-color; assert_contains "$OUTPUT" 'tenant_id'; assert_contains "$OUTPUT" 'UNAVAILABLE'; assert_contains "$OUTPUT" 'N/A'; assert_not_contains "$OUTPUT" 'Drift: N/A%'
 }
 
 test_exact_optimizer_shortcuts_and_predicates() {
@@ -95,13 +95,14 @@ test_analyze_guard_and_order() {
 
 test_export_is_clean_and_complete() {
     out="$TMP_ROOT/report.csv"
-    run_case export -l x -d app -t users --mode metadata -o "$out" --format csv
+    run_case export -l x -d 'app\path' -t users --mode metadata -o "$out" --format csv
     assert_status 0
     [[ -f "$out" ]] || fail 'CSV was not created'
     header=$(head -n 1 "$out")
     assert_contains "$header" '"database","table","engine","requested_mode","effective_mode"'; assert_contains "$header" 'existing_indexes'; assert_not_contains "$(LC_ALL=C tr -cd '\033' < "$out")" $'\033'
     expected='"database","table","engine","requested_mode","effective_mode","estimated_rows","exact_rows","drift_pct","column","data_type","nullable","eligible_rows","cardinality","ratio","selectivity_pct","source","source_index","existing_indexes","status","error"'
     [[ "$header" == "$expected" ]] || fail "unexpected CSV header: $header"
+    assert_contains "$(sed -n '2p' "$out")" '"app\path"'
 }
 
 test_partial_failure_continues_and_preserves_export() {
@@ -109,8 +110,8 @@ test_partial_failure_continues_and_preserves_export() {
     printf 'existing report\n' > "$out"
     run_scenario partial -l x -d app -t 'bad,good' --mode metadata -o "$out" --format csv --no-color
     assert_status 4
-    assert_query_contains "TABLE_NAME='bad'"
-    assert_query_contains "TABLE_NAME='good'"
+    assert_query_contains "TABLE_NAME=CONVERT(X'626164' USING utf8mb4)"
+    assert_query_contains "TABLE_NAME=CONVERT(X'676f6f64' USING utf8mb4)"
     [[ "$(<"$out")" == 'existing report' ]] || fail 'partial failure replaced existing report'
 }
 
@@ -135,8 +136,26 @@ test_exact_column_failure_continues_later_columns() {
 test_sql_literals_and_identifiers_are_escaped() {
     run_scenario exact_keys -l x -d "o'hare" -t 'odd`table' --mode exact --no-color
     assert_status 0
-    assert_query_contains "TABLE_SCHEMA='o''hare'"
+    assert_query_contains "TABLE_SCHEMA=CONVERT(X'6f2768617265' USING utf8mb4)"
     assert_query_contains 'FROM `o'"'"'hare`.`odd``table`'
+
+    run_scenario large -l x -d "x\\' OR 1=1 #" -t users --mode metadata --no-color
+    assert_status 0
+    assert_query_contains "CONVERT(X'785c27204f5220313d312023' USING utf8mb4)"
+    assert_query_not_contains ' OR 1=1 #'
+}
+
+test_metadata_index_list_raises_group_concat_limit() {
+    run_scenario large -l x -d app -t users --mode metadata --no-color
+    assert_status 0
+    assert_query_contains 'SET SESSION group_concat_max_len=@@max_allowed_packet'
+}
+
+test_output_file_rejects_directory_target() {
+    mkdir "$TMP_ROOT/output-dir"
+    run_case output_dir -l x -d app -t users -o "$TMP_ROOT/output-dir" --format csv --no-color
+    assert_status 2
+    assert_query_not_contains 'cardinality:connection'
 }
 
 test_empty_analyze_result_is_failure() {
@@ -174,6 +193,8 @@ run_test partial_atomic test_partial_failure_continues_and_preserves_export
 run_test analyze_continue test_analyze_failure_continues_without_retry
 run_test exact_continue test_exact_column_failure_continues_later_columns
 run_test sql_escaping test_sql_literals_and_identifiers_are_escaped
+run_test metadata_concat_limit test_metadata_index_list_raises_group_concat_limit
+run_test output_directory test_output_file_rejects_directory_target
 run_test analyze_empty test_empty_analyze_result_is_failure
 run_test alignment_fallback test_terminal_rows_align_within_fallback_width
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

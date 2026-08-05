@@ -20,7 +20,7 @@ scenario=${FAKE_MYSQL_SCENARIO:-baseline}
 
 case "$scenario:$query" in
     connection_error:*cardinality:connection*) printf '%s\n' 'access denied' >&2; exit 1 ;;
-    partial:*cardinality:table_metadata*bad*) printf '%s\n' 'metadata failed' >&2; exit 1 ;;
+    partial:*cardinality:table_metadata*"X'626164'"*) printf '%s\n' 'metadata failed' >&2; exit 1 ;;
     analyze_error:*ANALYZE\ LOCAL\ TABLE*bad*) printf '%s\n' 'app.bad\tanalyze\terror\tforced failure'; exit 0 ;;
     timeout:*cardinality:exact_column*slow_col*) printf '%s\n' 'maximum statement execution time exceeded' >&2; exit 1 ;;
 esac

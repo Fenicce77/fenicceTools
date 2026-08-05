@@ -140,6 +140,7 @@ validate_arguments() {
     case "$ENVIRONMENT" in ""|development|test|staging|production) : ;; *) cli_error "Invalid environment: $ENVIRONMENT" ;; esac
     case "$OUTPUT_FORMAT" in ""|csv|tsv) : ;; *) cli_error "Invalid output format: $OUTPUT_FORMAT" ;; esac
     [[ -z "$OUTPUT_FORMAT" || -n "$OUTPUT_FILE" ]] || cli_error "--format requires --output-file."
+    [[ -z "$OUTPUT_FILE" || ! -d "$OUTPUT_FILE" ]] || cli_error "Output file cannot be a directory: $OUTPUT_FILE"
     if [[ "$ANALYZE_TABLE" == true ]]; then
         case "$ENVIRONMENT" in
             development|test|staging) : ;;
@@ -189,7 +190,11 @@ EOF
     TABLES_REQUESTED=${#UNIQUE_TABLES[@]}
 }
 
-sql_literal() { SQL_LITERAL=$(printf '%s' "$1" | sed "s/'/''/g"); }
+sql_literal() {
+    local hex
+    hex=$(printf '%s' "$1" | od -An -tx1 | awk '{for (i=1; i<=NF; i++) printf "%s", $i}')
+    SQL_LITERAL="CONVERT(X'$hex' USING utf8mb4)"
+}
 quote_identifier() { QUOTED_IDENTIFIER=$(printf '%s' "$1" | sed 's/`/``/g'); QUOTED_IDENTIFIER="\`$QUOTED_IDENTIFIER\`"; }
 
 mysql_query() {
@@ -229,7 +234,7 @@ load_table_metadata() {
     local table=$1 sql
     sql_literal "$DATABASE"; local ldb=$SQL_LITERAL
     sql_literal "$table"; local ltable=$SQL_LITERAL
-    sql="SELECT /* cardinality:table_metadata */ ENGINE, COALESCE(CAST(TABLE_ROWS AS CHAR), 'NULL') FROM information_schema.TABLES WHERE TABLE_SCHEMA='$ldb' AND TABLE_NAME='$ltable';"
+    sql="SELECT /* cardinality:table_metadata */ ENGINE, COALESCE(CAST(TABLE_ROWS AS CHAR), 'NULL') FROM information_schema.TABLES WHERE TABLE_SCHEMA=$ldb AND TABLE_NAME=$ltable;"
     mysql_query "$sql" || return 1
     [[ -n "$MYSQL_OUTPUT" ]] || { MYSQL_ERROR="Table not found or inaccessible"; return 1; }
     TABLE_ENGINE=$(printf '%s\n' "$MYSQL_OUTPUT" | awk -F '\t' 'NR==1 {print $1}')
@@ -241,10 +246,11 @@ load_column_metadata() {
     local table=$1 sql
     sql_literal "$DATABASE"; local ldb=$SQL_LITERAL
     sql_literal "$table"; local ltable=$SQL_LITERAL
-    sql="WITH index_sizes AS (
+    sql="SET SESSION group_concat_max_len=@@max_allowed_packet;
+WITH index_sizes AS (
   SELECT TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, COUNT(*) AS index_columns
   FROM information_schema.STATISTICS
-  WHERE TABLE_SCHEMA='$ldb' AND TABLE_NAME='$ltable'
+  WHERE TABLE_SCHEMA=$ldb AND TABLE_NAME=$ltable
   GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
 ), ranked AS (
   SELECT s.COLUMN_NAME, s.CARDINALITY, s.INDEX_NAME, s.NON_UNIQUE,
@@ -258,7 +264,7 @@ load_column_metadata() {
     ON z.TABLE_SCHEMA=s.TABLE_SCHEMA AND z.TABLE_NAME=s.TABLE_NAME AND z.INDEX_NAME=s.INDEX_NAME
 ), index_lists AS (
   SELECT COLUMN_NAME, GROUP_CONCAT(CONCAT(INDEX_NAME,'(#',SEQ_IN_INDEX,')') ORDER BY INDEX_NAME,SEQ_IN_INDEX SEPARATOR ', ') AS indexes
-  FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='$ldb' AND TABLE_NAME='$ltable' GROUP BY COLUMN_NAME
+  FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=$ldb AND TABLE_NAME=$ltable GROUP BY COLUMN_NAME
 )
 SELECT /* cardinality:column_metadata */ c.COLUMN_NAME, c.COLUMN_TYPE, c.DATA_TYPE, c.IS_NULLABLE,
        CASE WHEN r.SEQ_IN_INDEX=1 THEN COALESCE(CAST(r.CARDINALITY AS CHAR),'N/A') ELSE 'N/A' END,
@@ -271,7 +277,7 @@ SELECT /* cardinality:column_metadata */ c.COLUMN_NAME, c.COLUMN_TYPE, c.DATA_TY
 FROM information_schema.COLUMNS c
 LEFT JOIN ranked r ON r.COLUMN_NAME=c.COLUMN_NAME AND r.rn=1
 LEFT JOIN index_lists i ON i.COLUMN_NAME=c.COLUMN_NAME
-WHERE c.TABLE_SCHEMA='$ldb' AND c.TABLE_NAME='$ltable' ORDER BY c.ORDINAL_POSITION;"
+WHERE c.TABLE_SCHEMA=$ldb AND c.TABLE_NAME=$ltable ORDER BY c.ORDINAL_POSITION;"
     mysql_query "$sql"
 }
 
@@ -371,7 +377,7 @@ refresh_terminal_width() {
 }
 
 format_table_report() {
-    local table=$1 row_color line column type nullable eligible card ratio pct source source_index indexes status_error status error
+    local table=$1 row_color line column type nullable eligible card ratio pct source source_index indexes status_error status error drift_display
     local column_width=15 type_width=14 source_width=17 indexes_width=10 extra share
     refresh_terminal_width
     extra=$((TERM_WIDTH - 120)); share=$((extra / 5))
@@ -380,7 +386,8 @@ format_table_report() {
     source_width=$((source_width + share))
     indexes_width=$((indexes_width + extra - (share * 3)))
     printf '\n%sTABLE%s: %s.%s\n' "$COLOR_BOLD" "$COLOR_RESET" "$DATABASE" "$table"
-    printf 'Engine: %s | Requested: %s | Effective: %s | Estimated rows: %s | Exact rows: %s | Drift: %s%% | Count access/key: %s/%s\n' "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$DRIFT_PCT" "$COUNT_ACCESS" "$COUNT_INDEX"
+    if [[ "$DRIFT_PCT" == N/A ]]; then drift_display=N/A; else drift_display="${DRIFT_PCT}%"; fi
+    printf 'Engine: %s | Requested: %s | Effective: %s | Estimated rows: %s | Exact rows: %s | Drift: %s | Count access/key: %s/%s\n' "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$drift_display" "$COUNT_ACCESS" "$COUNT_INDEX"
     line=$(printf "%-${column_width}s | %-${type_width}s | %13s | %11s | %8s | %11s | %-${source_width}s | %-${indexes_width}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECTIVITY SOURCE INDEXES)
     printf '%s%s%s\n' "$COLOR_BOLD" "$line" "$COLOR_RESET"
     while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
@@ -395,8 +402,11 @@ format_table_report() {
     done < "$RESULT_FILE"
 }
 
-csv_escape() { CSV_ESCAPED=$(awk -v value="$1" 'BEGIN {gsub(/"/,"\"\"",value); printf "\"%s\"",value}'); }
-tsv_sanitize() { TSV_SANITIZED=$(awk -v value="$1" 'BEGIN {gsub(/[\t\r\n]/," ",value); printf "%s",value}'); }
+csv_escape() {
+    CSV_ESCAPED=${1//\"/\"\"}
+    CSV_ESCAPED="\"$CSV_ESCAPED\""
+}
+tsv_sanitize() { TSV_SANITIZED=$(printf '%s' "$1" | tr '\t\r\n' '   '); }
 export_row() {
     local first=true value
     if [[ "$OUTPUT_FORMAT" == csv ]]; then
@@ -423,7 +433,7 @@ append_export_results() {
 }
 
 process_table() {
-    local table=$1 warned=false column_failed=false
+    local table=$1 warned=false
     if [[ "$ANALYZE_TABLE" == true ]] && ! run_analyze_table "$table"; then TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
     if ! load_table_metadata "$table"; then printf '%sERROR%s: %s.%s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" "$MYSQL_ERROR" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
     choose_effective_mode
@@ -442,7 +452,6 @@ process_table() {
     format_table_report "$table"
     append_export_results "$table"
     if grep -F 'ERROR|' "$RESULT_FILE" >/dev/null 2>&1; then
-        column_failed=true
         TABLES_FAILED=$((TABLES_FAILED + 1))
         FINAL_STATUS=4
     else
