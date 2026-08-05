@@ -372,8 +372,13 @@ refresh_terminal_width() {
 
 format_table_report() {
     local table=$1 row_color line column type nullable eligible card ratio pct source source_index indexes status_error status error
-    local column_width=18 type_width=16 source_width=22 indexes_width
-    refresh_terminal_width; indexes_width=$((TERM_WIDTH - 18 - 16 - 13 - 11 - 8 - 11 - 22 - 28)); [[ $indexes_width -ge 18 ]] || indexes_width=18
+    local column_width=15 type_width=14 source_width=17 indexes_width=10 extra share
+    refresh_terminal_width
+    extra=$((TERM_WIDTH - 120)); share=$((extra / 5))
+    column_width=$((column_width + share))
+    type_width=$((type_width + share))
+    source_width=$((source_width + share))
+    indexes_width=$((indexes_width + extra - (share * 3)))
     printf '\n%sTABLE%s: %s.%s\n' "$COLOR_BOLD" "$COLOR_RESET" "$DATABASE" "$table"
     printf 'Engine: %s | Requested: %s | Effective: %s | Estimated rows: %s | Exact rows: %s | Drift: %s%% | Count access/key: %s/%s\n' "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$DRIFT_PCT" "$COUNT_ACCESS" "$COUNT_INDEX"
     line=$(printf "%-${column_width}s | %-${type_width}s | %13s | %11s | %8s | %11s | %-${source_width}s | %-${indexes_width}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECTIVITY SOURCE INDEXES)
@@ -390,8 +395,8 @@ format_table_report() {
     done < "$RESULT_FILE"
 }
 
-csv_escape() { CSV_ESCAPED=$(printf '%s' "$1" | awk '{gsub(/"/,"\"\""); printf "\"%s\"",$0}'); }
-tsv_sanitize() { TSV_SANITIZED=$(printf '%s' "$1" | awk '{gsub(/[\t\r\n]/," "); printf "%s",$0}'); }
+csv_escape() { CSV_ESCAPED=$(awk -v value="$1" 'BEGIN {gsub(/"/,"\"\"",value); printf "\"%s\"",value}'); }
+tsv_sanitize() { TSV_SANITIZED=$(awk -v value="$1" 'BEGIN {gsub(/[\t\r\n]/," ",value); printf "%s",value}'); }
 export_row() {
     local first=true value
     if [[ "$OUTPUT_FORMAT" == csv ]]; then
@@ -418,7 +423,7 @@ append_export_results() {
 }
 
 process_table() {
-    local table=$1 warned=false
+    local table=$1 warned=false column_failed=false
     if [[ "$ANALYZE_TABLE" == true ]] && ! run_analyze_table "$table"; then TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
     if ! load_table_metadata "$table"; then printf '%sERROR%s: %s.%s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" "$MYSQL_ERROR" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
     choose_effective_mode
@@ -432,10 +437,17 @@ process_table() {
     fi
     if ! load_column_metadata "$table"; then printf '%sERROR%s: column metadata failed for %s.%s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" "$MYSQL_ERROR" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
     COLUMN_METADATA=$MYSQL_OUTPUT
+    if [[ -z "$COLUMN_METADATA" ]]; then printf '%sERROR%s: no column metadata returned for %s.%s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
     analyze_columns "$table"
     format_table_report "$table"
     append_export_results "$table"
-    TABLES_COMPLETED=$((TABLES_COMPLETED + 1))
+    if grep -F 'ERROR|' "$RESULT_FILE" >/dev/null 2>&1; then
+        column_failed=true
+        TABLES_FAILED=$((TABLES_FAILED + 1))
+        FINAL_STATUS=4
+    else
+        TABLES_COMPLETED=$((TABLES_COMPLETED + 1))
+    fi
     if [[ "$warned" == true ]] || grep -F 'WARNING|' "$RESULT_FILE" >/dev/null 2>&1; then TABLES_WARNED=$((TABLES_WARNED + 1)); fi
 }
 
@@ -456,7 +468,10 @@ main() {
     local table
     for table in "${UNIQUE_TABLES[@]}"; do process_table "$table"; done
     printf '\nSummary: requested=%s completed=%s warned=%s failed=%s exact=%s metadata=%s\n' "$TABLES_REQUESTED" "$TABLES_COMPLETED" "$TABLES_WARNED" "$TABLES_FAILED" "$TABLES_EXACT" "$TABLES_METADATA"
-    if [[ "$FINAL_STATUS" -eq 0 && -n "$OUTPUT_FILE" ]]; then mv "$EXPORT_TEMP" "$OUTPUT_FILE"; EXPORT_TEMP=""; printf 'Report: %s\n' "$OUTPUT_FILE"; fi
+    if [[ "$FINAL_STATUS" -eq 0 && -n "$OUTPUT_FILE" ]]; then
+        if ! mv "$EXPORT_TEMP" "$OUTPUT_FILE"; then runtime_error 3 "Unable to publish report: $OUTPUT_FILE"; fi
+        EXPORT_TEMP=""; printf 'Report: %s\n' "$OUTPUT_FILE"
+    fi
     exit "$FINAL_STATUS"
 }
 

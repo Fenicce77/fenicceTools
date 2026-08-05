@@ -128,6 +128,8 @@ test_exact_column_failure_continues_later_columns() {
     assert_query_contains '`slow_col`'
     assert_query_contains '`after_slow`'
     assert_contains "$OUTPUT" 'maximum statement execution time exceeded'
+    assert_contains "$OUTPUT" 'completed=0'
+    assert_contains "$OUTPUT" 'failed=1'
 }
 
 test_sql_literals_and_identifiers_are_escaped() {
@@ -135,6 +137,23 @@ test_sql_literals_and_identifiers_are_escaped() {
     assert_status 0
     assert_query_contains "TABLE_SCHEMA='o''hare'"
     assert_query_contains 'FROM `o'"'"'hare`.`odd``table`'
+}
+
+test_empty_analyze_result_is_failure() {
+    run_scenario analyze_empty -l x -d app -t users --mode metadata --analyze-table --environment test --no-color
+    assert_status 4
+    assert_contains "$OUTPUT" 'failed=1'
+}
+
+test_terminal_rows_align_within_fallback_width() {
+    run_case alignment -l x -d app -t users --mode metadata --no-color
+    assert_status 0
+    header=$(printf '%s\n' "$OUTPUT" | awk '/^COLUMN[ ]+\|/ {print; exit}')
+    row=$(printf '%s\n' "$OUTPUT" | awk '/^id[ ]+\|/ {print; exit}')
+    [[ ${#header} -le 120 && ${#row} -le 120 ]] || fail "fallback rows exceed 120 columns: ${#header}/${#row}"
+    header_pipes=$(printf '%s' "$header" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    row_pipes=$(printf '%s' "$row" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    [[ "$header_pipes" == "$row_pipes" ]] || fail "separator offsets differ: $header_pipes / $row_pipes"
 }
 
 run_test() {
@@ -155,5 +174,7 @@ run_test partial_atomic test_partial_failure_continues_and_preserves_export
 run_test analyze_continue test_analyze_failure_continues_without_retry
 run_test exact_continue test_exact_column_failure_continues_later_columns
 run_test sql_escaping test_sql_literals_and_identifiers_are_escaped
+run_test analyze_empty test_empty_analyze_result_is_failure
+run_test alignment_fallback test_terminal_rows_align_within_fallback_width
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

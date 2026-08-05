@@ -27,7 +27,9 @@ esac
 
 case "$query" in
     *cardinality:connection*) printf '1\t8.4.6\tfake-db.example\n' ;;
-    *ANALYZE\ LOCAL\ TABLE*) printf 'app.table\tanalyze\tstatus\tOK\n' ;;
+    *ANALYZE\ LOCAL\ TABLE*)
+        [[ "$scenario" == analyze_empty ]] || printf 'app.table\tanalyze\tstatus\tOK\n'
+        ;;
     *cardinality:table_metadata*)
         case "$scenario" in
             large) printf 'InnoDB\t900000\n' ;;
