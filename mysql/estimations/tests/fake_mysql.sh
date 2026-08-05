@@ -37,6 +37,7 @@ case "$query" in
             empty) printf 'InnoDB\t0\n' ;;
             threshold) printf 'InnoDB\t500000\n' ;;
             drift) printf 'InnoDB\t50\n' ;;
+            layout_divergent) printf 'InnoDB\t1\n' ;;
             *) printf 'InnoDB\t100\n' ;;
         esac
         ;;
@@ -58,6 +59,20 @@ case "$query" in
                 [[ "$scenario" != timeout ]] || printf 'slow_col\tvarchar(20)\tvarchar\tYES\t20\tN/A\tUNAVAILABLE\t0\t---\n'
                 [[ "$scenario" != timeout ]] || printf 'after_slow\tint\tint\tYES\t10\tN/A\tUNAVAILABLE\t0\t---\n'
                 ;;
+            layout_common)
+                printf 'vendor_transaction_id\tvarchar(128)\tvarchar\tNO\t100\tuk_vendor_transaction\tUNIQUE_SINGLE\t1\tidx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)\n'
+                printf 'processing_status\ttinyint unsigned\ttinyint\tYES\t20\tidx_aviator_status_created\tLEADING_SINGLE\t1\tidx_aviator_status_created(#1)\n'
+                printf 'wallet_reference\tvarchar(128)\tvarchar\tYES\t95\tuk_wallet_reference\tUNIQUE_SINGLE\t1\tuk_wallet_reference(#1)\n'
+                ;;
+            layout_borrow)
+                printf 'applied_multiplier_reference_key\tvarchar(128)\tvarchar\tNO\t100\tuk_applied_multiplier_reference\tUNIQUE_SINGLE\t1\tidx_aviator_applied_multiplier_reference(#1)\n'
+                ;;
+            layout_numeric)
+                printf 'vendor_transaction_id\tvarchar(128)\tvarchar\tNO\t123456789\tuk_vendor_transaction\tUNIQUE_SINGLE\t1\tidx_aviator_vendor_transaction(#1)\n'
+                ;;
+            layout_divergent)
+                printf 'vendor_transaction_id\tvarchar(128)\tvarchar\tNO\t18446744073709551615\tidx_divergent_cardinality\tLEADING_SINGLE\t1\tidx_divergent_cardinality(#1)\n'
+                ;;
             *) printf 'id\tbigint\tbigint\tNO\t100\tPRIMARY\tPRIMARY_SINGLE\t1\tPRIMARY(#1)\n' ;;
         esac
         ;;
@@ -68,7 +83,11 @@ case "$query" in
         printf '1\tSIMPLE\tusers\tNULL\tindex\tNULL\tidx_small\t8\tNULL\t100\t100.00\tUsing index\n'
         ;;
     *cardinality:exact_count*)
-        case "$scenario" in empty) printf '0\n' ;; *) printf '100\n' ;; esac
+        case "$scenario" in
+            empty) printf '0\n' ;;
+            layout_numeric) printf '123456789\n' ;;
+            *) printf '100\n' ;;
+        esac
         ;;
     *cardinality:exact_unique_nullable*) printf '95\n' ;;
     *cardinality:exact_column*) printf '40\t80\n' ;;

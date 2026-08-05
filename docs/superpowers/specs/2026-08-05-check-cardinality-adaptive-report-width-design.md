@@ -24,7 +24,8 @@ rules, CSV/TSV schemas, and untruncated export values remain unchanged.
 
 ## Fallback Geometry
 
-At 120 columns, the table uses these widths:
+At 120 columns, the table uses these minimum numeric widths for ordinary
+values:
 
 ```text
 COLUMN       24
@@ -40,12 +41,15 @@ TOTAL       120
 ```
 
 The shorter `SELECT.` heading is display-only; exported field names do not
-change.
+change. Eligible-row and cardinality counts are never truncated. When either
+count exceeds its minimum, the formatter measures and expands that numeric
+field. Extremely large derived ratios and selectivity percentages use compact
+scientific notation in the terminal; exports retain their full decimal values.
 
 ## Adaptive Allocation
 
 Before rendering, the formatter scans the normalized per-table result file to
-find the longest column name.
+find the longest column name and the visible width of every numeric field.
 
 1. `TYPE` and `SOURCE` remain 12 and 10 characters at the fallback.
 2. `COLUMN` starts at 24 characters.
@@ -54,7 +58,11 @@ find the longest column name.
 4. `INDEXES` must never shrink below 12 characters.
 5. At terminal widths above 120, the additional text budget goes to `INDEXES`.
    `COLUMN` still grows only as required by actual names, up to 32 characters.
-6. Values exceeding their allocated widths continue to use deterministic
+6. Count expansion takes width from `INDEXES`, then `COLUMN`, `TYPE`, and
+   `SOURCE`, in that order. Counts are preserved and `INDEXES` remains at least
+   12 characters. After the normal display minima are exhausted, text fields
+   may shrink to three characters before any width can become negative.
+7. Text values exceeding their allocated widths continue to use deterministic
    `...` truncation, so no table row exceeds the chosen terminal width.
 
 This guarantees full display for ordinary names such as
@@ -102,6 +110,11 @@ Tests will verify:
 - `vendor_transaction_id` is not truncated;
 - `INDEXES` retains at least 20 visible characters when column names fit in 24;
 - a 25-32 character column borrows width while leaving at least 12 for indexes;
+- 9-digit and larger numeric values remain complete without moving separators
+  or exceeding the fallback width;
+- divergent metadata ratios use terminal-only scientific notation while raw
+  counts and exported metrics remain complete;
+- terminal widths above 120 allocate their surplus to the index list;
 - compact source labels are rendered without `source_index` duplication;
 - header and row separators have identical visible offsets;
 - truncation remains deterministic;
