@@ -384,26 +384,56 @@ refresh_terminal_width() {
     return 0
 }
 
+calculate_report_widths() {
+    local max_column=0 name name_length text_budget desired_column
+
+    while IFS=$'\t' read -r name _; do
+        name_length=${#name}
+        if [[ "$name_length" -gt "$max_column" ]]; then max_column=$name_length; fi
+    done < "$RESULT_FILE"
+
+    TYPE_WIDTH=12
+    SOURCE_WIDTH=10
+    desired_column=24
+    if [[ "$max_column" -gt "$desired_column" ]]; then desired_column=$max_column; fi
+    [[ "$desired_column" -le 32 ]] || desired_column=32
+
+    text_budget=$((TERM_WIDTH - 54))
+    COLUMN_WIDTH=$desired_column
+    INDEXES_WIDTH=$((text_budget - TYPE_WIDTH - SOURCE_WIDTH - COLUMN_WIDTH))
+    if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
+        COLUMN_WIDTH=$((COLUMN_WIDTH - (12 - INDEXES_WIDTH)))
+        INDEXES_WIDTH=12
+    fi
+}
+
+compact_source_label() {
+    case "$1" in
+        exact_key_shortcut) DISPLAY_SOURCE=exact/key ;;
+        exact_unique_nullable) DISPLAY_SOURCE=exact/uniq ;;
+        exact) DISPLAY_SOURCE=exact ;;
+        metadata) DISPLAY_SOURCE=metadata ;;
+        UNAVAILABLE) DISPLAY_SOURCE=unavail ;;
+        *) DISPLAY_SOURCE=$1 ;;
+    esac
+}
+
 format_table_report() {
     local table=$1 row_color line column type nullable eligible card ratio pct source source_index indexes status_error status error drift_display
-    local column_width=15 type_width=14 source_width=17 indexes_width=10 extra share
     refresh_terminal_width
-    extra=$((TERM_WIDTH - 120)); share=$((extra / 5))
-    column_width=$((column_width + share))
-    type_width=$((type_width + share))
-    source_width=$((source_width + share))
-    indexes_width=$((indexes_width + extra - (share * 3)))
+    calculate_report_widths
     printf '\n%sTABLE%s: %s.%s\n' "$COLOR_BOLD" "$COLOR_RESET" "$DATABASE" "$table"
     if [[ "$DRIFT_PCT" == N/A ]]; then drift_display=N/A; else drift_display="${DRIFT_PCT}%"; fi
     printf 'Engine: %s | Requested: %s | Effective: %s | Estimated rows: %s | Exact rows: %s | Drift: %s | Count access/key: %s/%s\n' "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$drift_display" "$COUNT_ACCESS" "$COUNT_INDEX"
-    line=$(printf "%-${column_width}s | %-${type_width}s | %13s | %11s | %8s | %11s | %-${source_width}s | %-${indexes_width}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECTIVITY SOURCE INDEXES)
+    line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %8s | %11s | %6s | %8s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECT. SOURCE INDEXES)
     printf '%s%s%s\n' "$COLOR_BOLD" "$line" "$COLOR_RESET"
     while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
         status=${status_error%%|*}; error=${status_error#*|}
-        truncate_text "$column" "$column_width"; column=$TRUNCATED; truncate_text "$type" "$type_width"; type=$TRUNCATED
-        truncate_text "$source:$source_index" "$source_width"; source=$TRUNCATED; truncate_text "$indexes" "$indexes_width"; indexes=$TRUNCATED
+        truncate_text "$column" "$COLUMN_WIDTH"; column=$TRUNCATED; truncate_text "$type" "$TYPE_WIDTH"; type=$TRUNCATED
+        compact_source_label "$source"; truncate_text "$DISPLAY_SOURCE" "$SOURCE_WIDTH"; source=$TRUNCATED
+        truncate_text "$indexes" "$INDEXES_WIDTH"; indexes=$TRUNCATED
         [[ "$pct" == N/A ]] || pct="${pct}%"
-        line=$(printf "%-${column_width}s | %-${type_width}s | %13s | %11s | %8s | %11s | %-${source_width}s | %-${indexes_width}s" "$column" "$type" "$eligible" "$card" "$ratio" "$pct" "$source" "$indexes")
+        line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %8s | %11s | %6s | %8s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" "$column" "$type" "$eligible" "$card" "$ratio" "$pct" "$source" "$indexes")
         case "$status" in ERROR) row_color=$COLOR_RED ;; WARNING) row_color=$COLOR_YELLOW ;; *) [[ "$EFFECTIVE_MODE" == exact ]] && row_color=$COLOR_GREEN || row_color=$COLOR_CYAN ;; esac
         printf '%s%s%s\n' "$row_color" "$line" "$COLOR_RESET"
         [[ -z "$error" ]] || printf '%s  Error: %s%s\n' "$COLOR_RED" "$error" "$COLOR_RESET"

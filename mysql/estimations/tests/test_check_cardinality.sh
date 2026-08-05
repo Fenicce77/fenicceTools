@@ -51,6 +51,11 @@ run_scenario() {
     STATUS=$?
     set -e
 }
+report_line() {
+    local pattern=$1
+    REPORT_LINE=$(printf '%s\n' "$OUTPUT" | awk -v pattern="$pattern" 'index($0, pattern) == 1 {print; exit}')
+    [[ -n "$REPORT_LINE" ]] || fail "$LAST_CASE: report row not found for $pattern"
+}
 
 test_cli_help_and_compatibility() {
     run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'
@@ -124,7 +129,7 @@ test_mode_metadata_is_scan_safe() {
     run_scenario large -l x -d app -t users --mode auto --no-color; assert_status 0
     assert_query_not_contains 'cardinality:exact_count'; assert_query_not_contains 'cardinality:exact_column'; assert_contains "$OUTPUT" 'metadata'
     run_scenario missing_estimate -l x -d app -t users --mode auto --no-color; assert_status 0; assert_query_not_contains 'cardinality:exact_count'
-    run_scenario large -l x -d app -t users --mode metadata --no-color; assert_contains "$OUTPUT" 'tenant_id'; assert_contains "$OUTPUT" 'UNAVAILABLE'; assert_contains "$OUTPUT" 'N/A'; assert_not_contains "$OUTPUT" 'Drift: N/A%'
+    run_scenario large -l x -d app -t users --mode metadata --no-color; assert_contains "$OUTPUT" 'tenant_id'; assert_contains "$OUTPUT" 'unavail'; assert_contains "$OUTPUT" 'N/A'; assert_not_contains "$OUTPUT" 'Drift: N/A%'
 }
 
 test_exact_optimizer_shortcuts_and_predicates() {
@@ -233,6 +238,53 @@ test_terminal_rows_align_within_fallback_width() {
     [[ "$header_pipes" == "$row_pipes" ]] || fail "separator offsets differ: $header_pipes / $row_pipes"
 }
 
+test_adaptive_report_prioritizes_column_and_indexes() {
+    run_scenario layout_common -l x -d app -t transactions --mode exact --no-color
+    assert_status 0
+
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    report_line 'vendor_transaction_id'
+    vendor_row=$REPORT_LINE
+    report_line 'processing_status'
+    status_row=$REPORT_LINE
+
+    [[ ${#header} -eq 120 && ${#vendor_row} -eq 120 && ${#status_row} -eq 120 ]] ||
+        fail "adaptive fallback rows are not exactly 120 columns"
+    assert_contains "$vendor_row" 'vendor_transaction_id'
+    assert_not_contains "$vendor_row" 'vendor_transaction...'
+    assert_contains "$vendor_row" 'exact/key'
+    assert_not_contains "$vendor_row" 'exact_key_shortcut'
+    assert_contains "$vendor_row" 'idx_aviator_vendo...'
+    assert_contains "$OUTPUT" 'exact/uniq'
+
+    header_pipes=$(printf '%s' "$header" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    row_pipes=$(printf '%s' "$vendor_row" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+    [[ "$header_pipes" == "$row_pipes" ]] ||
+        fail "adaptive separator offsets differ: $header_pipes / $row_pipes"
+}
+
+test_adaptive_report_borrows_from_indexes_for_long_columns() {
+    run_scenario layout_borrow -l x -d app -t transactions --mode exact --no-color
+    assert_status 0
+    report_line 'applied_multiplier_reference'
+    assert_contains "$REPORT_LINE" 'applied_multiplier_reference'
+    assert_contains "$REPORT_LINE" 'idx_aviator_a...'
+    [[ ${#REPORT_LINE} -eq 120 ]] || fail "borrowed-width row is not 120 columns"
+}
+
+test_adaptive_report_does_not_compact_exports() {
+    out="$TMP_ROOT/layout.csv"
+    run_scenario layout_common -l x -d app -t transactions --mode exact \
+        --no-color -o "$out" --format csv
+    assert_status 0
+    row=$(sed -n '2p' "$out")
+    assert_contains "$row" '"vendor_transaction_id"'
+    assert_contains "$row" '"exact_key_shortcut"'
+    assert_contains "$row" '"uk_vendor_transaction"'
+    assert_contains "$row" '"idx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)"'
+}
+
 run_test() {
     local name=$1 fn=$2
     [[ -z "${TEST_FILTER:-}" || "$name" == *"$TEST_FILTER"* ]] || return 0
@@ -256,5 +308,8 @@ run_test metadata_concat_limit test_metadata_index_list_raises_group_concat_limi
 run_test output_directory test_output_file_rejects_directory_target
 run_test analyze_empty test_empty_analyze_result_is_failure
 run_test alignment_fallback test_terminal_rows_align_within_fallback_width
+run_test adaptive_priority test_adaptive_report_prioritizes_column_and_indexes
+run_test adaptive_borrow test_adaptive_report_borrows_from_indexes_for_long_columns
+run_test adaptive_export test_adaptive_report_does_not_compact_exports
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
