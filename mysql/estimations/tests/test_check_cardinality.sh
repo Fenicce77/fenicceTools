@@ -16,6 +16,11 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 assert_status() { [[ "$STATUS" -eq "$1" ]] || fail "$LAST_CASE: expected status $1, got $STATUS: $OUTPUT"; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "$LAST_CASE: missing [$2] in [$1]"; }
 assert_not_contains() { [[ "$1" != *"$2"* ]] || fail "$LAST_CASE: unexpected [$2]"; }
+assert_error_count() {
+    local count
+    count=$(printf '%s\n' "$1" | grep -c '^ERROR:' || true)
+    [[ "$count" -eq "$2" ]] || fail "$LAST_CASE: expected $2 ERROR lines, got $count: $1"
+}
 assert_query_contains() { grep -F "$1" "$QUERY_LOG" >/dev/null 2>&1 || fail "$LAST_CASE: query log missing [$1]"; }
 assert_query_not_contains() { if grep -F "$1" "$QUERY_LOG" >/dev/null 2>&1; then fail "$LAST_CASE: query log contains [$1]"; fi; }
 assert_has_ansi() {
@@ -131,7 +136,7 @@ END { print type_value "\t" indexes_value }
 }
 
 test_cli_help_and_compatibility() {
-    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'; assert_contains "$STRIPPED_OUTPUT" '--terminal-width'; assert_contains "$STRIPPED_OUTPUT" 'minimum: 120'
+    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'; assert_contains "$STRIPPED_OUTPUT" '--terminal-width'; assert_contains "$STRIPPED_OUTPUT" 'range: 120-10000'
     run_case help --help; assert_status 0
     run_case short -l test -d app -t users -p 500000 -r 10 --no-color; assert_status 0
     run_case long --login-path=test --database=app --tables=users --performance-threshold=500000 --drift-threshold=10 --mode=auto --max-execution-time-ms=30000 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
@@ -184,11 +189,16 @@ test_help_is_always_colored_and_runtime_no_color_is_preserved() {
 test_cli_validation_and_client_failures() {
     run_case missing --login-path; assert_status 2
     run_case width_missing -l x -d app -t users --terminal-width; assert_status 2; assert_contains "$OUTPUT" 'Option --terminal-width requires a value.'
-    run_case width_text -l x -d app -t users --terminal-width wide; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'
-    run_case width_small -l x -d app -t users --terminal-width 119; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'
+    run_case width_text -l x -d app -t users --terminal-width wide; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'
+    run_case width_small -l x -d app -t users --terminal-width 119; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'
     run_case width_empty -l x -d app -t users --terminal-width=; assert_status 2; assert_contains "$OUTPUT" 'Option --terminal-width requires a value.'
     run_case width_padded -l x -d app -t users --terminal-width 000120 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
-    run_case width_padded_small -l x -d app -t users --terminal-width 000119; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'; assert_not_contains "$OUTPUT" 'value too great for base'
+    run_case width_padded_small -l x -d app -t users --terminal-width 000119; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_not_contains "$OUTPUT" 'value too great for base'
+    run_case width_min -l x -d app -t users --terminal-width=120 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
+    run_case width_max -l x -d app -t users --terminal-width=10000 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
+    run_case width_above_max -l x -d app -t users --terminal-width 10001; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
+    run_case width_wraparound -l x -d app -t users --terminal-width 18446744073709551736; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
+    run_case width_very_long -l x -d app -t users --terminal-width 999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
     run_case bad_mode -l x -d app -t users --mode unsafe; assert_status 2
     run_case bad_number -l x -d app -t users -p -1; assert_status 2
     run_case format_without_file -l x -d app -t users --format csv; assert_status 2

@@ -11,10 +11,10 @@
 ## Global Constraints
 
 - Preserve `set -euo pipefail` and macOS Bash 3.2/Linux compatibility.
-- Accept `--terminal-width N` only for integer values greater than or equal to 120; invalid explicit values exit 2.
+- Accept `--terminal-width N` only for integer values from 120 through 10000; invalid explicit values exit 2 without shell arithmetic diagnostics.
 - Width precedence is: explicit override, active `stty size`, exported `COLUMNS`, `tput cols`, fallback 120.
-- Ignore invalid automatic candidates and continue to the next source.
-- Do not cap valid widths; a 180-column terminal produces 180-character table lines.
+- Ignore automatic candidates outside 120-10000 and continue to the next source.
+- Support selected widths from 120 through 10000; a 180-column terminal produces 180-character table lines.
 - Preserve the 120-column minimum and `INDEXES_WIDTH >= 12`.
 - Keep ANSI sequences outside padded values and retain the existing TTY-only color policy.
 - Do not change SQL, cardinality calculations, status/error semantics, wrapping rules, ENUM normalization, or CSV/TSV output.
@@ -40,7 +40,7 @@ Extend `test_cli_help_and_compatibility`:
 ```bash
 strip_ansi "$OUTPUT"
 assert_contains "$STRIPPED_OUTPUT" '--terminal-width'
-assert_contains "$STRIPPED_OUTPUT" 'minimum: 120'
+assert_contains "$STRIPPED_OUTPUT" 'range: 120-10000'
 run_case width_long --login-path=test --database=app --tables=users \
     --terminal-width=160 --mysql-bin="$FAKE_MYSQL" --no-color
 assert_status 0
@@ -54,10 +54,10 @@ assert_status 2
 assert_contains "$OUTPUT" 'Option --terminal-width requires a value.'
 run_case width_text -l x -d app -t users --terminal-width wide
 assert_status 2
-assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'
+assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'
 run_case width_small -l x -d app -t users --terminal-width 119
 assert_status 2
-assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'
+assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'
 run_case width_empty -l x -d app -t users --terminal-width=
 assert_status 2
 assert_contains "$OUTPUT" 'Option --terminal-width requires a value.'
@@ -121,7 +121,7 @@ TERMINAL_WIDTH_OPTION=""
 Under `Output and runtime` in `show_help`, add:
 
 ```bash
-printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--terminal-width' "$help_reset" "$help_value" 'N' "$help_reset" 'Override terminal width (minimum: 120)'
+printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--terminal-width' "$help_reset" "$help_value" 'N' "$help_reset" 'Override terminal width (range: 120-10000)'
 ```
 
 Add an example before the blank line terminating `Examples`:
@@ -147,11 +147,28 @@ Add parser branches before `--no-color`:
 Add validation after execution-time validation:
 
 ```bash
+normalize_terminal_width() {
+    NORMALIZED_TERMINAL_WIDTH=$1
+    [[ "$NORMALIZED_TERMINAL_WIDTH" =~ ^[0-9]+$ ]] || return 1
+    while [[ "$NORMALIZED_TERMINAL_WIDTH" == 0* && ${#NORMALIZED_TERMINAL_WIDTH} -gt 1 ]]; do
+        NORMALIZED_TERMINAL_WIDTH=${NORMALIZED_TERMINAL_WIDTH#0}
+    done
+    case ${#NORMALIZED_TERMINAL_WIDTH} in
+        3)
+            case "$NORMALIZED_TERMINAL_WIDTH" in
+                12[0-9]|1[3-9][0-9]|[2-9][0-9][0-9]) return 0 ;;
+            esac
+            ;;
+        4) return 0 ;;
+        5) [[ "$NORMALIZED_TERMINAL_WIDTH" == 10000 ]] && return 0 ;;
+    esac
+    return 1
+}
+
 if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
-    [[ "$TERMINAL_WIDTH_OPTION" =~ ^[0-9]+$ ]] ||
-        cli_error "Terminal width must be an integer greater than or equal to 120."
-    [[ "$TERMINAL_WIDTH_OPTION" -ge 120 ]] ||
-        cli_error "Terminal width must be an integer greater than or equal to 120."
+    normalize_terminal_width "$TERMINAL_WIDTH_OPTION" ||
+        cli_error "Terminal width must be an integer from 120 to 10000."
+    TERMINAL_WIDTH_OPTION=$NORMALIZED_TERMINAL_WIDTH
 fi
 ```
 
@@ -325,7 +342,7 @@ Replace the current automatic probe with:
 
 ```bash
 valid_automatic_width() {
-    [[ "$1" =~ ^[0-9]+$ && "$1" -ge 120 ]]
+    normalize_terminal_width "$1"
 }
 
 read_stty_columns() {
@@ -354,18 +371,18 @@ refresh_terminal_width() {
 
     read_stty_columns
     if valid_automatic_width "$DETECTED_COLUMNS"; then
-        TERM_WIDTH=$DETECTED_COLUMNS
+        TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH
         return 0
     fi
 
     cols=${COLUMNS:-}
     if valid_automatic_width "$cols"; then
-        TERM_WIDTH=$cols
+        TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH
         return 0
     fi
 
     cols=$(tput cols 2>/dev/null || true)
-    if valid_automatic_width "$cols"; then TERM_WIDTH=$cols; fi
+    if valid_automatic_width "$cols"; then TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH; fi
     return 0
 }
 ```

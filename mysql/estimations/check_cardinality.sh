@@ -81,7 +81,7 @@ show_help() {
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-o, --output-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Atomic CSV or TSV report'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--format' "$help_reset" "$help_value" 'csv|tsv' "$help_reset" 'Report format; inferred from extension when omitted'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--mysql-bin' "$help_reset" "$help_value" 'PATH' "$help_reset" 'Local MySQL client executable (optional)'
-    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--terminal-width' "$help_reset" "$help_value" 'N' "$help_reset" 'Override terminal width (minimum: 120)'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--terminal-width' "$help_reset" "$help_value" 'N' "$help_reset" 'Override terminal width (range: 120-10000)'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--no-color' "$help_reset" "$help_value" '' "$help_reset" 'Disable ANSI colors'
     printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-h, --help' "$help_reset" "$help_value" '' "$help_reset" 'Show this help and exit'
 
@@ -101,6 +101,24 @@ show_help() {
 cli_error() { printf 'ERROR: %s\nTry --help for usage.\n' "$1" >&2; exit 2; }
 runtime_error() { printf 'ERROR: %s\n' "$2" >&2; exit "$1"; }
 require_value() { [[ -n "${2-}" && "${2-}" != -* ]] || cli_error "Option $1 requires a value."; }
+
+normalize_terminal_width() {
+    NORMALIZED_TERMINAL_WIDTH=$1
+    [[ "$NORMALIZED_TERMINAL_WIDTH" =~ ^[0-9]+$ ]] || return 1
+    while [[ "$NORMALIZED_TERMINAL_WIDTH" == 0* && ${#NORMALIZED_TERMINAL_WIDTH} -gt 1 ]]; do
+        NORMALIZED_TERMINAL_WIDTH=${NORMALIZED_TERMINAL_WIDTH#0}
+    done
+    case ${#NORMALIZED_TERMINAL_WIDTH} in
+        3)
+            case "$NORMALIZED_TERMINAL_WIDTH" in
+                12[0-9]|1[3-9][0-9]|[2-9][0-9][0-9]) return 0 ;;
+            esac
+            ;;
+        4) return 0 ;;
+        5) [[ "$NORMALIZED_TERMINAL_WIDTH" == 10000 ]] && return 0 ;;
+    esac
+    return 1
+}
 
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
@@ -157,11 +175,9 @@ validate_arguments() {
     [[ "$DRIFT_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]] || cli_error "Drift threshold must be a nonnegative number."
     [[ "$MAX_EXECUTION_TIME_MS" =~ ^[0-9]+$ && "$MAX_EXECUTION_TIME_MS" -gt 0 ]] || cli_error "Execution timeout must be a positive integer."
     if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
-        [[ "$TERMINAL_WIDTH_OPTION" =~ ^[0-9]+$ ]] ||
-            cli_error "Terminal width must be an integer greater than or equal to 120."
-        TERMINAL_WIDTH_OPTION=$((10#$TERMINAL_WIDTH_OPTION))
-        [[ "$TERMINAL_WIDTH_OPTION" -ge 120 ]] ||
-            cli_error "Terminal width must be an integer greater than or equal to 120."
+        normalize_terminal_width "$TERMINAL_WIDTH_OPTION" ||
+            cli_error "Terminal width must be an integer from 120 to 10000."
+        TERMINAL_WIDTH_OPTION=$NORMALIZED_TERMINAL_WIDTH
     fi
     case "$REQUESTED_MODE" in auto|metadata|exact) : ;; *) cli_error "Invalid mode: $REQUESTED_MODE" ;; esac
     case "$ENVIRONMENT" in ""|development|test|staging|production) : ;; *) cli_error "Invalid environment: $ENVIRONMENT" ;; esac
@@ -479,7 +495,7 @@ refresh_terminal_width() {
     fi
     local cols
     cols=$(tput cols 2>/dev/null || true)
-    if [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 120 ]]; then TERM_WIDTH=$cols; fi
+    if normalize_terminal_width "$cols"; then TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH; fi
     return 0
 }
 

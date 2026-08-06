@@ -25,12 +25,13 @@ their inputs. The correction belongs in terminal-width acquisition.
 Add this optional long parameter:
 
 ```text
---terminal-width N    Override detected terminal width; minimum: 120
+--terminal-width N    Override detected terminal width; range: 120-10000
 ```
 
-`N` must be an integer greater than or equal to 120. Missing, non-numeric, and
-smaller values are CLI errors, use exit status 2, and retain the existing
-`Try --help for usage.` guidance.
+`N` must be an integer from 120 through 10000. Missing, non-numeric,
+out-of-range, and arbitrarily long values are CLI errors, use exit status 2,
+and retain the existing `Try --help for usage.` guidance. Validation and
+leading-zero normalization must not use unbounded shell arithmetic.
 
 The always-colored help includes the option under `Output and runtime` and adds
 an example showing `--terminal-width 180`. No short form is added, avoiding new
@@ -46,8 +47,8 @@ For each table report, width selection follows this order:
 4. A numeric value reported by `tput cols`.
 5. The existing 120-column fallback.
 
-Automatic candidates are accepted only when they are integers greater than or
-equal to 120. Zero, malformed, unavailable, and narrower results are ignored
+Automatic candidates are accepted only when they are integers from 120 through
+10000. Zero, malformed, unavailable, narrower, and wider results are ignored
 and detection continues to the next source. The explicit override is validated
 during argument parsing and therefore fails instead of being silently ignored.
 
@@ -56,10 +57,11 @@ output is a TTY but input is redirected, the detector attempts to read
 `/dev/tty`. Expected failures are suppressed and safely handled under
 `set -euo pipefail`. No GNU-specific `stty` flags are used.
 
-The selected width is not capped: a 180-column terminal produces 180-character
-table lines and gives the surplus to the existing adaptive `INDEXES` allocation.
-The 120-column minimum remains necessary to preserve complete numeric cells,
-the existing text-field floors, and `INDEXES_WIDTH >= 12`.
+The supported selected-width range is 120 through 10000: a 180-column terminal
+produces 180-character table lines and gives the surplus to the existing
+adaptive `INDEXES` allocation. The 120-column minimum remains necessary to
+preserve complete numeric cells, the existing text-field floors, and
+`INDEXES_WIDTH >= 12`.
 
 ## Rendering and Data Behavior
 
@@ -92,16 +94,17 @@ when the process has no controlling TTY.
 
 The shell integration suite will verify:
 
-- help documents `--terminal-width` and its minimum;
+- help documents `--terminal-width` and its 120-10000 range;
 - `--terminal-width 160` produces exactly 160-character header, primary, and
   continuation lines;
 - the explicit override takes precedence over `stty`, `COLUMNS`, and `tput`;
-- missing, non-numeric, and values below 120 return exit status 2;
+- missing, non-numeric, out-of-range, and arbitrarily long explicit values
+  return exit status 2 without shell arithmetic diagnostics;
 - a 180-column pseudo-terminal with no exported `COLUMNS` selects 180 through
   `stty`, including on the macOS path where captured `tput` reports its default;
 - a numeric exported `COLUMNS` value is used when active TTY geometry is
   unavailable;
-- invalid automatic candidates fall through to the next source;
+- automatic candidates outside 120-10000 fall through to the next source;
 - non-TTY execution with no valid candidate retains the 120-column fallback;
 - wrapped values remain lossless and separators remain aligned at detected and
   overridden widths;
