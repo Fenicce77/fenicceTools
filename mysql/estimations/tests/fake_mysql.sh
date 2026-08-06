@@ -77,6 +77,12 @@ case "$query" in
                 printf 'unsigned_counter\tbigint unsigned\tbigint\tNO\t100\tidx_counter\tLEADING_SINGLE\t1\tidx_counter(#1)\n'
                 printf "state\tenum('new','processing','complete')\tenum\tNO\t3\tidx_state\tLEADING_SINGLE\t1\tidx_state(#1)\n"
                 ;;
+            layout_wrapped)
+                printf "flags\tset('audit','billing','security','reporting')\tset\tYES\t8\tidx_flags\tLEADING_SINGLE\t1\tidx_flags(#1), idx_flags_created_at(#1), uk_flags_external_reference(#1)\n"
+                ;;
+            layout_oversized_index)
+                printf 'external_reference\tvarchar(128)\tvarchar\tNO\t100\tidx_external\tLEADING_SINGLE\t1\tidx_external_reference_identifier_exceeding_the_terminal_cell_width(#1)\n'
+                ;;
             *) printf 'id\tbigint\tbigint\tNO\t100\tPRIMARY\tPRIMARY_SINGLE\t1\tPRIMARY(#1)\n' ;;
         esac
         ;;

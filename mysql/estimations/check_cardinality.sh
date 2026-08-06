@@ -384,6 +384,74 @@ normalize_display_type() {
         *) DISPLAY_TYPE=$raw_type ;;
     esac
 }
+wrap_type() {
+    local text=$1 width=$2 awk_program
+    awk_program='
+{ text = $0 }
+END {
+    rest = text
+    while (length(rest) > width) {
+        cut = width
+        for (i = width; i >= 1; i--) {
+            if (substr(rest, i, 1) == ",") { cut = i; break }
+        }
+        print substr(rest, 1, cut)
+        rest = substr(rest, cut + 1)
+    }
+    print rest
+}'
+    WRAPPED_TEXT=$(printf '%s\n' "$text" | awk -v width="$width" "$awk_program")
+}
+
+wrap_indexes() {
+    local text=$1 width=$2 awk_program
+    awk_program='
+function emit_long(value,    chunk) {
+    while (length(value) > width) {
+        print substr(value, 1, width)
+        value = substr(value, width + 1)
+    }
+    return value
+}
+{ text = $0 }
+END {
+    count = split(text, items, /, /)
+    line = ""
+    for (n = 1; n <= count; n++) {
+        entry = items[n] (n < count ? "," : "")
+        if (length(entry) > width) {
+            if (line != "") { print line; line = "" }
+            entry = emit_long(entry)
+        }
+        if (entry == "") continue
+        candidate = (line == "" ? entry : line " " entry)
+        if (length(candidate) <= width) line = candidate
+        else { if (line != "") print line; line = entry }
+    }
+    if (line != "" || text == "") print line
+}'
+    WRAPPED_TEXT=$(printf '%s\n' "$text" | awk -v width="$width" "$awk_program")
+}
+
+pop_wrapped_line() {
+    local queue=$1
+    case "$queue" in
+        *$'\n'*)
+            WRAPPED_HEAD=${queue%%$'\n'*}
+            WRAPPED_TAIL=${queue#*$'\n'}
+            ;;
+        *)
+            WRAPPED_HEAD=$queue
+            WRAPPED_TAIL=""
+            ;;
+    esac
+}
+
+render_report_line() {
+    RENDERED_LINE=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %${ELIGIBLE_WIDTH}s | %${CARDINALITY_WIDTH}s | %${RATIO_WIDTH}s | %${SELECTIVITY_WIDTH}s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" \
+        "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8")
+}
+
 refresh_terminal_width() {
     TERM_WIDTH=120
     local cols
@@ -516,21 +584,24 @@ compact_derived_metric() {
 
 format_table_report() {
     local table=$1 row_color line column type nullable eligible card ratio pct source source_index indexes status_error status error drift_display
+    local type_lines index_lines type_queue index_queue type_fragment index_fragment first_line
     refresh_terminal_width
     calculate_report_widths
     printf '\n%sTABLE%s: %s.%s\n' "$COLOR_BOLD" "$COLOR_RESET" "$DATABASE" "$table"
     if [[ "$DRIFT_PCT" == N/A ]]; then drift_display=N/A; else drift_display="${DRIFT_PCT}%"; fi
     printf 'Engine: %s | Requested: %s | Effective: %s | Estimated rows: %s | Exact rows: %s | Drift: %s | Count access/key: %s/%s\n' "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$drift_display" "$COUNT_ACCESS" "$COUNT_INDEX"
-    line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %${ELIGIBLE_WIDTH}s | %${CARDINALITY_WIDTH}s | %${RATIO_WIDTH}s | %${SELECTIVITY_WIDTH}s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECT. SOURCE INDEXES)
+    render_report_line COLUMN TYPE ELIGIBLE CARDINALITY RATIO SELECT. SOURCE INDEXES
+    line=$RENDERED_LINE
     printf '%s%s%s\n' "$COLOR_BOLD" "$line" "$COLOR_RESET"
     while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
         status=${status_error%%|*}; error=${status_error#*|}
         normalize_display_type "$type"
-        type=$DISPLAY_TYPE
-        truncate_text "$type" "$TYPE_WIDTH"; type=$TRUNCATED
+        wrap_type "$DISPLAY_TYPE" "$TYPE_WIDTH"
+        type_lines=$WRAPPED_TEXT
+        wrap_indexes "$indexes" "$INDEXES_WIDTH"
+        index_lines=$WRAPPED_TEXT
         truncate_text "$column" "$COLUMN_WIDTH"; column=$TRUNCATED
         compact_source_label "$source"; truncate_text "$DISPLAY_SOURCE" "$SOURCE_WIDTH"; source=$TRUNCATED
-        truncate_text "$indexes" "$INDEXES_WIDTH"; indexes=$TRUNCATED
         compact_derived_metric "$ratio" "" "$RATIO_WIDTH"; ratio=$DISPLAY_METRIC
         if [[ "$pct" == N/A ]]; then
             compact_derived_metric "$pct" "" "$SELECTIVITY_WIDTH"
@@ -538,9 +609,26 @@ format_table_report() {
             compact_derived_metric "$pct" "%" "$SELECTIVITY_WIDTH"
         fi
         pct=$DISPLAY_METRIC
-        line=$(printf "%-${COLUMN_WIDTH}s | %-${TYPE_WIDTH}s | %${ELIGIBLE_WIDTH}s | %${CARDINALITY_WIDTH}s | %${RATIO_WIDTH}s | %${SELECTIVITY_WIDTH}s | %-${SOURCE_WIDTH}s | %-${INDEXES_WIDTH}s" "$column" "$type" "$eligible" "$card" "$ratio" "$pct" "$source" "$indexes")
         case "$status" in ERROR) row_color=$COLOR_RED ;; WARNING) row_color=$COLOR_YELLOW ;; *) [[ "$EFFECTIVE_MODE" == exact ]] && row_color=$COLOR_GREEN || row_color=$COLOR_CYAN ;; esac
-        printf '%s%s%s\n' "$row_color" "$line" "$COLOR_RESET"
+        type_queue=$type_lines
+        index_queue=$index_lines
+        first_line=true
+        while [[ -n "$type_queue" || -n "$index_queue" || "$first_line" == true ]]; do
+            pop_wrapped_line "$type_queue"
+            type_fragment=$WRAPPED_HEAD
+            type_queue=$WRAPPED_TAIL
+            pop_wrapped_line "$index_queue"
+            index_fragment=$WRAPPED_HEAD
+            index_queue=$WRAPPED_TAIL
+
+            if [[ "$first_line" == true ]]; then
+                render_report_line "$column" "$type_fragment" "$eligible" "$card" "$ratio" "$pct" "$source" "$index_fragment"
+                first_line=false
+            else
+                render_report_line "" "$type_fragment" "" "" "" "" "" "$index_fragment"
+            fi
+            printf '%s%s%s\n' "$row_color" "$RENDERED_LINE" "$COLOR_RESET"
+        done
         [[ -z "$error" ]] || printf '%s  Error: %s%s\n' "$COLOR_RED" "$error" "$COLOR_RESET"
     done < "$RESULT_FILE"
 }

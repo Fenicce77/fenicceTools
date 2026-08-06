@@ -57,6 +57,53 @@ report_line() {
     [[ -n "$REPORT_LINE" ]] || fail "$LAST_CASE: report row not found for $pattern"
 }
 
+pipe_offsets() {
+    PIPE_OFFSETS=$(printf '%s' "$1" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+}
+
+assert_table_lines_aligned() {
+    local header_offsets line offsets
+    report_line 'COLUMN'
+    pipe_offsets "$REPORT_LINE"
+    header_offsets=$PIPE_OFFSETS
+    while IFS= read -r line; do
+        case "$line" in
+            *' | '*' | '*' | '*' | '*' | '*' | '*' | '*)
+                pipe_offsets "$line"
+                offsets=$PIPE_OFFSETS
+                [[ "$offsets" == "$header_offsets" ]] || fail "$LAST_CASE: misaligned line [$line]"
+                [[ ${#line} -le 120 ]] || fail "$LAST_CASE: line exceeds 120 columns"
+                ;;
+        esac
+    done <<EOF
+$OUTPUT
+EOF
+}
+
+report_row_fragments() {
+    local column=$1 fragments
+    fragments=$(printf '%s\n' "$OUTPUT" | awk -v column="$column" '
+function rtrim(value) { sub(/[ ]+$/, "", value); return value }
+function collect(    cells, count, type_fragment, index_fragment) {
+    count = split($0, cells, "|")
+    if (count != 8) return
+    type_fragment = rtrim(substr(cells[2], 2))
+    index_fragment = rtrim(substr(cells[8], 2))
+    if (type_fragment != "") type_value = type_value type_fragment
+    if (index_fragment != "") {
+        if (indexes_value != "" && indexes_value ~ /,$/) indexes_value = indexes_value " "
+        indexes_value = indexes_value index_fragment
+    }
+}
+index($0, column) == 1 { active = 1; collect(); next }
+active && $0 ~ /^[ ]*\|/ { collect(); next }
+active { exit }
+END { print type_value "\t" indexes_value }
+')
+    RECONSTRUCTED_TYPE=${fragments%%$'\t'*}
+    RECONSTRUCTED_INDEXES=${fragments#*$'\t'}
+}
+
 test_cli_help_and_compatibility() {
     run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'
     run_case help --help; assert_status 0
@@ -255,7 +302,9 @@ test_adaptive_report_prioritizes_column_and_indexes() {
     assert_not_contains "$vendor_row" 'vendor_transaction...'
     assert_contains "$vendor_row" 'exact/key'
     assert_not_contains "$vendor_row" 'exact_key_shortcut'
-    assert_contains "$vendor_row" 'idx_aviator_v...'
+    report_row_fragments vendor_transaction_id
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)' ]] ||
+        fail "adaptive_priority: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
     assert_contains "$OUTPUT" 'exact/uniq'
 
     header_pipes=$(printf '%s' "$header" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
@@ -269,7 +318,9 @@ test_adaptive_report_borrows_from_indexes_for_long_columns() {
     assert_status 0
     report_line 'applied_multiplier_reference_key'
     assert_contains "$REPORT_LINE" 'applied_multiplier_reference_key'
-    assert_contains "$REPORT_LINE" 'idx_aviat...'
+    report_row_fragments applied_multiplier_reference_key
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_aviator_applied_multiplier_reference(#1)' ]] ||
+        fail "adaptive_borrow: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
     [[ ${#REPORT_LINE} -eq 120 ]] || fail "borrowed-width row is not 120 columns"
 }
 
@@ -294,7 +345,9 @@ test_adaptive_report_assigns_wider_terminal_to_indexes() {
     [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide header is not 160 columns: ${#REPORT_LINE}"
     report_line 'vendor_transaction_id'
     [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide row is not 160 columns: ${#REPORT_LINE}"
-    assert_contains "$REPORT_LINE" 'idx_aviator_vendor_transaction(#1), uk_vendor_transac...'
+    report_row_fragments vendor_transaction_id
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)' ]] ||
+        fail "adaptive_wide: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
 }
 
 test_adaptive_report_handles_divergent_metadata_metrics() {
@@ -340,6 +393,30 @@ test_report_displays_full_types_and_compacts_enum() {
         fail "type layout is not exactly 120 columns"
 }
 
+test_report_wraps_type_and_all_index_entries() {
+    run_scenario layout_wrapped -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    assert_not_contains "$OUTPUT" '...'
+    report_row_fragments flags
+    [[ "$RECONSTRUCTED_TYPE" == "set('audit','billing','security','reporting')" ]] ||
+        fail "layout_wrapped: reconstructed type [$RECONSTRUCTED_TYPE]"
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_flags(#1), idx_flags_created_at(#1), uk_flags_external_reference(#1)' ]] ||
+        fail "layout_wrapped: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
+    assert_table_lines_aligned
+}
+
+test_report_hard_wraps_one_oversized_index() {
+    run_scenario layout_oversized_index -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    assert_not_contains "$OUTPUT" '...'
+    report_row_fragments external_reference
+    [[ "$RECONSTRUCTED_TYPE" == 'varchar(128)' ]] ||
+        fail "layout_oversized_index: reconstructed type [$RECONSTRUCTED_TYPE]"
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_external_reference_identifier_exceeding_the_terminal_cell_width(#1)' ]] ||
+        fail "layout_oversized_index: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
+    assert_table_lines_aligned
+}
+
 run_test() {
     local name=$1 fn=$2
     [[ -z "${TEST_FILTER:-}" || "$name" == *"$TEST_FILTER"* ]] || return 0
@@ -370,5 +447,7 @@ run_test adaptive_wide test_adaptive_report_assigns_wider_terminal_to_indexes
 run_test adaptive_divergent test_adaptive_report_handles_divergent_metadata_metrics
 run_test adaptive_export test_adaptive_report_does_not_compact_exports
 run_test wrapped_type_display test_report_displays_full_types_and_compacts_enum
+run_test wrapped_multiline test_report_wraps_type_and_all_index_entries
+run_test wrapped_oversized_index test_report_hard_wraps_one_oversized_index
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
