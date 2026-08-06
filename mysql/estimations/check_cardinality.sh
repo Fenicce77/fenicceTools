@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Sixteen digits permits practical zero-padded values while bounding normalization work.
+TERMINAL_WIDTH_RAW_MAX_LENGTH=16
+
 initialize_defaults() {
     MYSQL_BIN_ENV=${MYSQL_BIN:-}
     LOGIN_PATH=""
@@ -16,6 +19,7 @@ initialize_defaults() {
     OUTPUT_FILE=""
     OUTPUT_FORMAT=""
     MYSQL_BIN_OPTION=""
+    TERMINAL_WIDTH_OPTION=""
     MYSQL_BIN=""
     NO_COLOR=false
     TABLE_ARRAY=()
@@ -80,6 +84,7 @@ show_help() {
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-o, --output-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Atomic CSV or TSV report'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--format' "$help_reset" "$help_value" 'csv|tsv' "$help_reset" 'Report format; inferred from extension when omitted'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--mysql-bin' "$help_reset" "$help_value" 'PATH' "$help_reset" 'Local MySQL client executable (optional)'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--terminal-width' "$help_reset" "$help_value" 'N' "$help_reset" 'Override terminal width (range: 120-10000)'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--no-color' "$help_reset" "$help_value" '' "$help_reset" 'Disable ANSI colors'
     printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-h, --help' "$help_reset" "$help_value" '' "$help_reset" 'Show this help and exit'
 
@@ -87,7 +92,8 @@ show_help() {
     printf '  %s%s -l devel-mysql01 -d app -t users,orders%s\n' "$help_value" "$0" "$help_reset"
     printf '  %s%s --login-path=staging-mysql --database=app --tables=users --mode=metadata%s\n' "$help_value" "$0" "$help_reset"
     printf '  %s%s -l test-mysql -d app -t users --mode exact -o cardinality.csv%s\n' "$help_value" "$0" "$help_reset"
-    printf '  %s%s -l test-mysql -d app -t users --analyze-table --environment test%s\n\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --analyze-table --environment test%s\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --terminal-width 180%s\n\n' "$help_value" "$0" "$help_reset"
 
     printf '%sSafety:%s\n' "$help_section" "$help_reset"
     printf '%s  metadata mode never scans user tables. ANALYZE requires explicit development,%s\n' "$help_warning" "$help_reset"
@@ -98,6 +104,25 @@ show_help() {
 cli_error() { printf 'ERROR: %s\nTry --help for usage.\n' "$1" >&2; exit 2; }
 runtime_error() { printf 'ERROR: %s\n' "$2" >&2; exit "$1"; }
 require_value() { [[ -n "${2-}" && "${2-}" != -* ]] || cli_error "Option $1 requires a value."; }
+
+normalize_terminal_width() {
+    NORMALIZED_TERMINAL_WIDTH=$1
+    [[ "$NORMALIZED_TERMINAL_WIDTH" =~ ^[0-9]+$ ]] || return 1
+    [[ ${#NORMALIZED_TERMINAL_WIDTH} -le "$TERMINAL_WIDTH_RAW_MAX_LENGTH" ]] || return 1
+    while [[ "$NORMALIZED_TERMINAL_WIDTH" == 0* && ${#NORMALIZED_TERMINAL_WIDTH} -gt 1 ]]; do
+        NORMALIZED_TERMINAL_WIDTH=${NORMALIZED_TERMINAL_WIDTH#0}
+    done
+    case ${#NORMALIZED_TERMINAL_WIDTH} in
+        3)
+            case "$NORMALIZED_TERMINAL_WIDTH" in
+                12[0-9]|1[3-9][0-9]|[2-9][0-9][0-9]) return 0 ;;
+            esac
+            ;;
+        4) return 0 ;;
+        5) [[ "$NORMALIZED_TERMINAL_WIDTH" == 10000 ]] && return 0 ;;
+    esac
+    return 1
+}
 
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
@@ -128,6 +153,15 @@ parse_arguments() {
             --format) require_value "$1" "${2-}"; OUTPUT_FORMAT=$2; shift ;;
             --mysql-bin=*) MYSQL_BIN_OPTION=${1#*=} ;;
             --mysql-bin) require_value "$1" "${2-}"; MYSQL_BIN_OPTION=$2; shift ;;
+            --terminal-width=*)
+                TERMINAL_WIDTH_OPTION=${1#*=}
+                [[ -n "$TERMINAL_WIDTH_OPTION" ]] || cli_error "Option --terminal-width requires a value."
+                ;;
+            --terminal-width)
+                require_value "$1" "${2-}"
+                TERMINAL_WIDTH_OPTION=$2
+                shift
+                ;;
             --no-color) NO_COLOR=true ;;
             --) shift; break ;;
             -*) cli_error "Unknown option: $1" ;;
@@ -144,6 +178,11 @@ validate_arguments() {
     [[ "$PERF_THRESHOLD" =~ ^[0-9]+$ && "$PERF_THRESHOLD" -gt 0 ]] || cli_error "Performance threshold must be a positive integer."
     [[ "$DRIFT_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]] || cli_error "Drift threshold must be a nonnegative number."
     [[ "$MAX_EXECUTION_TIME_MS" =~ ^[0-9]+$ && "$MAX_EXECUTION_TIME_MS" -gt 0 ]] || cli_error "Execution timeout must be a positive integer."
+    if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
+        normalize_terminal_width "$TERMINAL_WIDTH_OPTION" ||
+            cli_error "Terminal width must be an integer from 120 to 10000."
+        TERMINAL_WIDTH_OPTION=$NORMALIZED_TERMINAL_WIDTH
+    fi
     case "$REQUESTED_MODE" in auto|metadata|exact) : ;; *) cli_error "Invalid mode: $REQUESTED_MODE" ;; esac
     case "$ENVIRONMENT" in ""|development|test|staging|production) : ;; *) cli_error "Invalid environment: $ENVIRONMENT" ;; esac
     case "$OUTPUT_FORMAT" in ""|csv|tsv) : ;; *) cli_error "Invalid output format: $OUTPUT_FORMAT" ;; esac
@@ -452,11 +491,48 @@ render_report_line() {
         "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8")
 }
 
+valid_automatic_width() {
+    normalize_terminal_width "$1"
+}
+
+read_stty_columns() {
+    local size="" stty_rows=""
+    DETECTED_COLUMNS=""
+    if [[ -t 0 ]]; then
+        size=$(stty size 2>/dev/null || true)
+    elif [[ -t 1 ]]; then
+        size=$(stty size 2>/dev/null </dev/tty || true)
+    fi
+    if [[ -n "$size" ]]; then
+        read -r stty_rows DETECTED_COLUMNS <<EOF
+$size
+EOF
+    fi
+}
+
 refresh_terminal_width() {
+    local cols=""
     TERM_WIDTH=120
-    local cols
+
+    if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
+        TERM_WIDTH=$TERMINAL_WIDTH_OPTION
+        return 0
+    fi
+
+    read_stty_columns
+    if valid_automatic_width "$DETECTED_COLUMNS"; then
+        TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH
+        return 0
+    fi
+
+    cols=${COLUMNS:-}
+    if valid_automatic_width "$cols"; then
+        TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH
+        return 0
+    fi
+
     cols=$(tput cols 2>/dev/null || true)
-    if [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 120 ]]; then TERM_WIDTH=$cols; fi
+    if valid_automatic_width "$cols"; then TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH; fi
     return 0
 }
 
