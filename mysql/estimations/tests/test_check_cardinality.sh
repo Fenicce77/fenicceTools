@@ -131,10 +131,11 @@ END { print type_value "\t" indexes_value }
 }
 
 test_cli_help_and_compatibility() {
-    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'
+    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'; assert_contains "$STRIPPED_OUTPUT" '--terminal-width'; assert_contains "$STRIPPED_OUTPUT" 'minimum: 120'
     run_case help --help; assert_status 0
     run_case short -l test -d app -t users -p 500000 -r 10 --no-color; assert_status 0
     run_case long --login-path=test --database=app --tables=users --performance-threshold=500000 --drift-threshold=10 --mode=auto --max-execution-time-ms=30000 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
+    run_case width_long --login-path=test --database=app --tables=users --terminal-width=160 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
 }
 
 test_help_is_always_colored_and_runtime_no_color_is_preserved() {
@@ -182,6 +183,12 @@ test_help_is_always_colored_and_runtime_no_color_is_preserved() {
 
 test_cli_validation_and_client_failures() {
     run_case missing --login-path; assert_status 2
+    run_case width_missing -l x -d app -t users --terminal-width; assert_status 2; assert_contains "$OUTPUT" 'Option --terminal-width requires a value.'
+    run_case width_text -l x -d app -t users --terminal-width wide; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'
+    run_case width_small -l x -d app -t users --terminal-width 119; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'
+    run_case width_empty -l x -d app -t users --terminal-width=; assert_status 2; assert_contains "$OUTPUT" 'Option --terminal-width requires a value.'
+    run_case width_padded -l x -d app -t users --terminal-width 000120 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
+    run_case width_padded_small -l x -d app -t users --terminal-width 000119; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer greater than or equal to 120.'; assert_not_contains "$OUTPUT" 'value too great for base'
     run_case bad_mode -l x -d app -t users --mode unsafe; assert_status 2
     run_case bad_number -l x -d app -t users -p -1; assert_status 2
     run_case format_without_file -l x -d app -t users --format csv; assert_status 2
@@ -500,6 +507,33 @@ $OUTPUT
 EOF
 }
 
+test_terminal_width_override_controls_geometry() {
+    COLUMNS=180 run_scenario layout_wrapped -l x -d app -t transactions \
+        --mode metadata --no-color --terminal-width 160
+    assert_status 0
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    [[ ${#header} -eq 160 ]] || fail "override header is not 160 columns"
+    pipe_offsets "$header"
+    header_offsets=$PIPE_OFFSETS
+    while IFS= read -r line; do
+        case "$line" in
+            *' | '*' | '*' | '*' | '*' | '*' | '*' | '*)
+                [[ ${#line} -eq 160 ]] || fail "override physical line is not 160 columns"
+                pipe_offsets "$line"
+                [[ "$PIPE_OFFSETS" == "$header_offsets" ]] || fail 'override separator offsets differ'
+                ;;
+        esac
+    done <<EOF
+$OUTPUT
+EOF
+    report_row_fragments flags
+    [[ "$RECONSTRUCTED_TYPE" == "set('audit','billing','security','reporting')" ]] ||
+        fail "override reconstructed type [$RECONSTRUCTED_TYPE]"
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_flags(#1), idx_flags_created_at(#1), uk_flags_external_reference(#1)' ]] ||
+        fail "override reconstructed indexes [$RECONSTRUCTED_INDEXES]"
+}
+
 test_wrapped_display_does_not_change_exports() {
     out="$TMP_ROOT/wrapped.csv"
     run_scenario layout_types -l x -d app -t transactions --mode metadata \
@@ -549,6 +583,7 @@ run_test wrapped_multiline test_report_wraps_type_and_all_index_entries
 run_test wrapped_oversized_index test_report_hard_wraps_one_oversized_index
 run_test wrapped_color_error test_wrapped_rows_preserve_color_and_error_order
 run_test wrapped_wide test_wrapped_report_honors_wide_terminal
+run_test terminal_width_override test_terminal_width_override_controls_geometry
 run_test wrapped_export test_wrapped_display_does_not_change_exports
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

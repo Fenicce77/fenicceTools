@@ -16,6 +16,7 @@ initialize_defaults() {
     OUTPUT_FILE=""
     OUTPUT_FORMAT=""
     MYSQL_BIN_OPTION=""
+    TERMINAL_WIDTH_OPTION=""
     MYSQL_BIN=""
     NO_COLOR=false
     TABLE_ARRAY=()
@@ -80,6 +81,7 @@ show_help() {
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '-o, --output-file' "$help_reset" "$help_value" 'FILE' "$help_reset" 'Atomic CSV or TSV report'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--format' "$help_reset" "$help_value" 'csv|tsv' "$help_reset" 'Report format; inferred from extension when omitted'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--mysql-bin' "$help_reset" "$help_value" 'PATH' "$help_reset" 'Local MySQL client executable (optional)'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--terminal-width' "$help_reset" "$help_value" 'N' "$help_reset" 'Override terminal width (minimum: 120)'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--no-color' "$help_reset" "$help_value" '' "$help_reset" 'Disable ANSI colors'
     printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-h, --help' "$help_reset" "$help_value" '' "$help_reset" 'Show this help and exit'
 
@@ -87,7 +89,8 @@ show_help() {
     printf '  %s%s -l devel-mysql01 -d app -t users,orders%s\n' "$help_value" "$0" "$help_reset"
     printf '  %s%s --login-path=staging-mysql --database=app --tables=users --mode=metadata%s\n' "$help_value" "$0" "$help_reset"
     printf '  %s%s -l test-mysql -d app -t users --mode exact -o cardinality.csv%s\n' "$help_value" "$0" "$help_reset"
-    printf '  %s%s -l test-mysql -d app -t users --analyze-table --environment test%s\n\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --analyze-table --environment test%s\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --terminal-width 180%s\n\n' "$help_value" "$0" "$help_reset"
 
     printf '%sSafety:%s\n' "$help_section" "$help_reset"
     printf '%s  metadata mode never scans user tables. ANALYZE requires explicit development,%s\n' "$help_warning" "$help_reset"
@@ -128,6 +131,15 @@ parse_arguments() {
             --format) require_value "$1" "${2-}"; OUTPUT_FORMAT=$2; shift ;;
             --mysql-bin=*) MYSQL_BIN_OPTION=${1#*=} ;;
             --mysql-bin) require_value "$1" "${2-}"; MYSQL_BIN_OPTION=$2; shift ;;
+            --terminal-width=*)
+                TERMINAL_WIDTH_OPTION=${1#*=}
+                [[ -n "$TERMINAL_WIDTH_OPTION" ]] || cli_error "Option --terminal-width requires a value."
+                ;;
+            --terminal-width)
+                require_value "$1" "${2-}"
+                TERMINAL_WIDTH_OPTION=$2
+                shift
+                ;;
             --no-color) NO_COLOR=true ;;
             --) shift; break ;;
             -*) cli_error "Unknown option: $1" ;;
@@ -144,6 +156,13 @@ validate_arguments() {
     [[ "$PERF_THRESHOLD" =~ ^[0-9]+$ && "$PERF_THRESHOLD" -gt 0 ]] || cli_error "Performance threshold must be a positive integer."
     [[ "$DRIFT_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]] || cli_error "Drift threshold must be a nonnegative number."
     [[ "$MAX_EXECUTION_TIME_MS" =~ ^[0-9]+$ && "$MAX_EXECUTION_TIME_MS" -gt 0 ]] || cli_error "Execution timeout must be a positive integer."
+    if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
+        [[ "$TERMINAL_WIDTH_OPTION" =~ ^[0-9]+$ ]] ||
+            cli_error "Terminal width must be an integer greater than or equal to 120."
+        TERMINAL_WIDTH_OPTION=$((10#$TERMINAL_WIDTH_OPTION))
+        [[ "$TERMINAL_WIDTH_OPTION" -ge 120 ]] ||
+            cli_error "Terminal width must be an integer greater than or equal to 120."
+    fi
     case "$REQUESTED_MODE" in auto|metadata|exact) : ;; *) cli_error "Invalid mode: $REQUESTED_MODE" ;; esac
     case "$ENVIRONMENT" in ""|development|test|staging|production) : ;; *) cli_error "Invalid environment: $ENVIRONMENT" ;; esac
     case "$OUTPUT_FORMAT" in ""|csv|tsv) : ;; *) cli_error "Invalid output format: $OUTPUT_FORMAT" ;; esac
@@ -454,6 +473,10 @@ render_report_line() {
 
 refresh_terminal_width() {
     TERM_WIDTH=120
+    if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
+        TERM_WIDTH=$TERMINAL_WIDTH_OPTION
+        return 0
+    fi
     local cols
     cols=$(tput cols 2>/dev/null || true)
     if [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 120 ]]; then TERM_WIDTH=$cols; fi
