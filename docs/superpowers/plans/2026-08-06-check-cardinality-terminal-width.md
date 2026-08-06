@@ -12,6 +12,7 @@
 
 - Preserve `set -euo pipefail` and macOS Bash 3.2/Linux compatibility.
 - Accept `--terminal-width N` only for integer values from 120 through 10000; invalid explicit values exit 2 without shell arithmetic diagnostics.
+- Limit raw numeric terminal-width input to 16 characters before zero trimming; this retains 11 practical leading zeros beyond the five-digit maximum while bounding normalization work.
 - Width precedence is: explicit override, active `stty size`, exported `COLUMNS`, `tput cols`, fallback 120.
 - Ignore automatic candidates outside 120-10000 and continue to the next source.
 - Support selected widths from 120 through 10000; a 180-column terminal produces 180-character table lines.
@@ -150,6 +151,7 @@ Add validation after execution-time validation:
 normalize_terminal_width() {
     NORMALIZED_TERMINAL_WIDTH=$1
     [[ "$NORMALIZED_TERMINAL_WIDTH" =~ ^[0-9]+$ ]] || return 1
+    [[ ${#NORMALIZED_TERMINAL_WIDTH} -le "$TERMINAL_WIDTH_RAW_MAX_LENGTH" ]] || return 1
     while [[ "$NORMALIZED_TERMINAL_WIDTH" == 0* && ${#NORMALIZED_TERMINAL_WIDTH} -gt 1 ]]; do
         NORMALIZED_TERMINAL_WIDTH=${NORMALIZED_TERMINAL_WIDTH#0}
     done

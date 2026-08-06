@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Sixteen digits permits practical zero-padded values while bounding normalization work.
+TERMINAL_WIDTH_RAW_MAX_LENGTH=16
+
 initialize_defaults() {
     MYSQL_BIN_ENV=${MYSQL_BIN:-}
     LOGIN_PATH=""
@@ -105,6 +108,7 @@ require_value() { [[ -n "${2-}" && "${2-}" != -* ]] || cli_error "Option $1 requ
 normalize_terminal_width() {
     NORMALIZED_TERMINAL_WIDTH=$1
     [[ "$NORMALIZED_TERMINAL_WIDTH" =~ ^[0-9]+$ ]] || return 1
+    [[ ${#NORMALIZED_TERMINAL_WIDTH} -le "$TERMINAL_WIDTH_RAW_MAX_LENGTH" ]] || return 1
     while [[ "$NORMALIZED_TERMINAL_WIDTH" == 0* && ${#NORMALIZED_TERMINAL_WIDTH} -gt 1 ]]; do
         NORMALIZED_TERMINAL_WIDTH=${NORMALIZED_TERMINAL_WIDTH#0}
     done
@@ -497,7 +501,7 @@ read_stty_columns() {
     if [[ -t 0 ]]; then
         size=$(stty size 2>/dev/null || true)
     elif [[ -t 1 ]]; then
-        size=$(stty size </dev/tty 2>/dev/null || true)
+        size=$(stty size 2>/dev/null </dev/tty || true)
     fi
     if [[ -n "$size" ]]; then
         read -r stty_rows DETECTED_COLUMNS <<EOF

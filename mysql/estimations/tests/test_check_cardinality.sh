@@ -85,6 +85,7 @@ run_scenario_tty() {
 run_scenario_tty_width() {
     local width=$1 scenario=$2 runner_command
     shift 2
+    [[ "$width" =~ ^[0-9]+$ ]] || fail "pseudo-TTY width must contain digits only: [$width]"
     LAST_CASE=$scenario
     : > "$QUERY_LOG"
     set +e
@@ -101,6 +102,65 @@ run_scenario_tty_width() {
                 "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
                 "MYSQL_BIN=$FAKE_MYSQL" "$SCRIPT" "$@"
             runner_command="stty cols $width; unset COLUMNS; exec $runner_command"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+}
+run_scenario_tty_width_with_redirected_stdin() {
+    local width=$1 scenario=$2 runner_command
+    shift 2
+    [[ "$width" =~ ^[0-9]+$ ]] || fail "pseudo-TTY width must contain digits only: [$width]"
+    LAST_CASE=$scenario
+    : > "$QUERY_LOG"
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null /bin/bash -c \
+                'stty cols "$1"; shift; unset COLUMNS; exec "$@" </dev/null' \
+                width-runner "$width" env \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "PATH=${STTY_TEST_PATH_PREFIX:-}$PATH" "$SCRIPT" "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env TERM=xterm \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "PATH=${STTY_TEST_PATH_PREFIX:-}$PATH" "$SCRIPT" "$@"
+            runner_command="stty cols $width; unset COLUMNS; exec $runner_command </dev/null"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+}
+run_scenario_tty_stdout_without_controlling_terminal() {
+    local scenario=$1 runner_command detached_runner
+    shift
+    LAST_CASE=$scenario
+    : > "$QUERY_LOG"
+    detached_runner='my $child = fork(); die "fork: $!" unless defined $child; if ($child) { waitpid($child, 0); exit($? >> 8); } POSIX::setsid() or die "setsid: $!"; open(STDIN, "<", "/dev/null") or die "open /dev/null: $!"; exec @ARGV or die "exec: $!";'
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null /usr/bin/perl -MPOSIX=setsid -e "$detached_runner" env \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "$SCRIPT" "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' /usr/bin/perl -MPOSIX=setsid -e "$detached_runner" env TERM=xterm \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "$SCRIPT" "$@"
             OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
             ;;
         *)
@@ -237,6 +297,7 @@ test_help_is_always_colored_and_runtime_no_color_is_preserved() {
 }
 
 test_cli_validation_and_client_failures() {
+    local overlength_padded_width
     run_case missing --login-path; assert_status 2
     run_case width_missing -l x -d app -t users --terminal-width; assert_status 2; assert_contains "$OUTPUT" 'Option --terminal-width requires a value.'
     run_case width_text -l x -d app -t users --terminal-width wide; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'
@@ -249,6 +310,8 @@ test_cli_validation_and_client_failures() {
     run_case width_above_max -l x -d app -t users --terminal-width 10001; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
     run_case width_wraparound -l x -d app -t users --terminal-width 18446744073709551736; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
     run_case width_very_long -l x -d app -t users --terminal-width 999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
+    overlength_padded_width=$(printf '%0100d' 0)120
+    run_case width_overlength_padded -l x -d app -t users --terminal-width "$overlength_padded_width"; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
     run_case bad_mode -l x -d app -t users --mode unsafe; assert_status 2
     run_case bad_number -l x -d app -t users -p -1; assert_status 2
     run_case format_without_file -l x -d app -t users --format csv; assert_status 2
@@ -604,6 +667,36 @@ test_terminal_width_uses_active_stty_geometry() {
         fail "stty reconstructed indexes [$RECONSTRUCTED_INDEXES]"
 }
 
+test_terminal_width_uses_tty_probe_when_stdin_is_redirected() {
+    local fake_stty=$TMP_ROOT/stty
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -t 0 ]] || exit 1' 'printf "24 180\\n"' > "$fake_stty"
+    chmod +x "$fake_stty"
+    STTY_TEST_PATH_PREFIX="$TMP_ROOT:"
+    run_scenario_tty_width_with_redirected_stdin 180 layout_wrapped -l x -d app -t transactions \
+        --mode metadata --no-color
+    unset STTY_TEST_PATH_PREFIX
+    assert_status 0
+    assert_table_width_and_alignment 180
+}
+
+test_terminal_width_without_controlling_tty_suppresses_tty_diagnostic() {
+    COLUMNS=170 run_scenario_tty_stdout_without_controlling_terminal layout_common -l x -d app -t transactions \
+        --mode metadata --no-color
+    assert_status 0
+    assert_table_width_and_alignment 170
+    assert_not_contains "$OUTPUT" '/dev/tty'
+}
+
+test_terminal_width_tty_helper_rejects_non_numeric_width() {
+    local helper_output helper_status
+    set +e
+    helper_output=$(run_scenario_tty_width '180; invalid' layout_common -l x -d app -t transactions --mode metadata --no-color 2>&1)
+    helper_status=$?
+    set -e
+    [[ "$helper_status" -ne 0 ]] || fail 'pseudo-TTY helper accepted a non-numeric width'
+    assert_contains "$helper_output" 'pseudo-TTY width must contain digits only: [180; invalid]'
+}
+
 test_terminal_width_override_precedes_active_tty() {
     run_scenario_tty_width 180 layout_wrapped -l x -d app -t transactions \
         --mode metadata --no-color --terminal-width 160
@@ -674,6 +767,9 @@ run_test wrapped_color_error test_wrapped_rows_preserve_color_and_error_order
 run_test wrapped_wide test_wrapped_report_honors_wide_terminal
 run_test terminal_width_override test_terminal_width_override_controls_geometry
 run_test terminal_width_stty test_terminal_width_uses_active_stty_geometry
+run_test terminal_width_redirected_stdin test_terminal_width_uses_tty_probe_when_stdin_is_redirected
+run_test terminal_width_no_controlling_tty test_terminal_width_without_controlling_tty_suppresses_tty_diagnostic
+run_test terminal_width_helper_validation test_terminal_width_tty_helper_rejects_non_numeric_width
 run_test terminal_width_precedence test_terminal_width_override_precedes_active_tty
 run_test terminal_width_fallback test_terminal_width_uses_columns_then_fallback
 run_test wrapped_export test_wrapped_display_does_not_change_exports

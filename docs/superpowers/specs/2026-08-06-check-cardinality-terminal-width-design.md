@@ -33,6 +33,12 @@ out-of-range, and arbitrarily long values are CLI errors, use exit status 2,
 and retain the existing `Try --help for usage.` guidance. Validation and
 leading-zero normalization must not use unbounded shell arithmetic.
 
+Raw numeric input is limited to 16 characters before leading-zero trimming.
+The valid range needs at most five significant digits, so this safely permits
+11 optional leading zeros (including ordinary values such as `000120`) while
+bounding the shell's iterative normalization work. A longer raw digit string
+is rejected as the same controlled CLI error before the trimming loop.
+
 The always-colored help includes the option under `Output and runtime` and adds
 an example showing `--terminal-width 180`. No short form is added, avoiding new
 single-letter conflicts.
@@ -100,8 +106,12 @@ The shell integration suite will verify:
 - the explicit override takes precedence over `stty`, `COLUMNS`, and `tput`;
 - missing, non-numeric, out-of-range, and arbitrarily long explicit values
   return exit status 2 without shell arithmetic diagnostics;
+- an explicit width with at least 100 leading zeros is rejected before
+  normalization with exactly one controlled error line;
 - a 180-column pseudo-terminal with no exported `COLUMNS` selects 180 through
   `stty`, including on the macOS path where captured `tput` reports its default;
+- redirected stdin with TTY stdout uses the `/dev/tty` probe when available and
+  suppresses its open diagnostic when no controlling terminal exists;
 - a numeric exported `COLUMNS` value is used when active TTY geometry is
   unavailable;
 - automatic candidates outside 120-10000 fall through to the next source;
