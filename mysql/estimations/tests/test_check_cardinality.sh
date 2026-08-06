@@ -51,10 +51,83 @@ run_scenario() {
     STATUS=$?
     set -e
 }
+run_scenario_tty() {
+    local scenario=$1 runner_command
+    shift
+    LAST_CASE=$scenario
+    : > "$QUERY_LOG"
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null env \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "$SCRIPT" "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env TERM=xterm \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "$SCRIPT" "$@"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+}
 report_line() {
     local pattern=$1
     REPORT_LINE=$(printf '%s\n' "$OUTPUT" | awk -v pattern="$pattern" 'index($0, pattern) == 1 {print; exit}')
     [[ -n "$REPORT_LINE" ]] || fail "$LAST_CASE: report row not found for $pattern"
+}
+
+pipe_offsets() {
+    PIPE_OFFSETS=$(printf '%s' "$1" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
+}
+
+assert_table_lines_aligned() {
+    local header_offsets line offsets
+    report_line 'COLUMN'
+    pipe_offsets "$REPORT_LINE"
+    header_offsets=$PIPE_OFFSETS
+    while IFS= read -r line; do
+        case "$line" in
+            *' | '*' | '*' | '*' | '*' | '*' | '*' | '*)
+                pipe_offsets "$line"
+                offsets=$PIPE_OFFSETS
+                [[ "$offsets" == "$header_offsets" ]] || fail "$LAST_CASE: misaligned line [$line]"
+                [[ ${#line} -le 120 ]] || fail "$LAST_CASE: line exceeds 120 columns"
+                ;;
+        esac
+    done <<EOF
+$OUTPUT
+EOF
+}
+
+report_row_fragments() {
+    local column=$1 fragments
+    fragments=$(printf '%s\n' "$OUTPUT" | awk -v column="$column" '
+function rtrim(value) { sub(/[ ]+$/, "", value); return value }
+function collect(    cells, count, type_fragment, index_fragment) {
+    count = split($0, cells, "|")
+    if (count != 8) return
+    type_fragment = rtrim(substr(cells[2], 2))
+    index_fragment = rtrim(substr(cells[8], 2))
+    if (type_fragment != "") type_value = type_value type_fragment
+    if (index_fragment != "") {
+        if (indexes_value != "" && indexes_value ~ /,$/) indexes_value = indexes_value " "
+        indexes_value = indexes_value index_fragment
+    }
+}
+index($0, column) == 1 { active = 1; collect(); next }
+active && $0 ~ /^[ ]*\|/ { collect(); next }
+active { exit }
+END { print type_value "\t" indexes_value }
+')
+    RECONSTRUCTED_TYPE=${fragments%%$'\t'*}
+    RECONSTRUCTED_INDEXES=${fragments#*$'\t'}
 }
 
 test_cli_help_and_compatibility() {
@@ -255,7 +328,9 @@ test_adaptive_report_prioritizes_column_and_indexes() {
     assert_not_contains "$vendor_row" 'vendor_transaction...'
     assert_contains "$vendor_row" 'exact/key'
     assert_not_contains "$vendor_row" 'exact_key_shortcut'
-    assert_contains "$vendor_row" 'idx_aviator_vendo...'
+    report_row_fragments vendor_transaction_id
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)' ]] ||
+        fail "adaptive_priority: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
     assert_contains "$OUTPUT" 'exact/uniq'
 
     header_pipes=$(printf '%s' "$header" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
@@ -269,7 +344,9 @@ test_adaptive_report_borrows_from_indexes_for_long_columns() {
     assert_status 0
     report_line 'applied_multiplier_reference_key'
     assert_contains "$REPORT_LINE" 'applied_multiplier_reference_key'
-    assert_contains "$REPORT_LINE" 'idx_aviat...'
+    report_row_fragments applied_multiplier_reference_key
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_aviator_applied_multiplier_reference(#1)' ]] ||
+        fail "adaptive_borrow: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
     [[ ${#REPORT_LINE} -eq 120 ]] || fail "borrowed-width row is not 120 columns"
 }
 
@@ -294,7 +371,9 @@ test_adaptive_report_assigns_wider_terminal_to_indexes() {
     [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide header is not 160 columns: ${#REPORT_LINE}"
     report_line 'vendor_transaction_id'
     [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide row is not 160 columns: ${#REPORT_LINE}"
-    assert_contains "$REPORT_LINE" 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction'
+    report_row_fragments vendor_transaction_id
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)' ]] ||
+        fail "adaptive_wide: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
 }
 
 test_adaptive_report_handles_divergent_metadata_metrics() {
@@ -322,6 +401,118 @@ test_adaptive_report_does_not_compact_exports() {
     assert_contains "$row" '"exact_key_shortcut"'
     assert_contains "$row" '"uk_vendor_transaction"'
     assert_contains "$row" '"idx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)"'
+}
+
+test_report_displays_full_types_and_compacts_enum() {
+    run_scenario layout_types -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    assert_contains "$OUTPUT" 'bigint unsigned'
+    assert_contains "$OUTPUT" 'ENUM'
+    assert_not_contains "$OUTPUT" "enum('new'"
+    assert_not_contains "$OUTPUT" 'bigint unsi...'
+
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    report_line 'unsigned_counter'
+    ordinary_row=$REPORT_LINE
+    [[ ${#header} -eq 120 && ${#ordinary_row} -eq 120 ]] ||
+        fail "type layout is not exactly 120 columns"
+}
+
+test_report_wraps_type_and_all_index_entries() {
+    run_scenario layout_wrapped -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    assert_not_contains "$OUTPUT" '...'
+    report_row_fragments flags
+    [[ "$RECONSTRUCTED_TYPE" == "set('audit','billing','security','reporting')" ]] ||
+        fail "layout_wrapped: reconstructed type [$RECONSTRUCTED_TYPE]"
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_flags(#1), idx_flags_created_at(#1), uk_flags_external_reference(#1)' ]] ||
+        fail "layout_wrapped: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
+    assert_table_lines_aligned
+}
+
+test_report_hard_wraps_one_oversized_index() {
+    run_scenario layout_oversized_index -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    assert_not_contains "$OUTPUT" '...'
+    report_row_fragments external_reference
+    [[ "$RECONSTRUCTED_TYPE" == 'varchar(128)' ]] ||
+        fail "layout_oversized_index: reconstructed type [$RECONSTRUCTED_TYPE]"
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_external_reference_identifier_exceeding_the_terminal_cell_width(#1)' ]] ||
+        fail "layout_oversized_index: reconstructed indexes [$RECONSTRUCTED_INDEXES]"
+    assert_table_lines_aligned
+}
+
+test_wrapped_rows_preserve_color_and_error_order() {
+    run_scenario_tty layout_wrapped_error -l x -d app -t transactions --mode exact
+    assert_status 4
+    assert_has_ansi "$OUTPUT"
+    error_count=$(printf '%s\n' "$OUTPUT" | awk '/Error: forced wrapped-column failure/ {count++} END {print count+0}')
+    [[ "$error_count" -eq 1 ]] || fail "wrapped error printed $error_count times"
+    row_counts=$(printf '%s\n' "$OUTPUT" | LC_ALL=C awk '
+function strip_ansi(value) {
+    gsub(/\033\[[0-9;]*[a-zA-Z]/, "", value)
+    sub(/\r$/, "", value)
+    return value
+}
+{
+    line = strip_ansi($0)
+    if (line ~ /^wrapped_failure[ ]*\|/) active = 1
+    if (active && (line ~ /^wrapped_failure[ ]*\|/ || line ~ /^[ ]*\|/)) {
+        physical++
+        if (index($0, "\033[0;31m") == 1) colored++
+        last = NR
+        next
+    }
+    if (active) exit
+}
+END { print physical+0 ":" colored+0 ":" last+0 }')
+    physical_rows=${row_counts%%:*}
+    row_counts=${row_counts#*:}
+    colored_rows=${row_counts%%:*}
+    last_index_line=${row_counts#*:}
+    [[ "$physical_rows" -ge 2 ]] || fail 'wrapped error fixture did not produce continuation lines'
+    [[ "$colored_rows" -eq "$physical_rows" ]] || fail 'ERROR color is not applied to every wrapped physical line'
+    error_line=$(printf '%s\n' "$OUTPUT" | awk '/Error: forced wrapped-column failure/ {print NR; exit}')
+    [[ "$error_line" -gt "$last_index_line" ]] || fail 'wrapped error printed before continuation lines'
+    error_is_colored=$(printf '%s\n' "$OUTPUT" | LC_ALL=C awk '/Error: forced wrapped-column failure/ {print (index($0, "\033[0;31m") == 1); exit}')
+    [[ "$error_is_colored" -eq 1 ]] || fail 'wrapped error line is not colored'
+}
+
+test_wrapped_report_honors_wide_terminal() {
+    TERM=xterm COLUMNS=160 run_scenario layout_wrapped -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    [[ ${#header} -eq 160 ]] || fail "wide header is not 160 columns"
+    pipe_offsets "$header"
+    header_offsets=$PIPE_OFFSETS
+    while IFS= read -r line; do
+        case "$line" in
+            *' | '*' | '*' | '*' | '*' | '*' | '*' | '*)
+                [[ ${#line} -eq 160 ]] || fail "wide physical line is not 160 columns"
+                pipe_offsets "$line"
+                [[ "$PIPE_OFFSETS" == "$header_offsets" ]] || fail 'wide physical line separator offsets differ'
+                ;;
+        esac
+    done <<EOF
+$OUTPUT
+EOF
+}
+
+test_wrapped_display_does_not_change_exports() {
+    out="$TMP_ROOT/wrapped.csv"
+    run_scenario layout_types -l x -d app -t transactions --mode metadata \
+        --no-color -o "$out" --format csv
+    assert_status 0
+    assert_contains "$(sed -n '3p' "$out")" "enum('new','processing','complete')"
+
+    out="$TMP_ROOT/wrapped.tsv"
+    run_scenario layout_wrapped -l x -d app -t transactions --mode metadata \
+        --no-color -o "$out" --format tsv
+    assert_status 0
+    assert_contains "$(sed -n '2p' "$out")" "set('audit','billing','security','reporting')"
+    assert_contains "$(sed -n '2p' "$out")" 'idx_flags(#1), idx_flags_created_at(#1), uk_flags_external_reference(#1)'
 }
 
 run_test() {
@@ -353,5 +544,11 @@ run_test adaptive_numeric test_adaptive_report_preserves_large_numeric_alignment
 run_test adaptive_wide test_adaptive_report_assigns_wider_terminal_to_indexes
 run_test adaptive_divergent test_adaptive_report_handles_divergent_metadata_metrics
 run_test adaptive_export test_adaptive_report_does_not_compact_exports
+run_test wrapped_type_display test_report_displays_full_types_and_compacts_enum
+run_test wrapped_multiline test_report_wraps_type_and_all_index_entries
+run_test wrapped_oversized_index test_report_hard_wraps_one_oversized_index
+run_test wrapped_color_error test_wrapped_rows_preserve_color_and_error_order
+run_test wrapped_wide test_wrapped_report_honors_wide_terminal
+run_test wrapped_export test_wrapped_display_does_not_change_exports
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

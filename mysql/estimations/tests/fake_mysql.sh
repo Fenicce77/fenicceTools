@@ -23,6 +23,7 @@ case "$scenario:$query" in
     partial:*cardinality:table_metadata*"X'626164'"*) printf '%s\n' 'metadata failed' >&2; exit 1 ;;
     analyze_error:*ANALYZE\ LOCAL\ TABLE*bad*) printf '%s\n' 'app.bad\tanalyze\terror\tforced failure'; exit 0 ;;
     timeout:*cardinality:exact_column*slow_col*) printf '%s\n' 'maximum statement execution time exceeded' >&2; exit 1 ;;
+    layout_wrapped_error:*cardinality:exact_column*wrapped_failure*) printf '%s\n' 'forced wrapped-column failure' >&2; exit 1 ;;
 esac
 
 case "$query" in
@@ -72,6 +73,19 @@ case "$query" in
                 ;;
             layout_divergent)
                 printf 'vendor_transaction_id\tvarchar(128)\tvarchar\tNO\t18446744073709551615\tidx_divergent_cardinality\tLEADING_SINGLE\t1\tidx_divergent_cardinality(#1)\n'
+                ;;
+            layout_types)
+                printf 'unsigned_counter\tbigint unsigned\tbigint\tNO\t100\tidx_counter\tLEADING_SINGLE\t1\tidx_counter(#1)\n'
+                printf "state\tenum('new','processing','complete')\tenum\tNO\t3\tidx_state\tLEADING_SINGLE\t1\tidx_state(#1)\n"
+                ;;
+            layout_wrapped)
+                printf "flags\tset('audit','billing','security','reporting')\tset\tYES\t8\tidx_flags\tLEADING_SINGLE\t1\tidx_flags(#1), idx_flags_created_at(#1), uk_flags_external_reference(#1)\n"
+                ;;
+            layout_wrapped_error)
+                printf "wrapped_failure\tset('audit','billing','security','reporting')\tset\tYES\t8\tidx_wrapped_failure\tLEADING_SINGLE\t1\tidx_wrapped_failure_reference(#1), idx_wrapped_failure_created_at(#1)\n"
+                ;;
+            layout_oversized_index)
+                printf 'external_reference\tvarchar(128)\tvarchar\tNO\t100\tidx_external\tLEADING_SINGLE\t1\tidx_external_reference_identifier_exceeding_the_terminal_cell_width(#1)\n'
                 ;;
             *) printf 'id\tbigint\tbigint\tNO\t100\tPRIMARY\tPRIMARY_SINGLE\t1\tPRIMARY(#1)\n' ;;
         esac
