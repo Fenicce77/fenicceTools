@@ -487,15 +487,48 @@ render_report_line() {
         "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8")
 }
 
+valid_automatic_width() {
+    normalize_terminal_width "$1"
+}
+
+read_stty_columns() {
+    local size="" stty_rows=""
+    DETECTED_COLUMNS=""
+    if [[ -t 0 ]]; then
+        size=$(stty size 2>/dev/null || true)
+    elif [[ -t 1 ]]; then
+        size=$(stty size </dev/tty 2>/dev/null || true)
+    fi
+    if [[ -n "$size" ]]; then
+        read -r stty_rows DETECTED_COLUMNS <<EOF
+$size
+EOF
+    fi
+}
+
 refresh_terminal_width() {
+    local cols=""
     TERM_WIDTH=120
+
     if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
         TERM_WIDTH=$TERMINAL_WIDTH_OPTION
         return 0
     fi
-    local cols
+
+    read_stty_columns
+    if valid_automatic_width "$DETECTED_COLUMNS"; then
+        TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH
+        return 0
+    fi
+
+    cols=${COLUMNS:-}
+    if valid_automatic_width "$cols"; then
+        TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH
+        return 0
+    fi
+
     cols=$(tput cols 2>/dev/null || true)
-    if normalize_terminal_width "$cols"; then TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH; fi
+    if valid_automatic_width "$cols"; then TERM_WIDTH=$NORMALIZED_TERMINAL_WIDTH; fi
     return 0
 }
 

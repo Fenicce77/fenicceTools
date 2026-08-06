@@ -82,6 +82,36 @@ run_scenario_tty() {
     STATUS=$?
     set -e
 }
+run_scenario_tty_width() {
+    local width=$1 scenario=$2 runner_command
+    shift 2
+    LAST_CASE=$scenario
+    : > "$QUERY_LOG"
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null /bin/bash -c \
+                'stty cols "$1"; shift; unset COLUMNS; exec "$@"' \
+                width-runner "$width" env \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "$SCRIPT" "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env TERM=xterm \
+                "FAKE_MYSQL_QUERY_LOG=$QUERY_LOG" "FAKE_MYSQL_SCENARIO=$scenario" \
+                "MYSQL_BIN=$FAKE_MYSQL" "$SCRIPT" "$@"
+            runner_command="stty cols $width; unset COLUMNS; exec $runner_command"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+}
 report_line() {
     local pattern=$1
     REPORT_LINE=$(printf '%s\n' "$OUTPUT" | awk -v pattern="$pattern" 'index($0, pattern) == 1 {print; exit}')
@@ -104,6 +134,26 @@ assert_table_lines_aligned() {
                 offsets=$PIPE_OFFSETS
                 [[ "$offsets" == "$header_offsets" ]] || fail "$LAST_CASE: misaligned line [$line]"
                 [[ ${#line} -le 120 ]] || fail "$LAST_CASE: line exceeds 120 columns"
+                ;;
+        esac
+    done <<EOF
+$OUTPUT
+EOF
+}
+
+assert_table_width_and_alignment() {
+    local expected=$1 header header_offsets line
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    [[ ${#header} -eq "$expected" ]] || fail "$LAST_CASE: header width ${#header}, expected $expected"
+    pipe_offsets "$header"
+    header_offsets=$PIPE_OFFSETS
+    while IFS= read -r line; do
+        case "$line" in
+            *' | '*' | '*' | '*' | '*' | '*' | '*' | '*)
+                [[ ${#line} -eq "$expected" ]] || fail "$LAST_CASE: physical width ${#line}, expected $expected"
+                pipe_offsets "$line"
+                [[ "$PIPE_OFFSETS" == "$header_offsets" ]] || fail "$LAST_CASE: separator offsets differ"
                 ;;
         esac
     done <<EOF
@@ -544,6 +594,35 @@ EOF
         fail "override reconstructed indexes [$RECONSTRUCTED_INDEXES]"
 }
 
+test_terminal_width_uses_active_stty_geometry() {
+    run_scenario_tty_width 180 layout_wrapped -l x -d app -t transactions \
+        --mode metadata --no-color
+    assert_status 0
+    assert_table_width_and_alignment 180
+    report_row_fragments flags
+    [[ "$RECONSTRUCTED_INDEXES" == 'idx_flags(#1), idx_flags_created_at(#1), uk_flags_external_reference(#1)' ]] ||
+        fail "stty reconstructed indexes [$RECONSTRUCTED_INDEXES]"
+}
+
+test_terminal_width_override_precedes_active_tty() {
+    run_scenario_tty_width 180 layout_wrapped -l x -d app -t transactions \
+        --mode metadata --no-color --terminal-width 160
+    assert_status 0
+    assert_table_width_and_alignment 160
+}
+
+test_terminal_width_uses_columns_then_fallback() {
+    COLUMNS=170 run_scenario layout_common -l x -d app -t transactions \
+        --mode metadata --no-color
+    assert_status 0
+    assert_table_width_and_alignment 170
+
+    COLUMNS=invalid run_scenario layout_common -l x -d app -t transactions \
+        --mode metadata --no-color
+    assert_status 0
+    assert_table_width_and_alignment 120
+}
+
 test_wrapped_display_does_not_change_exports() {
     out="$TMP_ROOT/wrapped.csv"
     run_scenario layout_types -l x -d app -t transactions --mode metadata \
@@ -594,6 +673,9 @@ run_test wrapped_oversized_index test_report_hard_wraps_one_oversized_index
 run_test wrapped_color_error test_wrapped_rows_preserve_color_and_error_order
 run_test wrapped_wide test_wrapped_report_honors_wide_terminal
 run_test terminal_width_override test_terminal_width_override_controls_geometry
+run_test terminal_width_stty test_terminal_width_uses_active_stty_geometry
+run_test terminal_width_precedence test_terminal_width_override_precedes_active_tty
+run_test terminal_width_fallback test_terminal_width_uses_columns_then_fallback
 run_test wrapped_export test_wrapped_display_does_not_change_exports
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
