@@ -255,7 +255,7 @@ test_adaptive_report_prioritizes_column_and_indexes() {
     assert_not_contains "$vendor_row" 'vendor_transaction...'
     assert_contains "$vendor_row" 'exact/key'
     assert_not_contains "$vendor_row" 'exact_key_shortcut'
-    assert_contains "$vendor_row" 'idx_aviator_vendo...'
+    assert_contains "$vendor_row" 'idx_aviator_v...'
     assert_contains "$OUTPUT" 'exact/uniq'
 
     header_pipes=$(printf '%s' "$header" | awk '{s=""; for(i=1;i<=length($0);i++) if(substr($0,i,1)=="|") s=s i ","; print s}')
@@ -294,7 +294,7 @@ test_adaptive_report_assigns_wider_terminal_to_indexes() {
     [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide header is not 160 columns: ${#REPORT_LINE}"
     report_line 'vendor_transaction_id'
     [[ ${#REPORT_LINE} -eq 160 ]] || fail "wide row is not 160 columns: ${#REPORT_LINE}"
-    assert_contains "$REPORT_LINE" 'idx_aviator_vendor_transaction(#1), uk_vendor_transaction'
+    assert_contains "$REPORT_LINE" 'idx_aviator_vendor_transaction(#1), uk_vendor_transac...'
 }
 
 test_adaptive_report_handles_divergent_metadata_metrics() {
@@ -322,6 +322,22 @@ test_adaptive_report_does_not_compact_exports() {
     assert_contains "$row" '"exact_key_shortcut"'
     assert_contains "$row" '"uk_vendor_transaction"'
     assert_contains "$row" '"idx_aviator_vendor_transaction(#1), uk_vendor_transaction(#1)"'
+}
+
+test_report_displays_full_types_and_compacts_enum() {
+    run_scenario layout_types -l x -d app -t transactions --mode metadata --no-color
+    assert_status 0
+    assert_contains "$OUTPUT" 'bigint unsigned'
+    assert_contains "$OUTPUT" 'ENUM'
+    assert_not_contains "$OUTPUT" "enum('new'"
+    assert_not_contains "$OUTPUT" 'bigint unsi...'
+
+    report_line 'COLUMN'
+    header=$REPORT_LINE
+    report_line 'unsigned_counter'
+    ordinary_row=$REPORT_LINE
+    [[ ${#header} -eq 120 && ${#ordinary_row} -eq 120 ]] ||
+        fail "type layout is not exactly 120 columns"
 }
 
 run_test() {
@@ -353,5 +369,6 @@ run_test adaptive_numeric test_adaptive_report_preserves_large_numeric_alignment
 run_test adaptive_wide test_adaptive_report_assigns_wider_terminal_to_indexes
 run_test adaptive_divergent test_adaptive_report_handles_divergent_metadata_metrics
 run_test adaptive_export test_adaptive_report_does_not_compact_exports
+run_test wrapped_type_display test_report_displays_full_types_and_compacts_enum
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

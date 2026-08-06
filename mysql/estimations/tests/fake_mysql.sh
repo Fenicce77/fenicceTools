@@ -73,6 +73,10 @@ case "$query" in
             layout_divergent)
                 printf 'vendor_transaction_id\tvarchar(128)\tvarchar\tNO\t18446744073709551615\tidx_divergent_cardinality\tLEADING_SINGLE\t1\tidx_divergent_cardinality(#1)\n'
                 ;;
+            layout_types)
+                printf 'unsigned_counter\tbigint unsigned\tbigint\tNO\t100\tidx_counter\tLEADING_SINGLE\t1\tidx_counter(#1)\n'
+                printf "state\tenum('new','processing','complete')\tenum\tNO\t3\tidx_state\tLEADING_SINGLE\t1\tidx_state(#1)\n"
+                ;;
             *) printf 'id\tbigint\tbigint\tNO\t100\tPRIMARY\tPRIMARY_SINGLE\t1\tPRIMARY(#1)\n' ;;
         esac
         ;;

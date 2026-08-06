@@ -376,6 +376,14 @@ EOF
 }
 
 truncate_text() { local text=$1 width=$2; if [[ ${#text} -le $width ]]; then TRUNCATED=$text; elif [[ $width -le 3 ]]; then TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w)}'); else TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w-3) "..."}'); fi; }
+normalize_display_type() {
+    local raw_type=$1 lower_type
+    lower_type=$(printf '%s' "$raw_type" | tr '[:upper:]' '[:lower:]')
+    case "$lower_type" in
+        enum\(*) DISPLAY_TYPE=ENUM ;;
+        *) DISPLAY_TYPE=$raw_type ;;
+    esac
+}
 refresh_terminal_width() {
     TERM_WIDTH=120
     local cols
@@ -385,15 +393,19 @@ refresh_terminal_width() {
 }
 
 calculate_report_widths() {
-    local max_column=0 name name_length text_budget desired_column
-    local eligible card ratio pct pct_display indexes_shortage reducible reduction metric_length
+    local max_column=0 max_type=4 name type nullable eligible card ratio pct
+    local source source_index indexes status_error name_length type_length text_budget desired_column
+    local pct_display indexes_shortage reducible reduction metric_length
 
     ELIGIBLE_WIDTH=8
     CARDINALITY_WIDTH=11
     RATIO_WIDTH=6
     SELECTIVITY_WIDTH=8
 
-    while IFS=$'\t' read -r name _ _ eligible card ratio pct _; do
+    while IFS=$'\t' read -r name type nullable eligible card ratio pct source source_index indexes status_error; do
+        normalize_display_type "$type"
+        type_length=${#DISPLAY_TYPE}
+        [[ "$type_length" -le "$max_type" ]] || max_type=$type_length
         name_length=${#name}
         if [[ "$name_length" -gt "$max_column" ]]; then max_column=$name_length; fi
         [[ ${#eligible} -le $ELIGIBLE_WIDTH ]] || ELIGIBLE_WIDTH=${#eligible}
@@ -408,6 +420,7 @@ calculate_report_widths() {
     done < "$RESULT_FILE"
 
     TYPE_WIDTH=12
+    [[ "$max_type" -le "$TYPE_WIDTH" ]] || TYPE_WIDTH=$max_type
     SOURCE_WIDTH=10
     desired_column=24
     if [[ "$max_column" -gt "$desired_column" ]]; then desired_column=$max_column; fi
@@ -416,6 +429,14 @@ calculate_report_widths() {
     text_budget=$((TERM_WIDTH - 21 - ELIGIBLE_WIDTH - CARDINALITY_WIDTH - RATIO_WIDTH - SELECTIVITY_WIDTH))
     COLUMN_WIDTH=$desired_column
     INDEXES_WIDTH=$((text_budget - TYPE_WIDTH - SOURCE_WIDTH - COLUMN_WIDTH))
+    if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
+        indexes_shortage=$((12 - INDEXES_WIDTH))
+        reducible=$((TYPE_WIDTH - 8))
+        reduction=$indexes_shortage
+        [[ "$reduction" -le "$reducible" ]] || reduction=$reducible
+        TYPE_WIDTH=$((TYPE_WIDTH - reduction))
+        INDEXES_WIDTH=$((INDEXES_WIDTH + reduction))
+    fi
     if [[ "$INDEXES_WIDTH" -lt 12 ]]; then
         indexes_shortage=$((12 - INDEXES_WIDTH))
         reducible=$((COLUMN_WIDTH - 8))
@@ -504,7 +525,10 @@ format_table_report() {
     printf '%s%s%s\n' "$COLOR_BOLD" "$line" "$COLOR_RESET"
     while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
         status=${status_error%%|*}; error=${status_error#*|}
-        truncate_text "$column" "$COLUMN_WIDTH"; column=$TRUNCATED; truncate_text "$type" "$TYPE_WIDTH"; type=$TRUNCATED
+        normalize_display_type "$type"
+        type=$DISPLAY_TYPE
+        truncate_text "$type" "$TYPE_WIDTH"; type=$TRUNCATED
+        truncate_text "$column" "$COLUMN_WIDTH"; column=$TRUNCATED
         compact_source_label "$source"; truncate_text "$DISPLAY_SOURCE" "$SOURCE_WIDTH"; source=$TRUNCATED
         truncate_text "$indexes" "$INDEXES_WIDTH"; indexes=$TRUNCATED
         compact_derived_metric "$ratio" "" "$RATIO_WIDTH"; ratio=$DISPLAY_METRIC
