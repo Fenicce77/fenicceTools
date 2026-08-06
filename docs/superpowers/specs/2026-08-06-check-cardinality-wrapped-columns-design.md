@@ -3,9 +3,11 @@
 ## Objective
 
 Update the terminal report produced by
-`mysql/estimations/check_cardinality.sh` so every `TYPE` value and every index
-entry is visible, while preserving aligned columns and the detected terminal
-width. Machine-readable CSV and TSV output remains unchanged.
+`mysql/estimations/check_cardinality.sh` so every relevant `TYPE` value and
+every index entry is visible, while preserving aligned columns and the detected
+terminal width. `ENUM` member definitions are intentionally omitted from the
+terminal because they are outside cardinality analysis. Machine-readable CSV
+and TSV output remains unchanged.
 
 ## Scope
 
@@ -22,8 +24,8 @@ measures the longest `COLUMN`, `TYPE`, numeric, and derived-metric values.
   maximum.
 - `TYPE` expands to display ordinary type definitions in full when the terminal
   budget permits.
-- Exceptional definitions, especially long `ENUM` and `SET` declarations, use
-  a bounded `TYPE` column and wrap instead of being truncated.
+- Exceptional definitions, such as long `SET` declarations, use a bounded
+  `TYPE` column and wrap instead of being truncated.
 - `INDEXES` retains a minimum width of 12 characters and receives remaining
   terminal space after identity, numeric, and source fields are allocated.
 - Numeric counts are never truncated. Derived ratios may continue to use the
@@ -39,6 +41,14 @@ and the available text budget. This shows common values such as
 type that cannot fit without violating the report-width contract is wrapped
 across continuation lines.
 
+## Display-Only Type Normalization
+
+For terminal output, any case-insensitive `ENUM(...)` definition is rendered as
+`ENUM`. Its member list does not affect width calculation and is never printed
+on a continuation line. This normalization is terminal-only: the normalized
+result record and CSV/TSV exports retain the complete original `ENUM(...)`
+definition returned by MySQL.
+
 ## Multiline Rendering
 
 Each logical result row is converted into one or more physical terminal lines.
@@ -50,13 +60,13 @@ the remaining `TYPE` and/or `INDEXES` fragments; `COLUMN`, `ELIGIBLE`,
 `CARDINALITY`, `RATIO`, `SELECT.`, and `SOURCE` are blank. Every physical line
 uses the same widths and separators as the header.
 
-Example shape:
+Example shape using an exceptionally long non-`ENUM` type:
 
 ```text
 COLUMN       | TYPE             | ELIGIBLE | ... | SOURCE     | INDEXES
-status       | enum('new',      |       75 | ... | exact/key  | idx_status(#1),
-             | 'processing',    |          | ... |            | idx_status_date(#1),
-             | 'complete')      |          | ... |            | uk_status_ref(#1)
+flags        | set('audit',     |       75 | ... | exact/key  | idx_flags(#1),
+             | 'billing',       |          | ... |            | idx_flags_date(#1),
+             | 'security')      |          | ... |            | uk_flags_ref(#1)
 ```
 
 ANSI sequences remain outside padded values. The logical row's status color is
@@ -67,10 +77,11 @@ so visible widths and separator offsets are unaffected.
 
 ### TYPE
 
-`TYPE` is split into chunks no longer than the allocated width. The renderer
-prefers syntactically useful break points such as commas in `ENUM` and `SET`
-definitions. When no break point exists within the available width, it performs
-a deterministic hard wrap. No ellipsis is inserted and no character is lost.
+After applying display-only `ENUM` normalization, `TYPE` is split into chunks
+no longer than the allocated width. The renderer prefers syntactically useful
+break points such as commas in `SET` definitions. When no break point exists
+within the available width, it performs a deterministic hard wrap. No ellipsis
+is inserted and no character is lost.
 
 ### INDEXES
 
@@ -105,7 +116,9 @@ safe under `set -euo pipefail`.
 The fake-MySQL integration suite will verify:
 
 - common type definitions are displayed completely;
-- a long `ENUM` or `SET` value wraps without truncation or character loss;
+- `ENUM(...)` is displayed only as `ENUM`, without exposing or measuring its
+  member list;
+- a long `SET` value wraps without truncation or character loss;
 - all comma-separated index entries appear and wrap at entry boundaries;
 - one oversized index entry hard-wraps without data loss;
 - continuation lines leave non-wrapping cells blank;
@@ -115,5 +128,6 @@ The fake-MySQL integration suite will verify:
   most 160 columns in the wide-terminal fixture;
 - ANSI row color is consistently applied to all lines of a logical row;
 - errors print once after the complete logical row;
-- CSV and TSV exports contain the original unwrapped values;
+- CSV and TSV exports contain the original unwrapped values, including complete
+  `ENUM(...)` definitions;
 - all existing CLI, SQL, analysis, alignment, and export tests remain green.
