@@ -13,6 +13,17 @@ The change modifies only:
 
 No tracked files are removed. Existing tracked binaries, `.DS_Store` files, samples, output files, scripts, configuration templates, and login-path inventories remain unchanged.
 
+## Protected Paths
+
+The implementation must not modify files under these maintained tool areas:
+
+- `mysql/estimations/`
+- `mysql/proxysql/python/`
+- `mysql/proxysql/go/`
+- `mysql/general_log/`
+
+Their scripts, source code, SQL, tests, fixtures, nested README files, configuration templates, and currently tracked build artifacts remain unchanged. The root README may link to their existing documentation and reproduce their documented verification commands.
+
 ## Gitignore Design
 
 Preserve the existing `.worktrees/` entry and add conservative patterns for:
