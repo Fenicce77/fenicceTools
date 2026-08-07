@@ -258,6 +258,19 @@ function trim(value) { sub(/^[ ]+/, "", value); sub(/[ ]+$/, "", value); return 
 }')
 }
 
+capture_tsv_column_order() {
+    TSV_COLUMN_ORDER=$(awk -F '\t' 'NR > 1 { print $9 }' "$1")
+}
+
+capture_csv_column_order() {
+    CSV_COLUMN_ORDER=$(awk -F '\",\"' 'NR > 1 {
+        value = $9
+        sub(/^\"/, "", value)
+        sub(/\"$/, "", value)
+        print value
+    }' "$1")
+}
+
 assert_line_sequence() {
     [[ "$1" == "$2" ]] || fail "$LAST_CASE: unexpected row order [$1], expected [$2]"
 }
@@ -386,7 +399,7 @@ test_result_sorting_rules() {
     run_scenario sort_metrics -l x -d app -t users --mode exact --sort-by=selectivity --no-color
     assert_status 0
     capture_report_column_order
-    expected=$(printf '%s\n' card_tie_high card_tie_low stable_tie selectivity_tie_low zero_metric not_available)
+    expected=$(printf '%s\n' card_tie_high selectivity_tie_low card_tie_low stable_tie zero_metric not_available)
     assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
 
     run_scenario sort_error -l x -d app -t users --mode exact --sort-by cardinality --no-color
@@ -406,6 +419,56 @@ test_result_sorting_preserves_unsigned_precision() {
     expected=$(printf '%s\n' max_uint64 below_uint64 small_value)
     assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
     assert_contains "$OUTPUT" '18446744073709551615'
+}
+
+test_sorted_outputs_match_without_database_overhead() {
+    local baseline_queries terminal_order expected csv_file tsv_file default_tsv
+
+    default_tsv="$TMP_ROOT/default-order.tsv"
+    run_scenario sort_metrics -l x -d app -t users --mode exact --no-color -o "$default_tsv" --format tsv
+    assert_status 0
+    capture_report_column_order
+    expected=$(printf '%s\n' card_tie_low selectivity_tie_low card_tie_high zero_metric not_available stable_tie)
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
+    capture_tsv_column_order "$default_tsv"
+    assert_line_sequence "$TSV_COLUMN_ORDER" "$expected"
+
+    run_scenario sort_metrics -l x -d app -t users --mode exact --no-color
+    assert_status 0
+    baseline_queries=$(<"$QUERY_LOG")
+
+    run_scenario sort_metrics -l x -d app -t users --mode exact --sort-by selectivity --no-color
+    assert_status 0
+    [[ "$(<"$QUERY_LOG")" == "$baseline_queries" ]] || fail "$LAST_CASE: sorting changed SQL count or order"
+    capture_report_column_order
+    terminal_order=$REPORT_COLUMN_ORDER
+    expected=$(printf '%s\n' card_tie_high selectivity_tie_low card_tie_low stable_tie zero_metric not_available)
+    assert_line_sequence "$terminal_order" "$expected"
+
+    csv_file="$TMP_ROOT/sorted.csv"
+    run_scenario sort_metrics -l x -d app -t users --mode exact --sort-by selectivity --no-color -o "$csv_file" --format csv
+    assert_status 0
+    capture_report_column_order
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$terminal_order"
+    capture_csv_column_order "$csv_file"
+    assert_line_sequence "$CSV_COLUMN_ORDER" "$terminal_order"
+
+    tsv_file="$TMP_ROOT/sorted.tsv"
+    run_scenario sort_metrics -l x -d app -t users --mode exact --sort-by selectivity --no-color -o "$tsv_file" --format tsv
+    assert_status 0
+    capture_report_column_order
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$terminal_order"
+    capture_tsv_column_order "$tsv_file"
+    assert_line_sequence "$TSV_COLUMN_ORDER" "$terminal_order"
+
+    run_scenario_tty sort_metrics -l x -d app -t users --mode exact --sort-by cardinality
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+
+    run_scenario_tty_width 160 layout_wrapped -l x -d app -t transactions \
+        --mode metadata --sort-by cardinality --no-color
+    assert_status 0
+    assert_table_width_and_alignment 160
 }
 
 test_exact_optimizer_shortcuts_and_predicates() {
@@ -817,6 +880,7 @@ run_test cli_tables test_cli_table_file_and_deduplication
 run_test mode_metadata test_mode_metadata_is_scan_safe
 run_test result_sorting test_result_sorting_rules
 run_test sort_uint64 test_result_sorting_preserves_unsigned_precision
+run_test sorted_output_parity test_sorted_outputs_match_without_database_overhead
 run_test exact_analysis test_exact_optimizer_shortcuts_and_predicates
 run_test exact_drift test_exact_threshold_and_drift
 run_test analyze_guard test_analyze_guard_and_order

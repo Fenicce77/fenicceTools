@@ -125,7 +125,7 @@ case "$query" in
             sort_metrics|sort_error)
                 case "$query" in
                     *'`card_tie_low`'*) printf '50\t100\n' ;;
-                    *'`selectivity_tie_low`'*) printf '20\t40\n' ;;
+                    *'`selectivity_tie_low`'*) printf '20\t20\n' ;;
                     *'`card_tie_high`'*) printf '50\t50\n' ;;
                     *'`zero_metric`'*) printf '0\t100\n' ;;
                     *'`not_available`'*) printf 'N/A\tN/A\n' ;;
