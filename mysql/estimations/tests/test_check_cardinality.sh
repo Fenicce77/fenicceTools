@@ -422,7 +422,7 @@ test_result_sorting_preserves_unsigned_precision() {
 }
 
 test_sorted_outputs_match_without_database_overhead() {
-    local baseline_queries terminal_order expected csv_file tsv_file default_tsv
+    local baseline_queries terminal_order expected csv_file tsv_file default_csv default_tsv
 
     default_tsv="$TMP_ROOT/default-order.tsv"
     run_scenario sort_metrics -l x -d app -t users --mode exact --no-color -o "$default_tsv" --format tsv
@@ -432,6 +432,14 @@ test_sorted_outputs_match_without_database_overhead() {
     assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
     capture_tsv_column_order "$default_tsv"
     assert_line_sequence "$TSV_COLUMN_ORDER" "$expected"
+
+    default_csv="$TMP_ROOT/default-order.csv"
+    run_scenario sort_metrics -l x -d app -t users --mode exact --no-color -o "$default_csv" --format csv
+    assert_status 0
+    capture_report_column_order
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
+    capture_csv_column_order "$default_csv"
+    assert_line_sequence "$CSV_COLUMN_ORDER" "$expected"
 
     run_scenario sort_metrics -l x -d app -t users --mode exact --no-color
     assert_status 0
