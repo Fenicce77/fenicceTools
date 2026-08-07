@@ -1,1 +1,20 @@
+# Codex worktrees
 .worktrees/
+
+# macOS metadata
+.DS_Store
+
+# Python bytecode, test caches, and coverage
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Go test and coverage artifacts
+*.test
+coverage.out
+
+# Local ProxySQL monitor build
+/mysql/proxysql/go/proxysql-monitor
