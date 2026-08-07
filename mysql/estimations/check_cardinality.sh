@@ -434,7 +434,45 @@ EOF
 }
 
 prepare_ordered_results() {
+    local sorted_file awk_program tab
     ORDERED_RESULT_FILE=$RESULT_FILE
+    [[ -n "$SORT_BY" ]] || return 0
+
+    sorted_file="$WORK_DIR/results.sorted.$TABLES_COMPLETED.tsv"
+    tab=$'\t'
+    awk_program='
+function metric_key(value, scale, force_error,    parts, part_count, integer, fraction) {
+    if (force_error) return "2\t0\t0"
+    if (value !~ /^[0-9]+([.][0-9]+)?$/) return "1\t0\t0"
+    part_count = split(value, parts, ".")
+    integer = parts[1]
+    sub(/^0+/, "", integer)
+    if (integer == "") integer = "0"
+    fraction = (part_count > 1 ? parts[2] : "")
+    while (length(fraction) < scale) fraction = fraction "0"
+    fraction = substr(fraction, 1, scale)
+    return "0\t" length(integer) "\t" integer fraction
+}
+{
+    split($11, status_parts, "|")
+    force_error = (status_parts[1] == "ERROR")
+    if (sort_by == "cardinality") {
+        primary = metric_key($5, 0, force_error)
+        secondary = metric_key($7, 2, force_error)
+    } else {
+        primary = metric_key($7, 2, force_error)
+        secondary = metric_key($5, 0, force_error)
+    }
+    print primary "\t" secondary "\t" NR "\t" $0
+}'
+
+    if ! LC_ALL=C awk -F "$tab" -v sort_by="$SORT_BY" "$awk_program" "$RESULT_FILE" |
+        LC_ALL=C sort -t "$tab" -k1,1n -k2,2nr -k3,3r -k4,4n -k5,5nr -k6,6r -k7,7n |
+        cut -f8- > "$sorted_file"; then
+        rm -f "$sorted_file"
+        runtime_error 3 "Unable to order cardinality results by $SORT_BY."
+    fi
+    ORDERED_RESULT_FILE=$sorted_file
 }
 
 truncate_text() { local text=$1 width=$2; if [[ ${#text} -le $width ]]; then TRUNCATED=$text; elif [[ $width -le 3 ]]; then TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w)}'); else TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w-3) "..."}'); fi; }

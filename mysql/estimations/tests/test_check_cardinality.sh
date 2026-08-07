@@ -245,6 +245,23 @@ END { print type_value "\t" indexes_value }
     RECONSTRUCTED_INDEXES=${fragments#*$'\t'}
 }
 
+capture_report_column_order() {
+    REPORT_COLUMN_ORDER=$(printf '%s\n' "$OUTPUT" | awk '
+function trim(value) { sub(/^[ ]+/, "", value); sub(/[ ]+$/, "", value); return value }
+{
+    separators = gsub(/\|/, "|")
+    if (separators != 7) next
+    first = $0
+    sub(/[|].*$/, "", first)
+    first = trim(first)
+    if (first != "" && first != "COLUMN") print first
+}')
+}
+
+assert_line_sequence() {
+    [[ "$1" == "$2" ]] || fail "$LAST_CASE: unexpected row order [$1], expected [$2]"
+}
+
 test_cli_help_and_compatibility() {
     run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'; assert_contains "$STRIPPED_OUTPUT" '--terminal-width'; assert_contains "$STRIPPED_OUTPUT" 'range: 120-10000'; assert_contains "$STRIPPED_OUTPUT" '--sort-by'; assert_contains "$STRIPPED_OUTPUT" 'cardinality|selectivity'; assert_contains "$STRIPPED_OUTPUT" '--sort-by cardinality'; assert_contains "$STRIPPED_OUTPUT" '--sort-by selectivity'
     run_case help --help; assert_status 0
@@ -349,6 +366,46 @@ test_mode_metadata_is_scan_safe() {
     assert_query_not_contains 'cardinality:exact_count'; assert_query_not_contains 'cardinality:exact_column'; assert_contains "$OUTPUT" 'metadata'
     run_scenario missing_estimate -l x -d app -t users --mode auto --no-color; assert_status 0; assert_query_not_contains 'cardinality:exact_count'
     run_scenario large -l x -d app -t users --mode metadata --no-color; assert_contains "$OUTPUT" 'tenant_id'; assert_contains "$OUTPUT" 'unavail'; assert_contains "$OUTPUT" 'N/A'; assert_not_contains "$OUTPUT" 'Drift: N/A%'
+}
+
+test_result_sorting_rules() {
+    local expected
+
+    run_scenario sort_metrics -l x -d app -t users --mode exact --no-color
+    assert_status 0
+    capture_report_column_order
+    expected=$(printf '%s\n' card_tie_low selectivity_tie_low card_tie_high zero_metric not_available stable_tie)
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
+
+    run_scenario sort_metrics -l x -d app -t users --mode exact --sort-by cardinality --no-color
+    assert_status 0
+    capture_report_column_order
+    expected=$(printf '%s\n' card_tie_high card_tie_low stable_tie selectivity_tie_low zero_metric not_available)
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
+
+    run_scenario sort_metrics -l x -d app -t users --mode exact --sort-by=selectivity --no-color
+    assert_status 0
+    capture_report_column_order
+    expected=$(printf '%s\n' card_tie_high card_tie_low stable_tie selectivity_tie_low zero_metric not_available)
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
+
+    run_scenario sort_error -l x -d app -t users --mode exact --sort-by cardinality --no-color
+    assert_status 4
+    capture_report_column_order
+    expected=$(printf '%s\n' card_tie_high card_tie_low stable_tie selectivity_tie_low zero_metric not_available error_metric)
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
+    assert_contains "$OUTPUT" 'forced metric failure'
+}
+
+test_result_sorting_preserves_unsigned_precision() {
+    local expected
+
+    run_scenario sort_uint64 -l x -d app -t users --mode metadata --sort-by cardinality --no-color
+    assert_status 0
+    capture_report_column_order
+    expected=$(printf '%s\n' max_uint64 below_uint64 small_value)
+    assert_line_sequence "$REPORT_COLUMN_ORDER" "$expected"
+    assert_contains "$OUTPUT" '18446744073709551615'
 }
 
 test_exact_optimizer_shortcuts_and_predicates() {
@@ -758,6 +815,8 @@ run_test help_color test_help_is_always_colored_and_runtime_no_color_is_preserve
 run_test cli_validation test_cli_validation_and_client_failures
 run_test cli_tables test_cli_table_file_and_deduplication
 run_test mode_metadata test_mode_metadata_is_scan_safe
+run_test result_sorting test_result_sorting_rules
+run_test sort_uint64 test_result_sorting_preserves_unsigned_precision
 run_test exact_analysis test_exact_optimizer_shortcuts_and_predicates
 run_test exact_drift test_exact_threshold_and_drift
 run_test analyze_guard test_analyze_guard_and_order

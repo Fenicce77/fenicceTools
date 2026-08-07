@@ -24,6 +24,7 @@ case "$scenario:$query" in
     analyze_error:*ANALYZE\ LOCAL\ TABLE*bad*) printf '%s\n' 'app.bad\tanalyze\terror\tforced failure'; exit 0 ;;
     timeout:*cardinality:exact_column*slow_col*) printf '%s\n' 'maximum statement execution time exceeded' >&2; exit 1 ;;
     layout_wrapped_error:*cardinality:exact_column*wrapped_failure*) printf '%s\n' 'forced wrapped-column failure' >&2; exit 1 ;;
+    sort_error:*cardinality:exact_column*'`error_metric`'*) printf '%s\n' 'forced metric failure' >&2; exit 1 ;;
 esac
 
 case "$query" in
@@ -39,6 +40,7 @@ case "$query" in
             threshold) printf 'InnoDB\t500000\n' ;;
             drift) printf 'InnoDB\t50\n' ;;
             layout_divergent) printf 'InnoDB\t1\n' ;;
+            sort_metrics|sort_error|sort_uint64) printf 'InnoDB\t100\n' ;;
             *) printf 'InnoDB\t100\n' ;;
         esac
         ;;
@@ -87,6 +89,20 @@ case "$query" in
             layout_oversized_index)
                 printf 'external_reference\tvarchar(128)\tvarchar\tNO\t100\tidx_external\tLEADING_SINGLE\t1\tidx_external_reference_identifier_exceeding_the_terminal_cell_width(#1)\n'
                 ;;
+            sort_metrics|sort_error)
+                printf 'card_tie_low\tbigint unsigned\tbigint\tYES\t50\tN/A\tUNAVAILABLE\t0\t---\n'
+                printf 'selectivity_tie_low\tbigint unsigned\tbigint\tYES\t20\tN/A\tUNAVAILABLE\t0\t---\n'
+                printf 'card_tie_high\tbigint unsigned\tbigint\tYES\t50\tN/A\tUNAVAILABLE\t0\t---\n'
+                printf 'zero_metric\tbigint unsigned\tbigint\tYES\t0\tN/A\tUNAVAILABLE\t0\t---\n'
+                printf 'not_available\tbigint unsigned\tbigint\tYES\tN/A\tN/A\tUNAVAILABLE\t0\t---\n'
+                printf 'stable_tie\tbigint unsigned\tbigint\tYES\t50\tN/A\tUNAVAILABLE\t0\t---\n'
+                [[ "$scenario" != sort_error ]] || printf 'error_metric\tbigint unsigned\tbigint\tYES\tN/A\tN/A\tUNAVAILABLE\t0\t---\n'
+                ;;
+            sort_uint64)
+                printf 'below_uint64\tbigint unsigned\tbigint\tNO\t9999999999999999999\tidx_below\tLEADING_SINGLE\t1\tidx_below(#1)\n'
+                printf 'max_uint64\tbigint unsigned\tbigint\tNO\t18446744073709551615\tidx_max\tLEADING_SINGLE\t1\tidx_max(#1)\n'
+                printf 'small_value\tbigint unsigned\tbigint\tNO\t900\tidx_small\tLEADING_SINGLE\t1\tidx_small(#1)\n'
+                ;;
             *) printf 'id\tbigint\tbigint\tNO\t100\tPRIMARY\tPRIMARY_SINGLE\t1\tPRIMARY(#1)\n' ;;
         esac
         ;;
@@ -104,6 +120,21 @@ case "$query" in
         esac
         ;;
     *cardinality:exact_unique_nullable*) printf '95\n' ;;
-    *cardinality:exact_column*) printf '40\t80\n' ;;
+    *cardinality:exact_column*)
+        case "$scenario" in
+            sort_metrics|sort_error)
+                case "$query" in
+                    *'`card_tie_low`'*) printf '50\t100\n' ;;
+                    *'`selectivity_tie_low`'*) printf '20\t40\n' ;;
+                    *'`card_tie_high`'*) printf '50\t50\n' ;;
+                    *'`zero_metric`'*) printf '0\t100\n' ;;
+                    *'`not_available`'*) printf 'N/A\tN/A\n' ;;
+                    *'`stable_tie`'*) printf '50\t100\n' ;;
+                    *) printf 'fake_mysql: unknown sort column\n' >&2; exit 91 ;;
+                esac
+                ;;
+            *) printf '40\t80\n' ;;
+        esac
+        ;;
     *) printf 'fake_mysql: unhandled query: %s\n' "$query" >&2; exit 91 ;;
 esac
