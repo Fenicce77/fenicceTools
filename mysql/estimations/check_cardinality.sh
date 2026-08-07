@@ -37,6 +37,8 @@ initialize_defaults() {
     TABLES_METADATA=0
     MYSQL_OUTPUT=""
     MYSQL_ERROR=""
+    SORT_BY=""
+    ORDERED_RESULT_FILE=""
 }
 
 initialize_colors() {
@@ -85,6 +87,7 @@ show_help() {
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--format' "$help_reset" "$help_value" 'csv|tsv' "$help_reset" 'Report format; inferred from extension when omitted'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--mysql-bin' "$help_reset" "$help_value" 'PATH' "$help_reset" 'Local MySQL client executable (optional)'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--terminal-width' "$help_reset" "$help_value" 'N' "$help_reset" 'Override terminal width (range: 120-10000)'
+    printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--sort-by' "$help_reset" "$help_value" 'cardinality|selectivity' "$help_reset" 'Rank index candidates by metric, descending'
     printf '  %s%-32s%s %s%-19s%s %s\n' "$help_option" '--no-color' "$help_reset" "$help_value" '' "$help_reset" 'Disable ANSI colors'
     printf '  %s%-32s%s %s%-19s%s %s\n\n' "$help_option" '-h, --help' "$help_reset" "$help_value" '' "$help_reset" 'Show this help and exit'
 
@@ -94,6 +97,12 @@ show_help() {
     printf '  %s%s -l test-mysql -d app -t users --mode exact -o cardinality.csv%s\n' "$help_value" "$0" "$help_reset"
     printf '  %s%s -l test-mysql -d app -t users --analyze-table --environment test%s\n' "$help_value" "$0" "$help_reset"
     printf '  %s%s -l test-mysql -d app -t users --terminal-width 180%s\n\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --sort-by cardinality%s\n' "$help_value" "$0" "$help_reset"
+    printf '  %s%s -l test-mysql -d app -t users --sort-by selectivity%s\n\n' "$help_value" "$0" "$help_reset"
+
+    printf '%sIndex candidate guidance:%s\n' "$help_section" "$help_reset"
+    printf '%s  Metric ranking is guidance only. Validate predicates, joins, ranges, ORDER BY/%s\n' "$help_warning" "$help_reset"
+    printf '%s  GROUP BY, covering needs, workload frequency, and the leftmost-prefix rule.%s\n\n' "$help_warning" "$help_reset"
 
     printf '%sSafety:%s\n' "$help_section" "$help_reset"
     printf '%s  metadata mode never scans user tables. ANALYZE requires explicit development,%s\n' "$help_warning" "$help_reset"
@@ -162,6 +171,15 @@ parse_arguments() {
                 TERMINAL_WIDTH_OPTION=$2
                 shift
                 ;;
+            --sort-by=*)
+                SORT_BY=${1#*=}
+                [[ -n "$SORT_BY" ]] || cli_error "Option --sort-by requires a value."
+                ;;
+            --sort-by)
+                require_value "$1" "${2-}"
+                SORT_BY=$2
+                shift
+                ;;
             --no-color) NO_COLOR=true ;;
             --) shift; break ;;
             -*) cli_error "Unknown option: $1" ;;
@@ -184,6 +202,7 @@ validate_arguments() {
         TERMINAL_WIDTH_OPTION=$NORMALIZED_TERMINAL_WIDTH
     fi
     case "$REQUESTED_MODE" in auto|metadata|exact) : ;; *) cli_error "Invalid mode: $REQUESTED_MODE" ;; esac
+    case "$SORT_BY" in ""|cardinality|selectivity) : ;; *) cli_error "Invalid sort field: $SORT_BY" ;; esac
     case "$ENVIRONMENT" in ""|development|test|staging|production) : ;; *) cli_error "Invalid environment: $ENVIRONMENT" ;; esac
     case "$OUTPUT_FORMAT" in ""|csv|tsv) : ;; *) cli_error "Invalid output format: $OUTPUT_FORMAT" ;; esac
     [[ -z "$OUTPUT_FORMAT" || -n "$OUTPUT_FILE" ]] || cli_error "--format requires --output-file."
@@ -412,6 +431,10 @@ analyze_columns() {
     done <<EOF
 $COLUMN_METADATA
 EOF
+}
+
+prepare_ordered_results() {
+    ORDERED_RESULT_FILE=$RESULT_FILE
 }
 
 truncate_text() { local text=$1 width=$2; if [[ ${#text} -le $width ]]; then TRUNCATED=$text; elif [[ $width -le 3 ]]; then TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w)}'); else TRUNCATED=$(printf '%s' "$text" | awk -v w="$width" '{print substr($0,1,w-3) "..."}'); fi; }
@@ -706,7 +729,7 @@ format_table_report() {
             printf '%s%s%s\n' "$row_color" "$RENDERED_LINE" "$COLOR_RESET"
         done
         [[ -z "$error" ]] || printf '%s  Error: %s%s\n' "$COLOR_RED" "$error" "$COLOR_RESET"
-    done < "$RESULT_FILE"
+    done < "$ORDERED_RESULT_FILE"
 }
 
 csv_escape() {
@@ -736,7 +759,7 @@ append_export_results() {
     while IFS=$'\t' read -r column type nullable eligible card ratio pct source source_index indexes status_error; do
         status=${status_error%%|*}; error=${status_error#*|}
         export_row "$DATABASE" "$table" "$TABLE_ENGINE" "$REQUESTED_MODE" "$EFFECTIVE_MODE" "$ESTIMATED_ROWS" "$EXACT_ROWS" "$DRIFT_PCT" "$column" "$type" "$nullable" "$eligible" "$card" "$ratio" "$pct" "$source" "$source_index" "$indexes" "$status" "$error"
-    done < "$RESULT_FILE"
+    done < "$ORDERED_RESULT_FILE"
 }
 
 process_table() {
@@ -756,6 +779,7 @@ process_table() {
     COLUMN_METADATA=$MYSQL_OUTPUT
     if [[ -z "$COLUMN_METADATA" ]]; then printf '%sERROR%s: no column metadata returned for %s.%s\n' "$COLOR_RED" "$COLOR_RESET" "$DATABASE" "$table" >&2; TABLES_FAILED=$((TABLES_FAILED + 1)); FINAL_STATUS=4; return; fi
     analyze_columns "$table"
+    prepare_ordered_results
     format_table_report "$table"
     append_export_results "$table"
     if grep -F 'ERROR|' "$RESULT_FILE" >/dev/null 2>&1; then

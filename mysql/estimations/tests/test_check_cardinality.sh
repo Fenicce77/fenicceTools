@@ -246,11 +246,15 @@ END { print type_value "\t" indexes_value }
 }
 
 test_cli_help_and_compatibility() {
-    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'; assert_contains "$STRIPPED_OUTPUT" '--terminal-width'; assert_contains "$STRIPPED_OUTPUT" 'range: 120-10000'
+    run_case no_args; assert_status 0; assert_contains "$OUTPUT" 'MySQL Cardinality Analyzer'; strip_ansi "$OUTPUT"; assert_contains "$STRIPPED_OUTPUT" '--mode auto|metadata|exact'; assert_contains "$STRIPPED_OUTPUT" '--terminal-width'; assert_contains "$STRIPPED_OUTPUT" 'range: 120-10000'; assert_contains "$STRIPPED_OUTPUT" '--sort-by'; assert_contains "$STRIPPED_OUTPUT" 'cardinality|selectivity'; assert_contains "$STRIPPED_OUTPUT" '--sort-by cardinality'; assert_contains "$STRIPPED_OUTPUT" '--sort-by selectivity'
     run_case help --help; assert_status 0
     run_case short -l test -d app -t users -p 500000 -r 10 --no-color; assert_status 0
     run_case long --login-path=test --database=app --tables=users --performance-threshold=500000 --drift-threshold=10 --mode=auto --max-execution-time-ms=30000 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
     run_case width_long --login-path=test --database=app --tables=users --terminal-width=160 --mysql-bin="$FAKE_MYSQL" --no-color; assert_status 0
+    run_case sort_separate -l x -d app -t users --mode metadata --sort-by cardinality --no-color
+    assert_status 0
+    run_case sort_equals -l x -d app -t users --mode metadata --sort-by=selectivity --no-color
+    assert_status 0
 }
 
 test_help_is_always_colored_and_runtime_no_color_is_preserved() {
@@ -312,6 +316,18 @@ test_cli_validation_and_client_failures() {
     run_case width_very_long -l x -d app -t users --terminal-width 999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
     overlength_padded_width=$(printf '%0100d' 0)120
     run_case width_overlength_padded -l x -d app -t users --terminal-width "$overlength_padded_width"; assert_status 2; assert_contains "$OUTPUT" 'Terminal width must be an integer from 120 to 10000.'; assert_error_count "$OUTPUT" 1; assert_not_contains "$OUTPUT" 'value too great for base'
+    run_case sort_missing -l x -d app -t users --sort-by
+    assert_status 2
+    assert_contains "$OUTPUT" 'Option --sort-by requires a value.'
+    assert_error_count "$OUTPUT" 1
+    run_case sort_empty -l x -d app -t users --sort-by=
+    assert_status 2
+    assert_contains "$OUTPUT" 'Option --sort-by requires a value.'
+    assert_error_count "$OUTPUT" 1
+    run_case sort_invalid -l x -d app -t users --sort-by ratio
+    assert_status 2
+    assert_contains "$OUTPUT" 'Invalid sort field: ratio'
+    assert_error_count "$OUTPUT" 1
     run_case bad_mode -l x -d app -t users --mode unsafe; assert_status 2
     run_case bad_number -l x -d app -t users -p -1; assert_status 2
     run_case format_without_file -l x -d app -t users --format csv; assert_status 2
