@@ -7,18 +7,23 @@ color=1; [[ -t 1 ]] || color=0
 
 die() { printf 'Error: %s\n' "$1" >&2; exit "${2:-2}"; }
 paint() { [[ $color -eq 1 ]] && printf '\033[%sm%s\033[0m' "$1" "$2" || printf '%s' "$2"; }
-help() { cat <<'EOF'
-Usage: analyze_prefix_index.sh -l LOGIN_PATH -d DATABASE -t TABLE --environment ENVIRONMENT [OPTIONS]
-
-Analyze string-column prefix selectivity without changing the target server.
-Required: -l, --login-path; -d, --database; -t, --table; --environment development|test|staging|production.
-Options: -c, --columns LIST; -m, --max-prefix NUMBER; --mysql-bin PATH; --query-timeout MILLISECONDS; --allow-production; --no-color; -h, --help.
-Examples:
-  analyze_prefix_index.sh -l reporting -d app -t users --environment test
-  analyze_prefix_index.sh -l reporting -d app -t users -c email,name -m 32 --environment staging
-EOF
+help() {
+  paint '1;34' '=============================================================================='; printf '\n'
+  paint '1;32' ' MySQL Optimal Index Prefix Analyzer'; printf '\n'
+  paint '1;34' '=============================================================================='; printf '\n'
+  paint '1;33' 'Usage:'; printf ' %s -l LOGIN_PATH -d DATABASE -t TABLE --environment ENVIRONMENT [OPTIONS]\n\n' "${0##*/}"
+  printf 'Analyze leftmost index-prefix selectivity without changing the target server.\n\n'
+  paint '1;33' 'Required options'; printf '\n'
+  printf '  -l, --login-path NAME       MySQL login path\n  -d, --database NAME          Target database\n  -t, --table NAME             Target table\n  --environment NAME           development, test, staging, or production\n\n'
+  paint '1;33' 'Optional options'; printf '\n'
+  printf '  -c, --columns LIST          Comma-separated columns\n  -m, --max-prefix NUMBER      Maximum prefix length (default: 50)\n  --mysql-bin PATH             Local mysql client\n  --query-timeout MILLISECONDS  Optimizer execution-time hint\n  --allow-production            Required with production\n  --no-color                    Disable ANSI colors\n  -h, --help                    Show this help\n\n'
+  paint '1;33' 'Examples'; printf '\n'
+  printf '  %s -l reporting -d app -t users --environment test\n' "${0##*/}"
+  printf '  %s -l reporting -d app -t users -c email,name -m 32 --environment staging\n' "${0##*/}"
+  paint '1;34' '=============================================================================='; printf '\n'
 }
 need() { [[ $# -ge 2 && -n $2 ]] || die "Option $1 requires a value."; }
+if [[ $# -eq 0 ]]; then help; exit 0; fi
 while [[ $# -gt 0 ]]; do case $1 in
   -h|--help) help; exit 0;; -l|--login-path) need "$@"; LOGIN_PATH=$2; shift 2;; -d|--database) need "$@"; DATABASE=$2; shift 2;; -t|--table) need "$@"; TABLE=$2; shift 2;; -c|--columns) need "$@"; COLUMNS=$2; shift 2;; -m|--max-prefix) need "$@"; MAX_PREFIX=$2; shift 2;;
   --environment) need "$@"; ENVIRONMENT=$2; shift 2;; --mysql-bin) need "$@"; MYSQL_BIN=$2; shift 2;; --query-timeout) need "$@"; QUERY_TIMEOUT=$2; shift 2;; --allow-production) ALLOW_PRODUCTION=1; shift;; --no-color) NO_COLOR=1; color=0; shift;; *) die "Unknown option: $1";; esac; done
