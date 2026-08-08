@@ -18,3 +18,19 @@ coverage.out
 
 # Local ProxySQL monitor build
 /mysql/proxysql/go/proxysql-monitor
+
+# Local Porko builds
+/myporko
+/myporko2
+/poko5000
+/porko10000
+/porko2000
+/porko10k
+/porko20k
+/porko5k
+/newobj_mac/porko
+/newobj_mac/porko500
+/obj/mac/porko10k
+/obj/mac/porko1k
+/obj/mac/porko2k
+/obj/mac/porko5k
