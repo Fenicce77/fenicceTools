@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # ==============================================================================
 # MySQL Storage & Memory Estimator (Data vs. Index vs. Rows)
@@ -16,17 +17,21 @@ show_help() {
     echo -e "${CYAN}Usage:${NC} $0 [OPTIONS]"
     echo -e "Estimate MySQL storage, Buffer Pool memory, and row growth."
     echo ""
-    echo -e "${YELLOW}Required Arguments:${NC}"
+    echo -e "${YELLOW}Required options:${NC}"
     echo -e "  -l, --login-path PATH   MySQL login path (configured via mysql_config_editor)"
     echo -e "  -d, --database NAME     Target database name"
     echo -e "  -t, --table-prefix PFX  Table prefix (e.g., 'users' matches 'users_*')"
     echo -e "  -r, --rows NUM          Estimated number of rows inserted per time unit"
     echo ""
-    echo -e "${YELLOW}Optional Arguments:${NC}"
+    echo -e "${YELLOW}Optional options:${NC}"
     echo -e "  -u, --unit UNIT         Time unit for rows: 'hour' or 'day' (Default: day)"
     echo -e "  -k, --retention DAYS    Data retention period in days (Default: 30)"
     echo -e "  -i, --index-factor NUM  Estimated index size multiplier (Default: 0.3 = 30%)"
     echo -e "  -h, --help              Show this help message"
+    echo -e "  --environment ENV       development, test, staging, or production"
+    echo -e "  --allow-production       Required for production"
+    echo -e "  --mysql-bin PATH         Local mysql client"
+    echo -e "  --no-color               Disable ANSI colors"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  $0 -l dev_db -d app_data -t logs -r 50000 -k 90"
@@ -38,6 +43,7 @@ show_help() {
 RETENTION_DAYS=30 # Default
 UNIT="day"        # Default
 IDX_FACTOR=0.3    # Default (30% index overhead)
+ENVIRONMENT="" ALLOW_PRODUCTION=0 MYSQL_BIN="${MYSQL_BIN:-mysql}"
 
 # Show help by default if no arguments are provided
 if [[ "$#" -eq 0 ]]; then
@@ -54,6 +60,10 @@ while [[ "$#" -gt 0 ]]; do
         -u|--unit) UNIT="$2"; shift ;;
         -k|--retention) RETENTION_DAYS="$2"; shift ;;
         -i|--index-factor) IDX_FACTOR="$2"; shift ;;
+        --environment) ENVIRONMENT="$2"; shift ;;
+        --allow-production) ALLOW_PRODUCTION=1 ;;
+        --mysql-bin) MYSQL_BIN="$2"; shift ;;
+        --no-color) RED='' GREEN='' YELLOW='' CYAN='' NC='' ;;
         *) 
             echo -e "${RED}Unknown parameter passed: $1${NC}"
             echo -e "Run '${CYAN}$0 --help${NC}' for usage information."
@@ -64,11 +74,16 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 # --- Validation ---
-if [[ -z "$LOGIN_PATH" || -z "$DB_NAME" || -z "$TABLE_PREFIX" || -z "$ROWS" ]]; then
+if [[ -z "$LOGIN_PATH" || -z "$DB_NAME" || -z "$TABLE_PREFIX" || -z "$ROWS" || -z "$ENVIRONMENT" ]]; then
     echo -e "${RED}Error: Missing required arguments.${NC}"
     echo -e "Run '${CYAN}$0 --help${NC}' for usage information."
     exit 1
 fi
+[[ "$ENVIRONMENT" =~ ^(development|test|staging|production)$ ]] || { echo -e "${RED}Error: invalid environment.${NC}"; exit 2; }
+[[ "$ENVIRONMENT" != production || $ALLOW_PRODUCTION -eq 1 ]] || { echo -e "${RED}Error: production requires --allow-production.${NC}"; exit 2; }
+[[ "$ENVIRONMENT" == production || $ALLOW_PRODUCTION -eq 0 ]] || { echo -e "${RED}Error: --allow-production is production-only.${NC}"; exit 2; }
+[[ "$TABLE_PREFIX" != *%* ]] || { echo -e "${RED}Error: --table-prefix must not contain %.${NC}"; exit 2; }
+command -v "$MYSQL_BIN" >/dev/null 2>&1 || { echo -e "${RED}Error: mysql client not found.${NC}"; exit 3; }
 
 # Validate numeric inputs (Regex allows decimals for index factor)
 if ! [[ "$ROWS" =~ ^[0-9]+$ ]] || ! [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
@@ -103,7 +118,7 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M")
 CSV_OUT="storage_estimate_${TABLE_PREFIX}_${TIMESTAMP}.csv"
 
 # --- 1. Check Connection, Version, and Buffer Pool Size ---
-MYSQL_VER=$(mysql --login-path="$LOGIN_PATH" -sN -e "SELECT VERSION();" 2>/dev/null)
+MYSQL_VER=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" -sN -e "SELECT VERSION();" 2>/dev/null)
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}Error: Connection failed.${NC} Check your login-path: 'mysql_config_editor list'"
@@ -111,7 +126,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Fetch Buffer Pool Size in Bytes and convert to GB for display
-BP_BYTES=$(mysql --login-path="$LOGIN_PATH" -sN -e "SELECT @@innodb_buffer_pool_size;" 2>/dev/null)
+BP_BYTES=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" -sN -e "SELECT @@innodb_buffer_pool_size;" 2>/dev/null)
 if [[ -n "$BP_BYTES" && "$BP_BYTES" =~ ^[0-9]+$ ]]; then
     BP_GB=$(awk "BEGIN {printf \"%.2f\", $BP_BYTES / 1024 / 1024 / 1024}")
 else
@@ -181,10 +196,10 @@ GROUP BY TABLE_NAME WITH ROLLUP;"
 
 # --- 3. Execute and Output to Table (Terminal) and CSV (File) ---
 # Generate Terminal Table
-mysql --login-path="$LOGIN_PATH" -t -e "$QUERY" "$DB_NAME"
+"$MYSQL_BIN" --login-path="$LOGIN_PATH" -t -e "$QUERY" "$DB_NAME"
 
 # Generate CSV
-mysql --login-path="$LOGIN_PATH" -s -e "$QUERY" "$DB_NAME" | tr '\t' ',' > "$CSV_OUT"
+"$MYSQL_BIN" --login-path="$LOGIN_PATH" -s -e "$QUERY" "$DB_NAME" | tr '\t' ',' > "$CSV_OUT"
 
 echo -e "${CYAN}--------------------------------------------------------------------------------${NC}"
 echo -e "${GREEN}Done.${NC} CSV report generated: ${YELLOW}$CSV_OUT${NC}"
