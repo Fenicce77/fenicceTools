@@ -131,5 +131,13 @@ mysql/estimations/check_cardinality.sh \
 ## Roadmap
 
 - Phase 1: standardized cardinality analyzer, tests, and reports — implemented.
-- Phase 2: align `analyze_prefix_index.sh` CLI, validation, and reporting — pending.
+- Phase 2: align `analyze_prefix_index.sh` CLI, validation, and reporting — implemented.
 - Phase 3: align `estimate_storage.sh` CLI, validation, and reporting — pending.
+
+## Prefix index analyzer
+
+```text
+analyze_prefix_index.sh -l LOGIN_PATH -d DATABASE -t TABLE --environment ENVIRONMENT [OPTIONS]
+```
+
+The analyzer evaluates prefix selectivity without modifying the target server. It requires `--environment`; production execution also requires `--allow-production`. Use `--mysql-bin` to select a local client, `--query-timeout` to apply a MySQL execution-time hint, and `--no-color` for automation. The script validates SQL identifiers before issuing queries and returns `4` if one or more requested columns fail while others complete.
