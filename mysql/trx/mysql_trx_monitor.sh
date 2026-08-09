@@ -106,11 +106,10 @@ require_value() {
     [[ -n "${2-}" && "${2-}" != -* ]] || cli_error "Option $1 requires a value."
 }
 
-sql_escape_literal() {
-    local escaped=$1
-    escaped=${escaped//\\/\\\\}
-    escaped=${escaped//\'/\'\'}
-    SQL_ESCAPED_LITERAL="'$escaped'"
+sql_literal() {
+    local hex
+    hex=$(printf '%s' "$1" | od -An -tx1 | awk '{ for (i = 1; i <= NF; i++) printf "%s", $i }')
+    SQL_LITERAL="CONVERT(X'$hex' USING utf8mb4)"
 }
 
 build_filter_list() {
@@ -127,8 +126,8 @@ build_filter_list() {
             FILTER_ERROR="Invalid $option: empty list items are not allowed."
             return 1
         fi
-        sql_escape_literal "$item"
-        FILTER_SQL_LIST="${FILTER_SQL_LIST}${separator}${SQL_ESCAPED_LITERAL}"
+        sql_literal "$item"
+        FILTER_SQL_LIST="${FILTER_SQL_LIST}${separator}${SQL_LITERAL}"
         separator=","
         [[ "$last" == true ]] && break
     done
@@ -222,7 +221,11 @@ parse_arguments() {
             --mysql-bin) require_value "$1" "${2-}"; MYSQL_BIN_OPTION=$2; shift ;;
             --smoke-test) SMOKE_TEST=true ;;
             --no-color) NO_COLOR=true ;;
-            --) shift; break ;;
+            --)
+                shift
+                [[ $# -eq 0 ]] || cli_error "Unexpected argument: $1"
+                break
+                ;;
             -*) cli_error "Unknown option: $1" ;;
             *) cli_error "Unexpected argument: $1" ;;
         esac
@@ -266,23 +269,49 @@ run_query() {
     return 1
 }
 
+sanitize_query_error() {
+    local message=$1
+    message=$(printf '%s' "$message" | sed $'s/\033\\[[0-9;]*[[:alpha:]]//g')
+    message=${message//$'\033'/}
+    message=${message//$'\r'/ }
+    message=${message//$'\n'/ }
+    [[ -n "$message" ]] || message='no diagnostic returned'
+    SANITIZED_QUERY_ERROR=${message:0:240}
+}
+
+check_connection() {
+    if ! run_query 'SELECT /* trx-monitor:connection-check */ 1;'; then
+        runtime_error 3 "Unable to connect using login path '$LOGIN_PATH': $QUERY_ERROR"
+    fi
+}
+
 transaction_query_pfs() {
     printf '%s' "SELECT /* trx-monitor:transactions-pfs */
        p.ID,
        COALESCE(p.USER, '-'),
        COALESCE(p.HOST, '-'),
        COALESCE(p.DB, '-'),
-       GREATEST(COALESCE(p.TIME, 0), COALESCE(CAST(et.TIMER_WAIT / 1000000000000 AS UNSIGNED), 0)),
+       GREATEST(
+           COALESCE(p.TIME, 0),
+           COALESCE(TIMESTAMPDIFF(SECOND, t.trx_started, NOW()), 0),
+           COALESCE(CAST((CASE WHEN et.STATE = 'ACTIVE' THEN et.TIMER_WAIT ELSE 0 END) / 1000000000000 AS UNSIGNED), 0)
+       ),
        COALESCE(p.STATE, '-'),
        COALESCE(SUBSTRING(p.INFO, 1, 160), '-')
 FROM information_schema.PROCESSLIST AS p
-JOIN performance_schema.threads AS th
+LEFT JOIN information_schema.innodb_trx AS t
+  ON t.trx_mysql_thread_id = p.ID
+LEFT JOIN performance_schema.threads AS th
   ON th.PROCESSLIST_ID = p.ID
 LEFT JOIN performance_schema.events_transactions_current AS et
   ON et.THREAD_ID = th.THREAD_ID
 WHERE p.ID != CONNECTION_ID()
-  AND (et.EVENT_ID IS NOT NULL OR p.COMMAND != 'Sleep')
-  AND GREATEST(COALESCE(p.TIME, 0), COALESCE(CAST(et.TIMER_WAIT / 1000000000000 AS UNSIGNED), 0)) >= $MIN_AGE${TRANSACTION_FILTER_SQL}
+  AND (t.trx_id IS NOT NULL OR p.COMMAND != 'Sleep')
+  AND GREATEST(
+          COALESCE(p.TIME, 0),
+          COALESCE(TIMESTAMPDIFF(SECOND, t.trx_started, NOW()), 0),
+          COALESCE(CAST((CASE WHEN et.STATE = 'ACTIVE' THEN et.TIMER_WAIT ELSE 0 END) / 1000000000000 AS UNSIGNED), 0)
+      ) >= $MIN_AGE${TRANSACTION_FILTER_SQL}
 ORDER BY 5 DESC;"
 }
 
@@ -318,7 +347,8 @@ render_transactions() {
         [[ -z "$QUERY_OUTPUT" ]] || printf '%s\n' "$QUERY_OUTPUT"
         return 0
     fi
-    printf 'TRANSACTIONS UNAVAILABLE: performance_schema and information_schema transaction views cannot be queried.\n'
+    sanitize_query_error "$QUERY_ERROR"
+    printf 'TRANSACTIONS UNAVAILABLE: performance_schema and information_schema transaction views cannot be queried. Last error: %s\n' "$SANITIZED_QUERY_ERROR"
 }
 
 render_locks() {
@@ -326,22 +356,27 @@ render_locks() {
     printf 'LOCK WAITS\n'
     printf 'BLOCKING_ID\tBLOCKING_ACCOUNT\tWAITING_ID\tWAITING_ACCOUNT\tLOCKED_TABLE\tWAIT_S\tBLOCKING_QUERY\tWAITING_QUERY\n'
     sql="SELECT /* trx-monitor:locks */
-       blocking_pid,
-       blocking_account,
-       waiting_pid,
-       waiting_account,
-       locked_table,
-       wait_age_secs,
-       blocking_query,
-       waiting_query
-FROM sys.innodb_lock_waits
-WHERE wait_age_secs >= $MIN_AGE
-ORDER BY wait_age_secs DESC;"
+       w.blocking_pid,
+       CONCAT(COALESCE(blocking_thread.PROCESSLIST_USER, '-'), '@', COALESCE(blocking_thread.PROCESSLIST_HOST, '-')),
+       w.waiting_pid,
+       CONCAT(COALESCE(waiting_thread.PROCESSLIST_USER, '-'), '@', COALESCE(waiting_thread.PROCESSLIST_HOST, '-')),
+       CONCAT(w.locked_table_schema, '.', w.locked_table_name),
+       w.wait_age_secs,
+       w.blocking_query,
+       w.waiting_query
+FROM sys.innodb_lock_waits AS w
+LEFT JOIN performance_schema.threads AS blocking_thread
+  ON blocking_thread.PROCESSLIST_ID = w.blocking_pid
+LEFT JOIN performance_schema.threads AS waiting_thread
+  ON waiting_thread.PROCESSLIST_ID = w.waiting_pid
+WHERE w.wait_age_secs >= $MIN_AGE
+ORDER BY w.wait_age_secs DESC;"
     if run_query "$sql"; then
         [[ -z "$QUERY_OUTPUT" ]] || printf '%s\n' "$QUERY_OUTPUT"
         return 0
     fi
-    printf 'LOCK WAITS UNAVAILABLE: sys.innodb_lock_waits cannot be queried.\n'
+    sanitize_query_error "$QUERY_ERROR"
+    printf 'LOCK WAITS UNAVAILABLE: sys.innodb_lock_waits cannot be queried. Error: %s\n' "$SANITIZED_QUERY_ERROR"
 }
 
 render_snapshot() {
@@ -452,20 +487,11 @@ toggle_logging() {
 }
 
 kill_connection() {
-    local connection_id own_connection confirmation target_sql
+    local connection_id confirmation target_sql
     printf 'Connection ID: '
     IFS= read -r connection_id || return 1
     if [[ ! "$connection_id" =~ ^[1-9][0-9]*$ ]]; then
         printf 'Invalid connection ID.\n'
-        return 0
-    fi
-    if ! run_query 'SELECT /* trx-monitor:connection-id */ CONNECTION_ID();'; then
-        printf 'Unable to resolve the monitor connection ID: %s\n' "$QUERY_ERROR" >&2
-        return 0
-    fi
-    own_connection=${QUERY_OUTPUT%%$'\n'*}
-    if [[ "$connection_id" == "$own_connection" ]]; then
-        printf 'Refusing to kill the monitor connection.\n'
         return 0
     fi
     target_sql="SELECT /* trx-monitor:kill-target */ ID, USER, HOST, DB, COMMAND, TIME, STATE, INFO
@@ -494,7 +520,7 @@ WHERE ID = $connection_id;"
 }
 
 interactive_loop() {
-    local key
+    local key read_status
     render_and_publish
     while true; do
         if [[ "$PAUSED" == true ]]; then
@@ -502,10 +528,15 @@ interactive_loop() {
             IFS= read -r -n 1 key || return 0
         else
             printf '\n[v]iew [p]ause [f]ilters [l]og [k]ill [q]uit: '
-            if ! IFS= read -r -n 1 -t "$REFRESH_TIME" key; then
+            read_status=0
+            IFS= read -r -n 1 -t "$REFRESH_TIME" key || read_status=$?
+            if [[ "$read_status" -ne 0 ]]; then
                 printf '\n'
-                render_and_publish
-                continue
+                if [[ "$read_status" -gt 128 ]]; then
+                    render_and_publish
+                    continue
+                fi
+                return 0
             fi
         fi
         printf '\n'
@@ -532,6 +563,7 @@ main() {
     parse_arguments "$@"
     validate_arguments
     resolve_mysql_bin
+    check_connection
     initialize_colors
     if [[ "$SMOKE_TEST" == true ]]; then
         render_and_publish

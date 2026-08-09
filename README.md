@@ -88,7 +88,7 @@ mysql/trx/mysql_trx_monitor.sh \
   --output-file mysql-trx-snapshots.log
 ```
 
-Monitoring and snapshot logging are read-only. The interactive `k` command is the only path that can issue `KILL CONNECTION`; it requires a manually entered connection ID, displays the target, refuses the monitor's own connection, and executes only after the exact `kill ID` confirmation.
+Monitoring and snapshot logging are read-only. The interactive `k` command is the only path that can issue `KILL CONNECTION`; it requires a manually entered connection ID, displays the target, and executes only after the exact `kill ID` confirmation. Monitor queries use short-lived MySQL client sessions, so the tool has no persistent database connection of its own.
 
 ## Credential handling
 

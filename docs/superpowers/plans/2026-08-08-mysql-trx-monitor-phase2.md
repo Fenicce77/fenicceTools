@@ -13,8 +13,8 @@
 - Support macOS and Linux with Bash 3.2 and `set -euo pipefail`.
 - Keep all code comments, help, and emitted messages in English.
 - Do not alter legacy scripts under `mysql/trx/`; only modify the unified monitor and its tests.
-- `--user-filter`, `--database-filter`, and `--host-filter` accept comma-separated exact values only; reject empty values and SQL-escape each literal before rendering an `IN (...)` predicate.
-- Normal operation is read-only. Only the `k` command may issue `KILL CONNECTION`, after a user-entered numeric identifier, self-connection rejection, target inspection, and exact `kill ID` confirmation.
+- `--user-filter`, `--database-filter`, and `--host-filter` accept comma-separated exact values only; reject empty values and encode each as a mode-independent hexadecimal `utf8mb4` literal before rendering an `IN (...)` predicate.
+- Normal operation is read-only. Only the `k` command may issue `KILL CONNECTION`, after a user-entered numeric identifier, target inspection, and exact `kill ID` confirmation. Each MySQL command uses a short-lived client session, so there is no persistent monitor connection to reject.
 - Help must be sectioned, friendly, color-aware on an interactive terminal, and shown when invoked without parameters.
 - `--output-file` appends ANSI-free timestamped snapshots atomically enough that each rendered snapshot is written as one grouped append; no interactive prompts or escape sequences enter the file.
 - A missing `performance_schema` transaction query must fall back to `information_schema.PROCESSLIST` joined to `innodb_trx`; an unavailable `sys.innodb_lock_waits` must show a degraded locks message without failing the other view.
@@ -43,7 +43,7 @@
 
 - [ ] **Step 3: Add failing tests for exact SQL filtering and ANSI-free snapshot logging**
 
-  Invoke smoke mode with `--user-filter app,reporting --database-filter sales --host-filter host1 --output-file "$TMP/snapshot.log" --no-color`. Assert the captured transaction SQL contains exact `IN ('app','reporting')`, `IN ('sales')`, and `IN ('host1')` predicates; assert the log contains `Snapshot:` and `TRANSACTIONS`; assert no escape byte occurs in the log.
+  Invoke smoke mode with `--user-filter app,reporting --database-filter sales --host-filter host1 --output-file "$TMP/snapshot.log" --no-color`. Assert the captured transaction SQL contains exact `IN (...)` predicates using `CONVERT(X'...' USING utf8mb4)` literals; assert the log contains `Snapshot:` and `TRANSACTIONS`; assert no escape byte occurs in the log.
 
 - [ ] **Step 4: Add fake client modes and failing fallback/degraded-view tests**
 
@@ -51,7 +51,7 @@
 
 - [ ] **Step 5: Add no-automatic-kill and manual kill safety tests**
 
-  Preserve the smoke assertion that captured SQL has no `KILL`. Feed interactive input through a pipe for an invalid ID, the monitor connection ID, and a non-confirmed kill request, then assert no `KILL CONNECTION` was captured. Feed a valid distinct ID followed by exact `kill ID` and assert precisely one matching `KILL CONNECTION ID` was captured.
+  Preserve the smoke assertion that captured SQL has no `KILL`. Feed interactive input through a pipe for an invalid ID and a non-confirmed kill request, then assert no `KILL CONNECTION` was captured. Feed a valid ID followed by exact `kill ID` and assert precisely one matching `KILL CONNECTION ID` was captured.
 
 - [ ] **Step 6: Run the focused test to verify it fails only for unimplemented Phase 2 behavior**
 
@@ -76,7 +76,7 @@
 
 **Interfaces:**
 - Consumes: `--user-filter LIST`, `--database-filter LIST`, `--host-filter LIST`, `--output-file FILE`, `--no-color`, existing connection/runtime options.
-- Produces: `sql_literal_list LIST` emitting quoted literals; `transaction_predicates` emitting safe processlist predicates; ANSI-free `render_snapshot` output.
+- Produces: `sql_literal VALUE` emitting a hexadecimal `utf8mb4` literal; `rebuild_transaction_filters` emitting safe processlist predicates; ANSI-free `render_snapshot` output.
 
 - [ ] **Step 1: Implement terminal color helpers and the sectioned help renderer**
 
@@ -160,7 +160,7 @@
 
 - [ ] **Step 1: Implement `p`, `f`, and `l` without weakening kill safety**
 
-  Make `p` toggle a paused status and wait for a next key before rendering again. Make `f` prompt independently for the three comma-separated filter strings, validate them with the same CLI helper, retain prior values on invalid input, and rebuild predicates. Make `l` toggle logging only when `--output-file` was supplied. Leave `k` as an explicit manual sequence: prompt ID, validate, reject own connection, query/display target, require exact lower-case `kill ID`, then execute `KILL CONNECTION ID`.
+  Make `p` toggle a paused status and wait for a next key before rendering again. Make `f` prompt independently for the three comma-separated filter strings, validate them with the same CLI helper, retain prior values on invalid input, and rebuild predicates. Make `l` toggle logging only when `--output-file` was supplied. Leave `k` as an explicit manual sequence: prompt ID, validate, query/display target, require exact lower-case `kill ID`, then execute `KILL CONNECTION ID`.
 
 - [ ] **Step 2: Document the unified monitor in the operation index**
 
