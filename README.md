@@ -9,6 +9,7 @@ The repository contains both maintained tools and historical utilities. Review e
 | Area | Tool | Purpose |
 |---|---|---|
 | MySQL | [Cardinality analyzer](mysql/estimations/README.md) | Compare InnoDB estimates with exact counts when safe and report column cardinality and selectivity. |
+| MySQL | [Transaction and lock monitor](mysql/trx/mysql_trx_monitor.sh) | Inspect active transactions and lock waits, apply exact session filters, log snapshots, and explicitly terminate a selected connection. |
 | ProxySQL | [Python monitor](mysql/proxysql/python/README.md) | Interactive, install-free ProxySQL connection and backend monitor using MySQL login paths. |
 | ProxySQL | [Go monitor](mysql/proxysql/go/README.md) | Go implementation of the ProxySQL monitor with bounded resources and persistent clients. |
 | Cloud SQL | [General-log monitor](mysql/general_log/README.md) | Capture and safely parse GCP Cloud SQL MySQL general-log entries. |
@@ -39,6 +40,7 @@ The repository contains both maintained tools and historical utilities. Review e
 Run maintained test suites from the repository root:
 
 ```bash
+bash mysql/trx/tests/test_mysql_trx_monitor.sh
 bash mysql/estimations/tests/test_check_cardinality.sh
 
 (
@@ -63,6 +65,30 @@ bash mysql/estimations/tests/test_check_cardinality.sh
 
 bash mysql/proxysql/tests/test_proxysql_connections_monitor.sh
 ```
+
+## MySQL transaction and lock monitor
+
+Use a MySQL login path to render active transactions and InnoDB lock waits:
+
+```bash
+mysql/trx/mysql_trx_monitor.sh \
+  --login-path production-db \
+  --view all \
+  --min-age 30
+```
+
+Filters are comma-separated exact values. Host values include the client port when it is present in `PROCESSLIST.HOST`:
+
+```bash
+mysql/trx/mysql_trx_monitor.sh \
+  --login-path staging-db \
+  --user-filter app,reporting \
+  --database-filter sales \
+  --host-filter host1:3306 \
+  --output-file mysql-trx-snapshots.log
+```
+
+Monitoring and snapshot logging are read-only. The interactive `k` command is the only path that can issue `KILL CONNECTION`; it requires a manually entered connection ID, displays the target, refuses the monitor's own connection, and executes only after the exact `kill ID` confirmation.
 
 ## Credential handling
 
