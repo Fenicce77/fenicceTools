@@ -780,8 +780,7 @@ write_report_awk_wrapper() {
         '                fail) exit 71 ;;' \
         '                slow)' \
         '                    printf "%s\\n" "$$" > "${FAKE_REPORT_AWK_PID_FILE:?}"' \
-        '                    trap "exit 143" HUP INT TERM' \
-        '                    while :; do sleep 1; done' \
+        '                    exec sleep "${FAKE_REPORT_AWK_DELAY:-3}"' \
         '                    ;;' \
         '            esac' \
         '            ;;' \
@@ -900,11 +899,13 @@ run_export_tests() {
     local csv_report="$TMP/relations.csv"
     local tsv_report="$TMP/relations.tsv"
     local stable_report="$TMP/relations-stable.tsv"
+    local escaped_csv_report="$TMP/escaped-relations.csv"
+    local escaped_tsv_report="$TMP/escaped-relations.tsv"
     local query_failure_report="$TMP/query-failure.tsv"
     local conversion_failure_report="$TMP/conversion-failure.csv"
     local wrapper_dir="$TMP/failing-report-awk"
-    local expected_csv_header terminal_order report_order original_path
-    local report_text
+    local expected_csv_header expected_escaped_identifier terminal_order report_order original_path
+    local report_text options_log="$TMP/fake-mysql-options.log"
 
     expected_csv_header='Direction,Classification,Source_Schema,Source_Table,Source_Columns,Target_Schema,Target_Table,Target_Columns,Constraint_Name,Supporting_Index,Status_Tags,Details'
     FAKE_MYSQL_FK_MODE=report
@@ -929,7 +930,6 @@ run_export_tests() {
         || fail 'TSV report data rows must have exactly 12 fields'
     assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$tsv_report")" 4
     report_text=$(<"$tsv_report")
-    assert_contains "$report_text" 'RESTRICT\tAUDIT'
     assert_not_contains "$report_text" $'\033'
 
     terminal_order=$(printf '%s\n' "$OUTPUT" | LC_ALL=C awk -F '[|]' '
@@ -950,6 +950,29 @@ run_export_tests() {
         --terminal-width 120 --no-color
     assert_status 0
     cmp -s "$tsv_report" "$stable_report" || fail 'public TSV report ordering is not byte-stable'
+
+    expected_escaped_identifier='fk_orders_\ttab\nline\\slash'
+    : > "$options_log"
+    FAKE_MYSQL_FK_OPTIONS_LOG=$options_log
+    FAKE_MYSQL_FK_MODE=escaped-report
+    export FAKE_MYSQL_FK_OPTIONS_LOG FAKE_MYSQL_FK_MODE
+    run_case export_escaped_tsv -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$escaped_tsv_report" --format tsv --no-color
+    assert_status 0
+    LC_ALL=C awk -F '\t' 'NR > 1 && NF != 12 { exit 1 }' "$escaped_tsv_report" \
+        || fail 'escaped TSV metadata must retain exactly 12 fields'
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$escaped_tsv_report")" 4
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "PHYSICAL_FK" && $4 == "orders" { print $9 }' "$escaped_tsv_report")" \
+        "$expected_escaped_identifier"
+    assert_equals "$(LC_ALL=C awk -F '\t' '/fk-analyzer:ddl/ { print $1; exit }' "$options_log")" true
+    assert_equals "$(LC_ALL=C awk -F '\t' '/fk-analyzer:physical/ { print $1; exit }' "$options_log")" false
+
+    run_case export_escaped_csv -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$escaped_csv_report" --format csv --no-color
+    assert_status 0
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$escaped_csv_report")" 4
+    assert_contains "$(<"$escaped_csv_report")" "\"$expected_escaped_identifier\""
+    unset FAKE_MYSQL_FK_OPTIONS_LOG
 
     printf 'ORIGINAL\n' > "$query_failure_report"
     FAKE_MYSQL_FK_MODE=report-failure
@@ -987,7 +1010,8 @@ run_signal_tests() {
     local wrapper_dir="$TMP/slow-report-awk"
     local pid_file="$TMP/slow-report-awk.pid"
     local output_file="$TMP/signal-output.log"
-    local analyzer_pid wrapper_pid original_path attempt=0
+    local analyzer_pid wrapper_pid original_path attempt=0 cleanup_attempt=0
+    local exited_within_bound=false temp_removed_within_bound=false
 
     printf 'ORIGINAL\n' > "$destination"
     REAL_AWK=$(command -v awk)
@@ -997,9 +1021,10 @@ run_signal_tests() {
     PATH="$wrapper_dir:$PATH"
     export PATH
     FAKE_REPORT_AWK_MODE=slow
+    FAKE_REPORT_AWK_DELAY=3
     FAKE_REPORT_AWK_PID_FILE=$pid_file
     FAKE_MYSQL_FK_MODE=slow-report
-    export FAKE_REPORT_AWK_MODE FAKE_REPORT_AWK_PID_FILE FAKE_MYSQL_FK_MODE
+    export FAKE_REPORT_AWK_MODE FAKE_REPORT_AWK_DELAY FAKE_REPORT_AWK_PID_FILE FAKE_MYSQL_FK_MODE
     : > "$FAKE_MYSQL_FK_LOG"
 
     /bin/bash "$SCRIPT" -l test -s sales -t orders --environment test \
@@ -1019,7 +1044,29 @@ run_signal_tests() {
 
     wrapper_pid=$(<"$pid_file")
     kill -TERM "$analyzer_pid"
-    kill -TERM "$wrapper_pid" 2>/dev/null || true
+    attempt=0
+
+    while kill -0 "$analyzer_pid" 2>/dev/null && [[ "$attempt" -lt 20 ]]; do
+        attempt=$((attempt + 1))
+        sleep 0.05
+    done
+    if ! kill -0 "$analyzer_pid" 2>/dev/null; then
+        exited_within_bound=true
+    fi
+    if ! report_temp_exists "$TMP"; then
+        temp_removed_within_bound=true
+    fi
+
+    while kill -0 "$analyzer_pid" 2>/dev/null && [[ "$cleanup_attempt" -lt 100 ]]; do
+        cleanup_attempt=$((cleanup_attempt + 1))
+        sleep 0.05
+    done
+    if kill -0 "$analyzer_pid" 2>/dev/null; then
+        kill -KILL "$analyzer_pid" 2>/dev/null || true
+        wait "$analyzer_pid" 2>/dev/null || true
+        fail 'analyzer and report converter did not terminate within the bounded cleanup interval'
+    fi
+
     set +e
     wait "$analyzer_pid"
     STATUS=$?
@@ -1028,8 +1075,13 @@ run_signal_tests() {
 
     PATH=$original_path
     export PATH
-    unset FAKE_REPORT_AWK_MODE FAKE_REPORT_AWK_PID_FILE FAKE_MYSQL_FK_MODE REAL_AWK
+    unset FAKE_REPORT_AWK_MODE FAKE_REPORT_AWK_DELAY FAKE_REPORT_AWK_PID_FILE FAKE_MYSQL_FK_MODE REAL_AWK
     assert_status 130
+    [[ "$exited_within_bound" == true && "$temp_removed_within_bound" == true ]] \
+        || fail 'TERM sent only to the analyzer did not promptly stop the converter and remove its temporary file'
+    if kill -0 "$wrapper_pid" 2>/dev/null; then
+        fail "report converter remains alive after analyzer exit: $wrapper_pid"
+    fi
     assert_file_content "$destination" 'ORIGINAL'
     assert_no_report_temp "$TMP"
 

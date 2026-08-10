@@ -4,6 +4,7 @@ set -euo pipefail
 
 query=""
 mode=${FAKE_MYSQL_FK_MODE:-physical}
+raw_output=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -23,6 +24,10 @@ while [[ $# -gt 0 ]]; do
         --batch|--table)
             shift
             ;;
+        --raw)
+            raw_output=true
+            shift
+            ;;
         --database)
             [[ $# -ge 2 ]] || exit 64
             shift 2
@@ -37,6 +42,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 printf '%s\n' "$query" >> "${FAKE_MYSQL_FK_LOG:?}"
+if [[ -n "${FAKE_MYSQL_FK_OPTIONS_LOG:-}" ]]; then
+    printf '%s\t%s\n' "$raw_output" "$query" >> "$FAKE_MYSQL_FK_OPTIONS_LOG"
+fi
 
 if [[ "$query" == *"fk-analyzer:connection"* ]]; then
     case "$mode" in
@@ -80,11 +88,15 @@ case "$query" in
         fi
         ;;
     *"fk-analyzer:ddl"*)
-        printf 'orders\tCREATE TABLE `orders` (`id` bigint unsigned NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB\n'
+        if [[ "$mode" == escaped-report && "$raw_output" == true ]]; then
+            printf 'orders\tCREATE TABLE `orders` (\n  `id` bigint unsigned NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB\n'
+        else
+            printf 'orders\tCREATE TABLE `orders` (`id` bigint unsigned NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB\n'
+        fi
         ;;
     *"fk-analyzer:columns"*)
         case "$mode" in
-            report|slow-report)
+            report|slow-report|escaped-report)
                 printf 'sales\taudit_orders\torders_id\t1\tbigint unsigned\t\t\n'
                 printf 'sales\torders\tid\t1\tbigint unsigned\t\t\n'
                 printf 'sales\torders\tcustomer_id\t2\tbigint unsigned\t\t\n'
@@ -140,7 +152,7 @@ case "$query" in
         ;;
     *"fk-analyzer:pks"*)
         case "$mode" in
-            report|slow-report)
+            report|slow-report|escaped-report)
                 printf 'sales\torders\tid\t1\n'
                 ;;
             composite)
@@ -175,7 +187,15 @@ case "$query" in
     *"fk-analyzer:physical"*)
         case "$mode" in
             report|slow-report)
-                printf 'fk_orders_"customer"\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\\tAUDIT\tCASCADE\n'
+                printf 'fk_orders_"customer"\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE\n'
+                printf 'fk_items_order\tsales\tshipment_items\torder_id\tsales\torders\tid\t1\tRESTRICT\tCASCADE\n'
+                ;;
+            escaped-report)
+                if [[ "$raw_output" == true ]]; then
+                    printf 'fk_orders_\ttab\nline\\slash\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE\n'
+                else
+                    printf '%s\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE\n' 'fk_orders_\ttab\nline\\slash'
+                fi
                 printf 'fk_items_order\tsales\tshipment_items\torder_id\tsales\torders\tid\t1\tRESTRICT\tCASCADE\n'
                 ;;
             naming)
@@ -192,7 +212,7 @@ case "$query" in
         ;;
     *"fk-analyzer:indexes"*)
         case "$mode" in
-            report|slow-report)
+            report|slow-report|escaped-report)
                 printf 'sales\taudit_orders\tidx_audit_orders_fk\t1\t1\torders_id\t42\n'
                 printf 'sales\torders\tPRIMARY\t0\t1\tid\t42\n'
                 printf 'sales\torders\tidx_orders_customer\t1\t1\tcustomer_id\t42\n'
@@ -249,7 +269,7 @@ case "$query" in
         ;;
     *"fk-analyzer:stats"*)
         case "$mode" in
-            cardinality|report|slow-report) printf '40\n' ;;
+            cardinality|report|slow-report|escaped-report) printf '40\n' ;;
             exact-zero) printf '5\n' ;;
             *) printf '42\n' ;;
         esac

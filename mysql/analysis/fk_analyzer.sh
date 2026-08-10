@@ -20,6 +20,7 @@ PHYSICAL_AVAILABLE=true
 VIRTUAL_METADATA_AVAILABLE=true
 STATS_AVAILABLE=true
 EXACT_AVAILABLE=false
+ACTIVE_CHILD_PID=""
 
 LOGIN_PATH=""
 SCHEMA_NAME=""
@@ -741,6 +742,7 @@ quote_identifier() {
 cleanup() {
     local workspace_prefix="${TMPDIR:-/tmp}/fk-analyzer."
 
+    terminate_active_child
     if [[ -n "${EXPORT_TEMP:-}" && -f "$EXPORT_TEMP" ]]; then
         rm -f -- "$EXPORT_TEMP"
     fi
@@ -754,11 +756,28 @@ cleanup() {
     return 0
 }
 
+terminate_active_child() {
+    local child_pid=${ACTIVE_CHILD_PID:-}
+
+    [[ -n "$child_pid" ]] || return 0
+    kill -TERM "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+    ACTIVE_CHILD_PID=""
+}
+
+handle_signal() {
+    local status=$1
+
+    trap - HUP INT TERM
+    terminate_active_child
+    exit "$status"
+}
+
 create_workspace() {
     WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fk-analyzer.XXXXXX") || runtime_error 3 'Unable to create temporary workspace.'
     trap cleanup EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT TERM
+    trap 'handle_signal 129' HUP
+    trap 'handle_signal 130' INT TERM
 }
 
 resolve_mysql_bin() {
@@ -777,6 +796,12 @@ resolve_mysql_bin() {
 }
 
 run_mysql_query() {
+    local query=$1
+
+    "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names -e "$query"
+}
+
+run_mysql_raw_query() {
     local query=$1
 
     "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names --raw -e "$query"
@@ -874,7 +899,7 @@ acquire_ddl() {
     quoted_table=$(quote_identifier "$TABLE_NAME")
     query="SHOW /* fk-analyzer:ddl */ CREATE TABLE ${quoted_schema}.${quoted_table};"
 
-    if ! run_mysql_query "$query" > "$WORK_DIR/ddl.tsv" 2> "$stderr_file"; then
+    if ! run_mysql_raw_query "$query" > "$WORK_DIR/ddl.tsv" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
         runtime_error 3 "MySQL DDL query failed: $diagnostic"
@@ -1519,6 +1544,19 @@ resolve_output_format() {
     esac
 }
 
+wait_for_active_child() {
+    local child_status
+
+    if wait "$ACTIVE_CHILD_PID"; then
+        ACTIVE_CHILD_PID=""
+        return 0
+    else
+        child_status=$?
+    fi
+    ACTIVE_CHILD_PID=""
+    return "$child_status"
+}
+
 publish_report() {
     local output_directory
 
@@ -1530,33 +1568,35 @@ publish_report() {
 
     case "$OUTPUT_FORMAT" in
         csv)
-            if ! {
-                printf '%s\n' 'Direction,Classification,Source_Schema,Source_Table,Source_Columns,Target_Schema,Target_Table,Target_Columns,Constraint_Name,Supporting_Index,Status_Tags,Details'
-                LC_ALL=C awk -F '\t' -v report_conversion=csv '
-                    function quote_csv(value) {
-                        gsub(/"/, "\"\"", value)
-                        return "\"" value "\""
+            printf '%s\n' 'Direction,Classification,Source_Schema,Source_Table,Source_Columns,Target_Schema,Target_Table,Target_Columns,Constraint_Name,Supporting_Index,Status_Tags,Details' \
+                > "$EXPORT_TEMP" || runtime_error 3 'Unable to write the CSV report header.'
+            LC_ALL=C awk -F '\t' -v report_conversion=csv '
+                function quote_csv(value) {
+                    gsub(/"/, "\"\"", value)
+                    return "\"" value "\""
+                }
+                NF != 12 { exit 1 }
+                {
+                    for (field = 1; field <= 12; field++) {
+                        printf "%s%s", (field == 1 ? "" : ","), quote_csv($field)
                     }
-                    NF != 12 { exit 1 }
-                    {
-                        for (field = 1; field <= 12; field++) {
-                            printf "%s%s", (field == 1 ? "" : ","), quote_csv($field)
-                        }
-                        printf "\n"
-                    }
-                ' "$WORK_DIR/relations.tsv"
-            } > "$EXPORT_TEMP"; then
+                    printf "\n"
+                }
+            ' "$WORK_DIR/relations.tsv" >> "$EXPORT_TEMP" &
+            ACTIVE_CHILD_PID=$!
+            if ! wait_for_active_child; then
                 runtime_error 3 'Unable to convert the report to CSV.'
             fi
             ;;
         tsv)
-            if ! {
-                printf '%s\n' $'Direction\tClassification\tSource_Schema\tSource_Table\tSource_Columns\tTarget_Schema\tTarget_Table\tTarget_Columns\tConstraint_Name\tSupporting_Index\tStatus_Tags\tDetails'
-                LC_ALL=C awk -F '\t' -v report_conversion=tsv '
-                    NF != 12 { exit 1 }
-                    { print $0 }
-                ' "$WORK_DIR/relations.tsv"
-            } > "$EXPORT_TEMP"; then
+            printf '%s\n' $'Direction\tClassification\tSource_Schema\tSource_Table\tSource_Columns\tTarget_Schema\tTarget_Table\tTarget_Columns\tConstraint_Name\tSupporting_Index\tStatus_Tags\tDetails' \
+                > "$EXPORT_TEMP" || runtime_error 3 'Unable to write the TSV report header.'
+            LC_ALL=C awk -F '\t' -v report_conversion=tsv '
+                NF != 12 { exit 1 }
+                { print $0 }
+            ' "$WORK_DIR/relations.tsv" >> "$EXPORT_TEMP" &
+            ACTIVE_CHILD_PID=$!
+            if ! wait_for_active_child; then
                 runtime_error 3 'Unable to convert the report to TSV.'
             fi
             ;;
@@ -1585,6 +1625,7 @@ main() {
     STATS_AVAILABLE=true
     EXACT_AVAILABLE=false
     EXPORT_TEMP=""
+    ACTIVE_CHILD_PID=""
     create_workspace
     resolve_mysql_bin
     connection_preflight
