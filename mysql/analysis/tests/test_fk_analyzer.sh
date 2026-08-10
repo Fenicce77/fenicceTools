@@ -9,10 +9,10 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/fk-analyzer-test.XXXXXX")
 OUTPUT=""
 STATUS=0
 
-cleanup() {
+test_cleanup() {
     rm -rf "$TMP"
 }
-trap cleanup EXIT
+trap test_cleanup EXIT
 
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
@@ -34,6 +34,26 @@ assert_not_contains() {
 assert_status() {
     local expected=$1
     [[ "$STATUS" -eq "$expected" ]] || fail "expected status $expected, got $STATUS; output: $OUTPUT"
+}
+
+assert_equals() {
+    local actual=$1
+    local expected=$2
+    [[ "$actual" == "$expected" ]] || fail "expected: $expected; got: $actual"
+}
+
+assert_marker_once() {
+    local marker=$1
+    local count
+
+    count=$(LC_ALL=C grep -c "$marker" "$FAKE_MYSQL_FK_LOG" || true)
+    assert_equals "$count" 1
+}
+
+assert_no_modifying_sql() {
+    if LC_ALL=C grep -Eiq '(^|[^[:alnum:]_])(INSERT|UPDATE|DELETE|ALTER|ANALYZE|KILL)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])SET[[:space:]]+GLOBAL([^[:alnum:]_]|$)' "$FAKE_MYSQL_FK_LOG"; then
+        fail 'metadata query log contains a forbidden SQL keyword'
+    fi
 }
 
 run_case() {
@@ -61,6 +81,7 @@ repeat_char() {
 
 export FAKE_MYSQL_FK_LOG="$TMP/fake-mysql.log"
 
+run_cli_tests() {
 run_case no_args
 assert_status 0
 assert_contains "$OUTPUT" 'MySQL Foreign Key Topology Analyzer'
@@ -107,7 +128,7 @@ run_case long_equals --login-path=test --schema=sales --table=orders --environme
 assert_status 0
 assert_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:connection'
 assert_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:target'
-assert_not_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:physical'
+assert_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:physical'
 
 run_case long_space --login-path test --schema sales --table orders --environment test \
     --mysql-bin "$FAKE_MYSQL" --terminal-width 10000 --format csv --output-file "$TMP/report.csv"
@@ -188,3 +209,65 @@ assert_status 3
 unset FAKE_MYSQL_FK_MODE
 
 printf 'PASS: fk_analyzer CLI contract\n'
+}
+
+run_physical_tests() {
+    local reducer_dir="$TMP/reducer"
+    local relations
+
+    mkdir "$reducer_dir"
+    # shellcheck source=/dev/null
+    source "$SCRIPT"
+    WORK_DIR=$reducer_dir
+    SCHEMA_NAME=sales
+    TABLE_NAME=orders
+
+    printf '%s\n' \
+        $'sales\torders\tid\t1\tbigint unsigned\t\t' \
+        > "$WORK_DIR/columns.tsv"
+    printf '%s\n' \
+        $'sales\torders\tid\t1' \
+        > "$WORK_DIR/pks.tsv"
+    printf '%s\n' \
+        $'fk_orders_customer\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE' \
+        $'fk_items_order\tsales\tshipment_items\ttenant_id\tsales\torders\ttenant_id\t1\tRESTRICT\tCASCADE' \
+        $'fk_items_order\tsales\tshipment_items\torder_id\tsales\torders\torder_id\t2\tRESTRICT\tCASCADE' \
+        > "$WORK_DIR/physical-components.tsv"
+    printf '%s\n' \
+        $'sales\torders\tPRIMARY\t0\t1\tid\t1' \
+        $'sales\torders\tidx_orders_customer\t1\t1\tcustomer_id\t42' \
+        $'sales\tshipment_items\tidx_shipment_items_tenant_order\t1\t1\ttenant_id\t42' \
+        $'sales\tshipment_items\tidx_shipment_items_tenant_order\t1\t2\torder_id\t42' \
+        > "$WORK_DIR/indexes.tsv"
+    printf '42\n' > "$WORK_DIR/stats.tsv"
+
+    build_physical_relations
+    relations=$(<"$WORK_DIR/relations.tsv")
+    assert_contains "$relations" $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(customer_id)\tsales\tcustomers\t(id)\tfk_orders_customer\tidx_orders_customer\t\tON UPDATE RESTRICT; ON DELETE CASCADE'
+    assert_contains "$relations" $'INBOUND\tPHYSICAL_FK\tsales\tshipment_items\t(tenant_id, order_id)\tsales\torders\t(tenant_id, order_id)\tfk_items_order\tidx_shipment_items_tenant_order\t\tON UPDATE RESTRICT; ON DELETE CASCADE'
+    assert_equals "$(LC_ALL=C awk 'END { print NR }' "$WORK_DIR/relations.tsv")" 2
+    assert_equals "$(LC_ALL=C awk -F '\t' '$9 == "fk_items_order" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 1
+
+    run_case physical_end_to_end -l test -s sales -t orders --environment test --mysql-bin "$FAKE_MYSQL"
+    assert_status 0
+    assert_marker_once 'fk-analyzer:columns'
+    assert_marker_once 'fk-analyzer:pks'
+    assert_marker_once 'fk-analyzer:physical'
+    assert_marker_once 'fk-analyzer:indexes'
+    assert_marker_once 'fk-analyzer:stats'
+    assert_no_modifying_sql
+    printf 'PASS: fk_analyzer physical relations\n'
+}
+
+if [[ $# -eq 0 ]]; then
+    run_cli_tests
+    run_physical_tests
+else
+    for test_group in "$@"; do
+        case "$test_group" in
+            cli) run_cli_tests ;;
+            physical) run_physical_tests ;;
+            *) fail "unknown test group: $test_group" ;;
+        esac
+    done
+fi

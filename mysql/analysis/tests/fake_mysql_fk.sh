@@ -69,10 +69,15 @@ case "$query" in
         printf 'sales\torders\tid\t1\n'
         ;;
     *"fk-analyzer:physical"*)
-        printf 'fk_order_customer\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tCASCADE\tRESTRICT\n'
+        printf 'fk_orders_customer\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE\n'
+        printf 'fk_items_order\tsales\tshipment_items\ttenant_id\tsales\torders\ttenant_id\t1\tRESTRICT\tCASCADE\n'
+        printf 'fk_items_order\tsales\tshipment_items\torder_id\tsales\torders\torder_id\t2\tRESTRICT\tCASCADE\n'
         ;;
     *"fk-analyzer:indexes"*)
         printf 'sales\torders\tPRIMARY\t0\t1\tid\t1\n'
+        printf 'sales\torders\tidx_orders_customer\t1\t1\tcustomer_id\t42\n'
+        printf 'sales\tshipment_items\tidx_shipment_items_tenant_order\t1\t1\ttenant_id\t42\n'
+        printf 'sales\tshipment_items\tidx_shipment_items_tenant_order\t1\t2\torder_id\t42\n'
         ;;
     *"fk-analyzer:stats"*)
         printf '42\n'

@@ -392,6 +392,143 @@ WHERE TABLE_SCHEMA = ${schema_literal}
     TARGET_ENGINE=$target_engine
 }
 
+acquire_metadata() {
+    local schema_literal
+    local table_literal
+    local query
+
+    schema_literal=$(sql_literal "$SCHEMA_NAME")
+    table_literal=$(sql_literal "$TABLE_NAME")
+
+    query="SELECT /* fk-analyzer:columns */ TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME,
+       ORDINAL_POSITION, COLUMN_TYPE, CHARACTER_SET_NAME, COLLATION_NAME
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = ${schema_literal}
+ORDER BY TABLE_NAME, ORDINAL_POSITION;"
+    run_mysql_query "$query" > "$WORK_DIR/columns.tsv"
+
+    query="SELECT /* fk-analyzer:pks */ kcu.CONSTRAINT_SCHEMA, kcu.TABLE_NAME,
+       kcu.COLUMN_NAME, kcu.ORDINAL_POSITION
+FROM information_schema.KEY_COLUMN_USAGE AS kcu
+JOIN information_schema.TABLE_CONSTRAINTS AS tc
+  ON tc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+ AND tc.TABLE_NAME = kcu.TABLE_NAME
+ AND tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+WHERE kcu.CONSTRAINT_SCHEMA = ${schema_literal}
+  AND tc.CONSTRAINT_TYPE = 0x5052494D415259204B4559
+ORDER BY kcu.TABLE_NAME, kcu.ORDINAL_POSITION;"
+    run_mysql_query "$query" > "$WORK_DIR/pks.tsv"
+
+    query="SELECT /* fk-analyzer:physical */ kcu.CONSTRAINT_NAME, kcu.CONSTRAINT_SCHEMA,
+       kcu.TABLE_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_SCHEMA,
+       kcu.REFERENCED_TABLE_NAME, kcu.REFERENCED_COLUMN_NAME,
+       kcu.ORDINAL_POSITION, rc.UPDATE_RULE, rc.DELETE_RULE
+FROM information_schema.KEY_COLUMN_USAGE AS kcu
+JOIN information_schema.REFERENTIAL_CONSTRAINTS AS rc
+  ON rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+ AND rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+ AND rc.TABLE_NAME = kcu.TABLE_NAME
+WHERE kcu.CONSTRAINT_SCHEMA = ${schema_literal}
+  AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+  AND (kcu.TABLE_NAME = ${table_literal}
+       OR kcu.REFERENCED_TABLE_NAME = ${table_literal})
+ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;"
+    run_mysql_query "$query" > "$WORK_DIR/physical-components.tsv"
+
+    query="SELECT /* fk-analyzer:indexes */ TABLE_SCHEMA, TABLE_NAME, INDEX_NAME,
+       NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, CARDINALITY
+FROM information_schema.STATISTICS
+WHERE TABLE_SCHEMA = ${schema_literal}
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;"
+    run_mysql_query "$query" > "$WORK_DIR/indexes.tsv"
+
+    query="SELECT /* fk-analyzer:stats */ TABLE_ROWS
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = ${schema_literal}
+  AND TABLE_NAME = ${table_literal};"
+    run_mysql_query "$query" > "$WORK_DIR/stats.tsv"
+}
+
+build_physical_relations() {
+    local physical_file="$WORK_DIR/physical-components.tsv"
+    local indexes_file="$WORK_DIR/indexes.tsv"
+
+    awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" -v selected_table="$TABLE_NAME" '
+        FILENAME == physical_file {
+            key = $2 SUBSEP $1 SUBSEP $3 SUBSEP $5 SUBSEP $6
+            if (!(key in relation_seen)) {
+                relation_seen[key] = 1
+                relation_order[++relation_count] = key
+                constraint_name[key] = $1
+                source_schema[key] = $2
+                source_table[key] = $3
+                target_schema[key] = $5
+                target_table[key] = $6
+                update_rule[key] = $9
+                delete_rule[key] = $10
+            }
+            source_column[key, $8] = $4
+            target_column[key, $8] = $7
+            if (($8 + 0) > ordinal_max[key]) {
+                ordinal_max[key] = $8 + 0
+            }
+            next
+        }
+        {
+            index_key = $1 SUBSEP $2 SUBSEP $3
+            if (!(index_key in index_seen)) {
+                index_seen[index_key] = 1
+                index_order[++index_count] = index_key
+            }
+            index_column[index_key, $5] = $6
+        }
+        END {
+            for (relation_number = 1; relation_number <= relation_count; relation_number++) {
+                key = relation_order[relation_number]
+                source_tuple = "("
+                target_tuple = "("
+                for (ordinal = 1; ordinal <= ordinal_max[key]; ordinal++) {
+                    if (ordinal > 1) {
+                        source_tuple = source_tuple ", "
+                        target_tuple = target_tuple ", "
+                    }
+                    source_tuple = source_tuple source_column[key, ordinal]
+                    target_tuple = target_tuple target_column[key, ordinal]
+                }
+                source_tuple = source_tuple ")"
+                target_tuple = target_tuple ")"
+
+                supporting_index = ""
+                for (index_number = 1; index_number <= index_count; index_number++) {
+                    index_key = index_order[index_number]
+                    split(index_key, index_parts, SUBSEP)
+                    if (index_parts[1] != source_schema[key] || index_parts[2] != source_table[key]) {
+                        continue
+                    }
+                    matches = 1
+                    for (ordinal = 1; ordinal <= ordinal_max[key]; ordinal++) {
+                        if (index_column[index_key, ordinal] != source_column[key, ordinal]) {
+                            matches = 0
+                            break
+                        }
+                    }
+                    if (matches) {
+                        supporting_index = index_parts[3]
+                        break
+                    }
+                }
+
+                status_tags = (supporting_index == "" ? "UNINDEXED" : "")
+                direction = (source_table[key] == selected_table ? "OUTBOUND" : "INBOUND")
+                details = "ON UPDATE " update_rule[key] "; ON DELETE " delete_rule[key]
+                print direction, "PHYSICAL_FK", source_schema[key], source_table[key], source_tuple,
+                    target_schema[key], target_table[key], target_tuple, constraint_name[key],
+                    supporting_index, status_tags, details
+            }
+        }
+    ' "$physical_file" "$indexes_file" > "$WORK_DIR/relations.tsv"
+}
+
 main() {
     if [[ $# -eq 0 ]]; then
         usage
@@ -406,6 +543,8 @@ main() {
     resolve_mysql_bin
     connection_preflight
     target_preflight
+    acquire_metadata
+    build_physical_relations
 
     printf 'Target preflight succeeded: %s.%s (%s)\n' "$SCHEMA_NAME" "$TABLE_NAME" "$TARGET_ENGINE"
 }
