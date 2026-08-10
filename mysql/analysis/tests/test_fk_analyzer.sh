@@ -50,6 +50,43 @@ assert_marker_once() {
     assert_equals "$count" 1
 }
 
+assert_tsv_fields() {
+    local file=$1
+
+    LC_ALL=C awk -F '\t' '
+        NF != 12 { printf "line %d has %d fields\n", NR, NF > "/dev/stderr"; failed = 1 }
+        index($0, sprintf("%c", 27)) { printf "line %d contains ANSI escape data\n", NR > "/dev/stderr"; failed = 1 }
+        END { exit failed }
+    ' "$file" || fail "expected ANSI-free 12-field rows in $file"
+}
+
+assert_relation_row() {
+    local file=$1
+    local source_table=$2
+    local classification=$3
+    local source_columns=$4
+    local target_table=$5
+    local target_columns=$6
+    local supporting_index=$7
+    local status_tags=$8
+    local count
+
+    count=$(LC_ALL=C awk -F '\t' \
+        -v source_table="$source_table" \
+        -v classification="$classification" \
+        -v source_columns="$source_columns" \
+        -v target_table="$target_table" \
+        -v target_columns="$target_columns" \
+        -v supporting_index="$supporting_index" \
+        -v status_tags="$status_tags" '
+        $2 == classification && $4 == source_table && $5 == source_columns &&
+        $7 == target_table && $8 == target_columns && $10 == supporting_index &&
+        $11 == status_tags { count++ }
+        END { print count + 0 }
+    ' "$file")
+    assert_equals "$count" 1
+}
+
 assert_no_modifying_sql() {
     if LC_ALL=C grep -Eiq '(^|[^[:alnum:]_])(INSERT|UPDATE|DELETE|ALTER|ANALYZE|KILL)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])SET[[:space:]]+GLOBAL([^[:alnum:]_]|$)' "$FAKE_MYSQL_FK_LOG"; then
         fail 'metadata query log contains a forbidden SQL keyword'
@@ -270,14 +307,168 @@ run_physical_tests() {
     printf 'PASS: fk_analyzer physical relations\n'
 }
 
+load_virtual_fixture() {
+    local mode=$1
+    local fixture_dir=$2
+
+    mkdir "$fixture_dir"
+    WORK_DIR=$fixture_dir
+    LOGIN_PATH=test
+    MYSQL_BIN=$FAKE_MYSQL
+    FAKE_MYSQL_FK_MODE=$mode
+    export FAKE_MYSQL_FK_MODE
+    acquire_metadata
+    unset FAKE_MYSQL_FK_MODE
+}
+
+run_relation_reducers() {
+    build_physical_relations
+    if declare -F build_virtual_relations >/dev/null 2>&1; then
+        build_virtual_relations
+    fi
+}
+
+run_virtual_tests() {
+    local composite_dir="$TMP/composite"
+    local composite_direct_dir="$TMP/composite-direct"
+    local gapped_dir="$TMP/gapped"
+    local naming_dir="$TMP/naming"
+    local ambiguity_dir="$TMP/ambiguity"
+    local stable_copy="$TMP/relations.stable.tsv"
+    local details
+
+    # shellcheck source=/dev/null
+    source "$SCRIPT"
+
+    SCHEMA_NAME=sales
+    TABLE_NAME=orders
+    load_virtual_fixture composite "$composite_dir"
+    PHYSICAL_ONLY=false
+    run_relation_reducers
+    assert_tsv_fields "$WORK_DIR/relations.tsv"
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$WORK_DIR/relations.tsv")" 4
+    assert_relation_row "$WORK_DIR/relations.tsv" audit_orders COMPLETE_VIRTUAL_FK \
+        '(orders_tenant_id, orders_order_id)' orders '(tenant_id, order_id)' \
+        idx_audit_orders_fk ''
+    assert_relation_row "$WORK_DIR/relations.tsv" legacy_orders PARTIAL_VIRTUAL_FK \
+        '(orders_tenant_id)' orders '(tenant_id)' '' 'MISSING_COMPONENTS,UNINDEXED'
+    assert_relation_row "$WORK_DIR/relations.tsv" shuffled_orders PARTIAL_VIRTUAL_FK \
+        '(orders_tenant_id, orders_order_id)' orders '(tenant_id, order_id)' '' \
+        'INDEX_ORDER_MISMATCH'
+    assert_relation_row "$WORK_DIR/relations.tsv" typed_orders PARTIAL_VIRTUAL_FK \
+        '(orders_tenant_id, orders_order_id)' orders '(tenant_id, order_id)' \
+        idx_typed_orders_fk 'TYPE_MISMATCH'
+
+    cp "$WORK_DIR/relations.tsv" "$stable_copy"
+    run_relation_reducers
+    cmp -s "$stable_copy" "$WORK_DIR/relations.tsv" || fail 'virtual relation ordering is not byte-stable'
+
+    PHYSICAL_ONLY=true
+    run_relation_reducers
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 ~ /VIRTUAL/ { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 0
+    PHYSICAL_ONLY=false
+
+    SCHEMA_NAME=sales
+    TABLE_NAME=event_log
+    load_virtual_fixture composite-direct "$composite_direct_dir"
+    run_relation_reducers
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "AMBIGUOUS_VIRTUAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 0
+    assert_relation_row "$WORK_DIR/relations.tsv" event_log COMPLETE_VIRTUAL_FK \
+        '(tenant_id, entity_id)' orders_archive '(tenant_id, entity_id)' \
+        idx_event_log_entity ''
+
+    SCHEMA_NAME=sales
+    TABLE_NAME=line_items
+    load_virtual_fixture gapped "$gapped_dir"
+    run_relation_reducers
+    assert_relation_row "$WORK_DIR/relations.tsv" gapped_items PARTIAL_VIRTUAL_FK \
+        '(line_items_tenant_id, line_items_line_id)' line_items '(tenant_id, line_id)' '' \
+        'MISSING_COMPONENTS,INDEX_ORDER_MISMATCH'
+
+    SCHEMA_NAME=sales
+    TABLE_NAME=orders
+    load_virtual_fixture naming "$naming_dir"
+    TABLE_NAME=purchases
+    run_relation_reducers
+    assert_relation_row "$WORK_DIR/relations.tsv" purchases COMPLETE_VIRTUAL_FK \
+        '(customers_id)' customers '(id)' idx_purchases_customer ''
+
+    TABLE_NAME=addresses
+    run_relation_reducers
+    assert_relation_row "$WORK_DIR/relations.tsv" addresses COMPLETE_VIRTUAL_FK \
+        '(code)' countries '(code)' idx_addresses_code ''
+    assert_relation_row "$WORK_DIR/relations.tsv" addresses COMPLETE_VIRTUAL_FK \
+        '(countries_code)' countries '(code)' idx_addresses_countries_code ''
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "AMBIGUOUS_VIRTUAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 0
+
+    TABLE_NAME=localized_addresses
+    run_relation_reducers
+    assert_relation_row "$WORK_DIR/relations.tsv" localized_addresses PARTIAL_VIRTUAL_FK \
+        '(countries_code)' countries '(code)' idx_localized_country 'TYPE_MISMATCH'
+
+    TABLE_NAME=source
+    run_relation_reducers
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$WORK_DIR/relations.tsv")" 0
+
+    TABLE_NAME=settlements
+    run_relation_reducers
+    assert_tsv_fields "$WORK_DIR/relations.tsv"
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "PHYSICAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 1
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 ~ /VIRTUAL/ { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 0
+
+    TABLE_NAME=customers
+    run_relation_reducers
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$WORK_DIR/relations.tsv")" 2
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "PHYSICAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 1
+    assert_relation_row "$WORK_DIR/relations.tsv" purchases COMPLETE_VIRTUAL_FK \
+        '(customers_id)' customers '(id)' idx_purchases_customer ''
+    cp "$WORK_DIR/relations.tsv" "$stable_copy"
+    run_relation_reducers
+    cmp -s "$stable_copy" "$WORK_DIR/relations.tsv" || fail 'mixed relation ordering is not byte-stable'
+
+    PHYSICAL_ONLY=true
+    run_relation_reducers
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "PHYSICAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 1
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 ~ /VIRTUAL/ { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 0
+    PHYSICAL_ONLY=false
+
+    TABLE_NAME=orders
+    run_relation_reducers
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$WORK_DIR/relations.tsv")" 0
+
+    SCHEMA_NAME=sales
+    TABLE_NAME=ledger
+    load_virtual_fixture ambiguity "$ambiguity_dir"
+    run_relation_reducers
+    assert_tsv_fields "$WORK_DIR/relations.tsv"
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "AMBIGUOUS_VIRTUAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 1
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "AMBIGUOUS_VIRTUAL_FK" { print $6 $7 }' "$WORK_DIR/relations.tsv")" ''
+    details=$(LC_ALL=C awk -F '\t' '$2 == "AMBIGUOUS_VIRTUAL_FK" { print $12 }' "$WORK_DIR/relations.tsv")
+    assert_equals "$details" 'Candidate targets: sales.countries(code), sales.currencies(code)'
+
+    printf '%s\n' \
+        $'fk_ledger_country\tsales\tledger\tcode\tsales\tcountries\tcode\t1\tRESTRICT\tCASCADE' \
+        > "$WORK_DIR/physical-components.tsv"
+    run_relation_reducers
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "AMBIGUOUS_VIRTUAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 0
+    assert_equals "$(LC_ALL=C awk -F '\t' '$2 == "PHYSICAL_FK" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 1
+    assert_relation_row "$WORK_DIR/relations.tsv" ledger COMPLETE_VIRTUAL_FK \
+        '(code)' currencies '(code)' idx_ledger_code ''
+    assert_no_modifying_sql
+
+    printf 'PASS: fk_analyzer virtual relations\n'
+}
+
 if [[ $# -eq 0 ]]; then
     run_cli_tests
     run_physical_tests
+    run_virtual_tests
 else
     for test_group in "$@"; do
         case "$test_group" in
             cli) run_cli_tests ;;
             physical) run_physical_tests ;;
+            virtual) run_virtual_tests ;;
             *) fail "unknown test group: $test_group" ;;
         esac
     done

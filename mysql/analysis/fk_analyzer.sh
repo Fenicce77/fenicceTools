@@ -549,6 +549,392 @@ build_physical_relations() {
     ' "$physical_file" "$indexes_file" > "$WORK_DIR/relations.tsv"
 }
 
+build_virtual_relations() {
+    local columns_file="$WORK_DIR/columns.tsv"
+    local pks_file="$WORK_DIR/pks.tsv"
+    local indexes_file="$WORK_DIR/indexes.tsv"
+    local relations_file="$WORK_DIR/relations.tsv"
+    local virtual_file="$WORK_DIR/virtual-relations.tsv"
+    local combined_file="$WORK_DIR/combined-relations.tsv"
+
+    [[ "$PHYSICAL_ONLY" == false ]] || return 0
+
+    LC_ALL=C awk -F '\t' -v OFS='\t' \
+        -v columns_file="$columns_file" \
+        -v pks_file="$pks_file" \
+        -v indexes_file="$indexes_file" \
+        -v relations_file="$relations_file" \
+        -v selected_schema="$SCHEMA_NAME" \
+        -v selected_table="$TABLE_NAME" '
+        function sort_list(values, count, left, right, temporary) {
+            for (left = 1; left <= count; left++) {
+                for (right = left + 1; right <= count; right++) {
+                    if (values[right] < values[left]) {
+                        temporary = values[left]
+                        values[left] = values[right]
+                        values[right] = temporary
+                    }
+                }
+            }
+        }
+        function clear_array(values, key) {
+            for (key in values) {
+                delete values[key]
+            }
+        }
+        function type_matches(source_schema, source_table, source_column,
+                              target_schema, target_table, target_column,
+                              source_key, target_key) {
+            source_key = source_schema SUBSEP source_table SUBSEP source_column
+            target_key = target_schema SUBSEP target_table SUBSEP target_column
+            if (column_type[source_key] != column_type[target_key]) {
+                return 0
+            }
+            if (column_charset[source_key] != "" || column_charset[target_key] != "") {
+                return column_charset[source_key] == column_charset[target_key] &&
+                    column_collation[source_key] == column_collation[target_key]
+            }
+            return 1
+        }
+        function tuple_add(tuple, column) {
+            return tuple == "" ? column : tuple ", " column
+        }
+        function target_description(target_key, parts, ordinal, tuple) {
+            split(target_key, parts, SUBSEP)
+            tuple = ""
+            for (ordinal = 1; ordinal <= pk_max[target_key]; ordinal++) {
+                tuple = tuple_add(tuple, pk_column[target_key, ordinal])
+            }
+            return parts[1] "." parts[2] "(" tuple ")"
+        }
+        function relation_is_scoped(source_schema, source_table, target_schema, target_table) {
+            return (source_schema == selected_schema && source_table == selected_table) ||
+                (target_schema == selected_schema && target_table == selected_table)
+        }
+        function direct_candidate_is_physical(source_key, target_key,
+                                               source_parts, target_parts, ordinal,
+                                               target_column, prefixed_column,
+                                               source_column, source_tuple, target_tuple,
+                                               signature) {
+            split(source_key, source_parts, SUBSEP)
+            split(target_key, target_parts, SUBSEP)
+            source_tuple = ""
+            target_tuple = ""
+            for (ordinal = 1; ordinal <= pk_max[target_key]; ordinal++) {
+                target_column = pk_column[target_key, ordinal]
+                prefixed_column = target_parts[2] "_" target_column
+                source_column = ""
+                if ((source_key SUBSEP target_column) in column_exists) {
+                    source_column = target_column
+                } else if ((source_key SUBSEP prefixed_column) in column_exists) {
+                    source_column = prefixed_column
+                }
+                if (source_column == "") {
+                    continue
+                }
+                source_tuple = tuple_add(source_tuple, source_column)
+                target_tuple = tuple_add(target_tuple, target_column)
+            }
+            signature = source_parts[1] SUBSEP source_parts[2] SUBSEP \
+                "(" source_tuple ")" SUBSEP target_parts[1] SUBSEP target_parts[2] SUBSEP \
+                "(" target_tuple ")"
+            return signature in physical_relation
+        }
+        function direct_candidate_is_fully_compatible(source_key, target_key,
+                                                       source_parts, target_parts,
+                                                       ordinal, target_column,
+                                                       prefixed_column, source_column) {
+            split(source_key, source_parts, SUBSEP)
+            split(target_key, target_parts, SUBSEP)
+            for (ordinal = 1; ordinal <= pk_max[target_key]; ordinal++) {
+                target_column = pk_column[target_key, ordinal]
+                prefixed_column = target_parts[2] "_" target_column
+                source_column = ""
+                if ((source_key SUBSEP target_column) in column_exists) {
+                    source_column = target_column
+                } else if ((source_key SUBSEP prefixed_column) in column_exists) {
+                    source_column = prefixed_column
+                }
+                if (source_column == "" ||
+                    !type_matches(source_parts[1], source_parts[2], source_column,
+                                  target_parts[1], target_parts[2], target_column)) {
+                    return 0
+                }
+            }
+            return 1
+        }
+        function find_supporting_index(source_schema, source_table, mapped_count,
+                                       index_number, index_key, parts, ordinal, matches) {
+            selected_supporting_index = ""
+            index_order_mismatch = 0
+            for (index_number = 1; index_number <= index_count; index_number++) {
+                index_key = sorted_indexes[index_number]
+                split(index_key, parts, SUBSEP)
+                if (parts[1] != source_schema || parts[2] != source_table) {
+                    continue
+                }
+                matches = 1
+                for (ordinal = 1; ordinal <= mapped_count; ordinal++) {
+                    if (index_column[index_key, ordinal] != mapped_source[ordinal]) {
+                        matches = 0
+                        break
+                    }
+                }
+                if (matches) {
+                    selected_supporting_index = parts[3]
+                    return
+                }
+            }
+            for (index_number = 1; index_number <= index_count; index_number++) {
+                index_key = sorted_indexes[index_number]
+                split(index_key, parts, SUBSEP)
+                if (parts[1] != source_schema || parts[2] != source_table) {
+                    continue
+                }
+                clear_array(index_member)
+                for (ordinal = 1; ordinal <= mapped_count; ordinal++) {
+                    index_member[index_column[index_key, ordinal]]++
+                }
+                matches = 1
+                for (ordinal = 1; ordinal <= mapped_count; ordinal++) {
+                    if (index_member[mapped_source[ordinal]] != 1) {
+                        matches = 0
+                        break
+                    }
+                }
+                if (matches) {
+                    index_order_mismatch = 1
+                    return
+                }
+            }
+        }
+        function emit_candidate(source_key, target_key, match_mode,
+                                source_parts, target_parts, ordinal, target_column,
+                                source_column, prefixed_column, source_tuple,
+                                target_tuple, mapped_count, missing_components,
+                                type_mismatch, status_tags, classification,
+                                direction, signature) {
+            split(source_key, source_parts, SUBSEP)
+            split(target_key, target_parts, SUBSEP)
+            if (!relation_is_scoped(source_parts[1], source_parts[2], target_parts[1], target_parts[2])) {
+                return
+            }
+
+            clear_array(mapped_source)
+            clear_array(mapped_target)
+            mapped_count = 0
+            missing_components = 0
+            type_mismatch = 0
+            current_pk_count = pk_max[target_key]
+            for (ordinal = 1; ordinal <= current_pk_count; ordinal++) {
+                target_column = pk_column[target_key, ordinal]
+                prefixed_column = target_parts[2] "_" target_column
+                source_column = ""
+                if (ordinal == 1 && match_mode == "prefixed") {
+                    if ((source_key SUBSEP prefixed_column) in column_exists) {
+                        source_column = prefixed_column
+                    }
+                } else if ((source_key SUBSEP target_column) in column_exists) {
+                    source_column = target_column
+                } else if ((source_key SUBSEP prefixed_column) in column_exists) {
+                    source_column = prefixed_column
+                }
+                if (source_column == "") {
+                    missing_components = 1
+                    continue
+                }
+                mapped_count++
+                mapped_source[mapped_count] = source_column
+                mapped_target[mapped_count] = target_column
+                if (!type_matches(source_parts[1], source_parts[2], source_column,
+                                  target_parts[1], target_parts[2], target_column)) {
+                    type_mismatch = 1
+                }
+            }
+            if (mapped_count == 0) {
+                return
+            }
+
+            source_tuple = ""
+            target_tuple = ""
+            for (ordinal = 1; ordinal <= mapped_count; ordinal++) {
+                source_tuple = tuple_add(source_tuple, mapped_source[ordinal])
+                target_tuple = tuple_add(target_tuple, mapped_target[ordinal])
+            }
+            source_tuple = "(" source_tuple ")"
+            target_tuple = "(" target_tuple ")"
+            signature = source_parts[1] SUBSEP source_parts[2] SUBSEP source_tuple SUBSEP \
+                target_parts[1] SUBSEP target_parts[2] SUBSEP target_tuple
+            if (signature in physical_relation || signature in virtual_relation) {
+                return
+            }
+
+            find_supporting_index(source_parts[1], source_parts[2], mapped_count)
+            status_tags = ""
+            if (missing_components) {
+                status_tags = "MISSING_COMPONENTS"
+            }
+            if (type_mismatch) {
+                status_tags = status_tags (status_tags == "" ? "" : ",") "TYPE_MISMATCH"
+            }
+            if (selected_supporting_index == "" && !index_order_mismatch) {
+                status_tags = status_tags (status_tags == "" ? "" : ",") "UNINDEXED"
+            }
+            if (index_order_mismatch) {
+                status_tags = status_tags (status_tags == "" ? "" : ",") "INDEX_ORDER_MISMATCH"
+            }
+            classification = status_tags == "" ? "COMPLETE_VIRTUAL_FK" : "PARTIAL_VIRTUAL_FK"
+            direction = source_parts[1] == selected_schema && source_parts[2] == selected_table ? \
+                "OUTBOUND" : "INBOUND"
+            virtual_relation[signature] = 1
+            print direction, classification, source_parts[1], source_parts[2], source_tuple,
+                target_parts[1], target_parts[2], target_tuple, "", selected_supporting_index,
+                status_tags, ""
+        }
+        function emit_ambiguous(source_key, first_column, candidate_count,
+                                source_parts, candidate_number, descriptions,
+                                details, direction, source_tuple, target_key,
+                                target_parts, scoped, supporting_index) {
+            split(source_key, source_parts, SUBSEP)
+            scoped = source_parts[1] == selected_schema && source_parts[2] == selected_table
+            for (candidate_number = 1; candidate_number <= candidate_count; candidate_number++) {
+                target_key = direct_targets[candidate_number]
+                split(target_key, target_parts, SUBSEP)
+                if (target_parts[1] == selected_schema && target_parts[2] == selected_table) {
+                    scoped = 1
+                }
+                descriptions[candidate_number] = target_description(target_key)
+            }
+            if (!scoped) {
+                return
+            }
+            sort_list(descriptions, candidate_count)
+            details = "Candidate targets: " descriptions[1]
+            for (candidate_number = 2; candidate_number <= candidate_count; candidate_number++) {
+                details = details ", " descriptions[candidate_number]
+            }
+            mapped_source[1] = first_column
+            current_pk_count = 1
+            find_supporting_index(source_parts[1], source_parts[2], 1)
+            supporting_index = selected_supporting_index
+            source_tuple = "(" first_column ")"
+            direction = source_parts[1] == selected_schema && source_parts[2] == selected_table ? \
+                "OUTBOUND" : "INBOUND"
+            print direction, "AMBIGUOUS_VIRTUAL_FK", source_parts[1], source_parts[2],
+                source_tuple, "", "", source_tuple, "", supporting_index, "", details
+        }
+        FILENAME == columns_file {
+            table_key = $1 SUBSEP $2
+            column_key = table_key SUBSEP $3
+            if (!(table_key in source_table_seen)) {
+                source_table_seen[table_key] = 1
+                source_tables[++source_table_count] = table_key
+            }
+            column_exists[column_key] = 1
+            column_type[column_key] = $5
+            column_charset[column_key] = $6
+            column_collation[column_key] = $7
+            next
+        }
+        FILENAME == pks_file {
+            target_key = $1 SUBSEP $2
+            if (!(target_key in target_table_seen)) {
+                target_table_seen[target_key] = 1
+                target_tables[++target_table_count] = target_key
+            }
+            pk_column[target_key, $4] = $3
+            if (($4 + 0) > pk_max[target_key]) {
+                pk_max[target_key] = $4 + 0
+            }
+            if ($4 == 1 && !($3 in first_pk_seen)) {
+                first_pk_seen[$3] = 1
+                first_pk_names[++first_pk_count] = $3
+            }
+            next
+        }
+        FILENAME == indexes_file {
+            index_key = $1 SUBSEP $2 SUBSEP $3
+            if (!(index_key in index_seen)) {
+                index_seen[index_key] = 1
+                sorted_indexes[++index_count] = index_key
+            }
+            index_column[index_key, $5] = $6
+            next
+        }
+        FILENAME == relations_file {
+            if ($2 != "PHYSICAL_FK") {
+                next
+            }
+            physical_relation[$3 SUBSEP $4 SUBSEP $5 SUBSEP $6 SUBSEP $7 SUBSEP $8] = 1
+            next
+        }
+        END {
+            sort_list(source_tables, source_table_count)
+            sort_list(target_tables, target_table_count)
+            sort_list(first_pk_names, first_pk_count)
+            sort_list(sorted_indexes, index_count)
+
+            for (source_number = 1; source_number <= source_table_count; source_number++) {
+                source_key = source_tables[source_number]
+                split(source_key, source_parts, SUBSEP)
+
+                for (target_number = 1; target_number <= target_table_count; target_number++) {
+                    target_key = target_tables[target_number]
+                    split(target_key, target_parts, SUBSEP)
+                    if (source_key == target_key) {
+                        continue
+                    }
+                    first_column = target_parts[2] "_" pk_column[target_key, 1]
+                    if ((source_key SUBSEP first_column) in column_exists) {
+                        emit_candidate(source_key, target_key, "prefixed")
+                    }
+                }
+
+                for (name_number = 1; name_number <= first_pk_count; name_number++) {
+                    first_column = first_pk_names[name_number]
+                    if (first_column == "id" || !((source_key SUBSEP first_column) in column_exists)) {
+                        continue
+                    }
+                    clear_array(direct_targets)
+                    clear_array(compatible_targets)
+                    direct_count = 0
+                    compatible_count = 0
+                    for (target_number = 1; target_number <= target_table_count; target_number++) {
+                        target_key = target_tables[target_number]
+                        split(target_key, target_parts, SUBSEP)
+                        if (source_key == target_key || pk_column[target_key, 1] != first_column) {
+                            continue
+                        }
+                        if (type_matches(source_parts[1], source_parts[2], first_column,
+                                         target_parts[1], target_parts[2], first_column) &&
+                            !direct_candidate_is_physical(source_key, target_key)) {
+                            direct_targets[++direct_count] = target_key
+                            if (direct_candidate_is_fully_compatible(source_key, target_key)) {
+                                compatible_targets[++compatible_count] = target_key
+                            }
+                        }
+                    }
+                    if (compatible_count > 0) {
+                        clear_array(direct_targets)
+                        direct_count = compatible_count
+                        for (candidate_number = 1; candidate_number <= compatible_count; candidate_number++) {
+                            direct_targets[candidate_number] = compatible_targets[candidate_number]
+                        }
+                    }
+                    if (direct_count == 1) {
+                        emit_candidate(source_key, direct_targets[1], "direct")
+                    } else if (direct_count > 1) {
+                        emit_ambiguous(source_key, first_column, direct_count)
+                    }
+                }
+            }
+        }
+    ' "$columns_file" "$pks_file" "$indexes_file" "$relations_file" > "$virtual_file"
+
+    LC_ALL=C sort "$relations_file" "$virtual_file" > "$combined_file"
+    mv "$combined_file" "$relations_file"
+}
+
 main() {
     if [[ $# -eq 0 ]]; then
         usage
@@ -565,6 +951,7 @@ main() {
     target_preflight
     acquire_metadata
     build_physical_relations
+    build_virtual_relations
 
     printf 'Target preflight succeeded: %s.%s (%s)\n' "$SCHEMA_NAME" "$TABLE_NAME" "$TARGET_ENGINE"
 }
