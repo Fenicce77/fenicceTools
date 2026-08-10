@@ -42,6 +42,8 @@ Run maintained test suites from the repository root:
 ```bash
 bash mysql/trx/tests/test_mysql_trx_monitor.sh
 bash mysql/estimations/tests/test_check_cardinality.sh
+bash mysql/estimations/tests/test_analyze_prefix_index.sh
+bash mysql/estimations/tests/test_estimate_storage.sh
 
 (
   cd mysql/proxysql/python

@@ -8,7 +8,7 @@ These scripts are independent DBA tools. They intentionally remain separate beca
 | `analyze_prefix_index.sh` | Evaluates prefix lengths for string-index design | Prefix selectivity analysis |
 | `estimate_storage.sh` | Projects data, index, retention, and buffer-pool requirements | Storage/capacity estimate |
 
-Only `check_cardinality.sh` has been standardized in this phase. Aligning the other two tools with the conventions below is future work; their current behavior is unchanged.
+All three maintained estimators now follow the shared CLI, portability, safety, and test conventions described below.
 
 ## Shared conventions
 
@@ -23,6 +23,8 @@ The target convention for this tool set is:
 - Machine-readable reports without ANSI escapes or terminal truncation.
 
 Exit codes for `check_cardinality.sh` are `0` for success, `2` for CLI validation, `3` for global dependency/connection failures, `4` for partial table/column failures, and `130` for interruption.
+
+`estimate_storage.sh` returns `0` for success, `2` for CLI validation, `3` for dependency, connection, or report failures, and `4` for projection failures. Signal exits are `129` for `SIGHUP` and `130` for `SIGINT` or `SIGTERM`.
 
 ## Cardinality analyzer
 
@@ -132,7 +134,7 @@ mysql/estimations/check_cardinality.sh \
 
 - Phase 1: standardized cardinality analyzer, tests, and reports — implemented.
 - Phase 2: align `analyze_prefix_index.sh` CLI, validation, and reporting — implemented.
-- Phase 3: align `estimate_storage.sh` CLI, validation, and reporting — pending.
+- Phase 3: align `estimate_storage.sh` CLI, validation, and reporting — implemented.
 
 ## Prefix index analyzer
 
@@ -141,3 +143,81 @@ analyze_prefix_index.sh -l LOGIN_PATH -d DATABASE -t TABLE --environment ENVIRON
 ```
 
 The analyzer evaluates prefix selectivity without modifying the target server. It requires `--environment`; production execution also requires `--allow-production`. Use `--mysql-bin` to select a local client, `--query-timeout` to apply a MySQL execution-time hint, and `--no-color` for automation. The script validates SQL identifiers before issuing queries and returns `4` if one or more requested columns fail while others complete.
+
+## Storage and memory estimator
+
+```text
+estimate_storage.sh -l LOGIN_PATH -d DATABASE -t PREFIX -r ROWS --environment ENV [OPTIONS]
+```
+
+The estimator projects table-family data size, index size, retention storage, monthly growth, and the projected percentage of the current InnoDB buffer pool. It reads `information_schema.COLUMNS`, `VERSION()`, and `@@innodb_buffer_pool_size`; it does not modify tables, statistics, configuration, or server state.
+
+Required and safety options:
+
+```text
+-l, --login-path NAME
+-d, --database NAME
+-t, --table-prefix PREFIX
+-r, --rows NUMBER
+--environment development|test|staging|production
+--allow-production
+```
+
+Projection and output options:
+
+```text
+-u, --unit hour|day
+-k, --retention DAYS
+-i, --index-factor NUMBER
+-o, --output-file FILE
+--format csv|tsv
+--mysql-bin PATH
+--no-color
+```
+
+`--database` accepts MySQL quoted-identifier names up to 64 characters, including internal spaces, hyphens, and Unicode; control characters and a trailing space are rejected. `--table-prefix` is a SQL `LIKE` prefix. The tool rejects a supplied `%` and appends the final `%` internally. It intentionally leaves `_` active, allowing a prefix such as `events_` to match table families such as `events_2026`. Database and pattern values are represented with hexadecimal `utf8mb4` literals to avoid SQL-mode-dependent quoting.
+
+The projection retains the original model: fixed-width types use their nominal size, character and binary types use `CHARACTER_OCTET_LENGTH`, LOB/JSON/geospatial values use a 1 KiB baseline, data applies a `1.2` InnoDB fragmentation factor, and indexes apply the requested multiplier. The index factor accepts values from `0` through `1000` with up to six decimal places. Projected total rows use `DECIMAL(65,0)` arithmetic to avoid an unsigned-integer overflow when retention and ingest rates are large. The result is a planning estimate, not a replacement for measured compression, page fill, index cardinality, or workload residency data.
+
+Terminal output is always rendered. A report is created only when `--output-file` is present. The format is inferred as TSV for a `.tsv` filename and CSV otherwise, or selected explicitly with `--format`. Text values retain MySQL batch-mode escaping (`\\`, `\t`, `\n`, and `\0`) so embedded delimiters and line breaks never corrupt the record structure; CSV quoting is applied to that deterministic escaped representation. Reports are generated in a same-directory temporary file and atomically renamed only after the complete query and conversion succeed; an existing report remains unchanged on failure or interruption.
+
+Daily projection with no report:
+
+```bash
+mysql/estimations/estimate_storage.sh \
+  --login-path development-db \
+  --database app \
+  --table-prefix logs_ \
+  --rows 50000 \
+  --retention 90 \
+  --environment development
+```
+
+Hourly input and an atomic TSV report:
+
+```bash
+mysql/estimations/estimate_storage.sh \
+  --login-path staging-db \
+  --database app \
+  --table-prefix events_ \
+  --rows 2500 \
+  --unit hour \
+  --retention 15 \
+  --index-factor 0.5 \
+  --environment staging \
+  --output-file storage-estimate.tsv
+```
+
+Production execution requires an explicit acknowledgement even though the queries are read-only:
+
+```bash
+mysql/estimations/estimate_storage.sh \
+  --login-path production-db \
+  --database app \
+  --table-prefix audit_ \
+  --rows 100000 \
+  --environment production \
+  --allow-production \
+  --output-file storage-estimate.csv \
+  --format csv
+```
