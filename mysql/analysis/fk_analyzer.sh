@@ -392,6 +392,20 @@ WHERE TABLE_SCHEMA = ${schema_literal}
     TARGET_ENGINE=$target_engine
 }
 
+run_metadata_query() {
+    local label=$1
+    local query=$2
+    local output_file=$3
+    local stderr_file="$WORK_DIR/${label}.stderr"
+    local diagnostic
+
+    if ! run_mysql_query "$query" > "$output_file" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
+        runtime_error 3 "MySQL metadata query (${label}) failed: $diagnostic"
+    fi
+}
+
 acquire_metadata() {
     local schema_literal
     local table_literal
@@ -405,7 +419,7 @@ acquire_metadata() {
 FROM information_schema.COLUMNS
 WHERE TABLE_SCHEMA = ${schema_literal}
 ORDER BY TABLE_NAME, ORDINAL_POSITION;"
-    run_mysql_query "$query" > "$WORK_DIR/columns.tsv"
+    run_metadata_query columns "$query" "$WORK_DIR/columns.tsv"
 
     query="SELECT /* fk-analyzer:pks */ kcu.CONSTRAINT_SCHEMA, kcu.TABLE_NAME,
        kcu.COLUMN_NAME, kcu.ORDINAL_POSITION
@@ -417,7 +431,7 @@ JOIN information_schema.TABLE_CONSTRAINTS AS tc
 WHERE kcu.CONSTRAINT_SCHEMA = ${schema_literal}
   AND tc.CONSTRAINT_TYPE = 0x5052494D415259204B4559
 ORDER BY kcu.TABLE_NAME, kcu.ORDINAL_POSITION;"
-    run_mysql_query "$query" > "$WORK_DIR/pks.tsv"
+    run_metadata_query pks "$query" "$WORK_DIR/pks.tsv"
 
     query="SELECT /* fk-analyzer:physical */ kcu.CONSTRAINT_NAME, kcu.CONSTRAINT_SCHEMA,
        kcu.TABLE_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_SCHEMA,
@@ -431,30 +445,36 @@ JOIN information_schema.REFERENTIAL_CONSTRAINTS AS rc
 WHERE kcu.CONSTRAINT_SCHEMA = ${schema_literal}
   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
   AND (kcu.TABLE_NAME = ${table_literal}
-       OR kcu.REFERENCED_TABLE_NAME = ${table_literal})
+       OR (kcu.REFERENCED_TABLE_SCHEMA = ${schema_literal}
+           AND kcu.REFERENCED_TABLE_NAME = ${table_literal}))
 ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;"
-    run_mysql_query "$query" > "$WORK_DIR/physical-components.tsv"
+    run_metadata_query physical "$query" "$WORK_DIR/physical-components.tsv"
 
     query="SELECT /* fk-analyzer:indexes */ TABLE_SCHEMA, TABLE_NAME, INDEX_NAME,
        NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, CARDINALITY
 FROM information_schema.STATISTICS
 WHERE TABLE_SCHEMA = ${schema_literal}
 ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;"
-    run_mysql_query "$query" > "$WORK_DIR/indexes.tsv"
+    run_metadata_query indexes "$query" "$WORK_DIR/indexes.tsv"
 
     query="SELECT /* fk-analyzer:stats */ TABLE_ROWS
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = ${schema_literal}
   AND TABLE_NAME = ${table_literal};"
-    run_mysql_query "$query" > "$WORK_DIR/stats.tsv"
+    run_metadata_query stats "$query" "$WORK_DIR/stats.tsv"
 }
 
 build_physical_relations() {
     local physical_file="$WORK_DIR/physical-components.tsv"
     local indexes_file="$WORK_DIR/indexes.tsv"
 
-    awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" -v selected_table="$TABLE_NAME" '
+    awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" \
+        -v selected_schema="$SCHEMA_NAME" -v selected_table="$TABLE_NAME" '
         FILENAME == physical_file {
+            if (!(($2 == selected_schema && $3 == selected_table) ||
+                  ($5 == selected_schema && $6 == selected_table))) {
+                next
+            }
             key = $2 SUBSEP $1 SUBSEP $3 SUBSEP $5 SUBSEP $6
             if (!(key in relation_seen)) {
                 relation_seen[key] = 1
@@ -519,7 +539,7 @@ build_physical_relations() {
                 }
 
                 status_tags = (supporting_index == "" ? "UNINDEXED" : "")
-                direction = (source_table[key] == selected_table ? "OUTBOUND" : "INBOUND")
+                direction = (source_schema[key] == selected_schema && source_table[key] == selected_table ? "OUTBOUND" : "INBOUND")
                 details = "ON UPDATE " update_rule[key] "; ON DELETE " delete_rule[key]
                 print direction, "PHYSICAL_FK", source_schema[key], source_table[key], source_tuple,
                     target_schema[key], target_table[key], target_tuple, constraint_name[key],

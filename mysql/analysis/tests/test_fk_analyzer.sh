@@ -208,6 +208,15 @@ run_case target_missing -l test -s sales -t orders --environment test --mysql-bi
 assert_status 3
 unset FAKE_MYSQL_FK_MODE
 
+FAKE_MYSQL_FK_MODE=metadata-failure
+export FAKE_MYSQL_FK_MODE
+run_case metadata_failure -l test -s sales -t orders --environment test --mysql-bin "$FAKE_MYSQL"
+assert_status 3
+assert_contains "$OUTPUT" 'metadata access denied'
+assert_not_contains "$OUTPUT" $'\033'
+assert_not_contains "$OUTPUT" $'\n'
+unset FAKE_MYSQL_FK_MODE
+
 printf 'PASS: fk_analyzer CLI contract\n'
 }
 
@@ -232,6 +241,7 @@ run_physical_tests() {
         $'fk_orders_customer\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE' \
         $'fk_items_order\tsales\tshipment_items\ttenant_id\tsales\torders\ttenant_id\t1\tRESTRICT\tCASCADE' \
         $'fk_items_order\tsales\tshipment_items\torder_id\tsales\torders\torder_id\t2\tRESTRICT\tCASCADE' \
+        $'fk_shipments_archive_orders\tsales\tshipments\tarchive_order_id\tarchive\torders\tid\t1\tRESTRICT\tCASCADE' \
         > "$WORK_DIR/physical-components.tsv"
     printf '%s\n' \
         $'sales\torders\tPRIMARY\t0\t1\tid\t1' \
@@ -247,6 +257,7 @@ run_physical_tests() {
     assert_contains "$relations" $'INBOUND\tPHYSICAL_FK\tsales\tshipment_items\t(tenant_id, order_id)\tsales\torders\t(tenant_id, order_id)\tfk_items_order\tidx_shipment_items_tenant_order\t\tON UPDATE RESTRICT; ON DELETE CASCADE'
     assert_equals "$(LC_ALL=C awk 'END { print NR }' "$WORK_DIR/relations.tsv")" 2
     assert_equals "$(LC_ALL=C awk -F '\t' '$9 == "fk_items_order" { count++ } END { print count + 0 }' "$WORK_DIR/relations.tsv")" 1
+    assert_not_contains "$relations" 'fk_shipments_archive_orders'
 
     run_case physical_end_to_end -l test -s sales -t orders --environment test --mysql-bin "$FAKE_MYSQL"
     assert_status 0

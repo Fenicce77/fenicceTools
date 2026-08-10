@@ -50,6 +50,11 @@ if [[ "$query" == *"fk-analyzer:connection"* ]]; then
     esac
 fi
 
+if [[ "${FAKE_MYSQL_FK_MODE:-physical}" == "metadata-failure" && "$query" == *"fk-analyzer:physical"* ]]; then
+    printf '\033]0;unsafe title\007\033[31mmetadata access denied\033[0m\n' >&2
+    exit 1
+fi
+
 case "$query" in
     *"fk-analyzer:connection"*)
         printf '8.4.2\t8589934592\n'
