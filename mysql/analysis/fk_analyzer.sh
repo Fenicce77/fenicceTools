@@ -1,324 +1,411 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Script: fk_analyzer.sh
-# Role: Senior DBA Diagnostic Tool for MySQL 8.0.x / 8.4.x (GCP Cloud SQL)
-# Description: Shows DDL, analyzes foreign key relationships (inbound/outbound),
-#              and conditionally evaluates index cardinality/live PK counts 
-#              ONLY if references exist.
-# Environment: Linux/MacOS, bash. Requires mysql client and login-path.
-# ==============================================================================
+# MySQL Foreign Key Topology Analyzer.
+# Read-only metadata analyzer compatible with Bash 3.2 on macOS and Linux.
+set -euo pipefail
 
-# --- Color Definitions ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-BOLD='\033[1m'
-DIM='\033[2m'
-RESET='\033[0m'
+CARDINALITY_MODE=metadata
+SHOW_TREE=false
+PHYSICAL_ONLY=false
+ALLOW_PRODUCTION=false
+OUTPUT_FILE=""
+OUTPUT_FORMAT=""
+TERMINAL_WIDTH_OPTION=""
+NO_COLOR=false
+WORK_DIR=""
+EXPORT_TEMP=""
+FINAL_STATUS=0
 
-# --- Variables ---
 LOGIN_PATH=""
 SCHEMA_NAME=""
 TABLE_NAME=""
-SHOW_TREE=0
-SHOW_CARDINALITY=0
+ENVIRONMENT=""
+MYSQL_BIN_OPTION=""
+MYSQL_BIN_OPTION_SET=false
+OUTPUT_FILE_SET=false
+OUTPUT_FORMAT_SET=false
+TERMINAL_WIDTH=""
+TARGET_ENGINE=""
 
-# --- Functions ---
+COLOR_BOLD=""
+COLOR_CYAN=""
+COLOR_RESET=""
+
+cli_error() {
+    printf 'ERROR: %s\nTry --help for usage.\n' "$1" >&2
+    exit 2
+}
+
+runtime_error() {
+    local status=$1
+    shift
+    printf 'ERROR: %s\n' "$*" >&2
+    exit "$status"
+}
+
+setup_colors() {
+    if [[ "$NO_COLOR" == false && -t 1 && "${TERM:-}" != "dumb" ]]; then
+        COLOR_BOLD=$'\033[1m'
+        COLOR_CYAN=$'\033[0;36m'
+        COLOR_RESET=$'\033[0m'
+    fi
+}
 
 usage() {
-    echo -e "${BOLD}${CYAN}MySQL Foreign Key & Referential Topology Analyzer${RESET}"
-    echo -e "Usage: $0 -l <login-path> -s <schema> -t <table> [OPTIONS]\n"
-    echo -e "${BOLD}Required Parameters:${RESET}"
-    echo -e "  -l    MySQL login-path (configured via mysql_config_editor)"
-    echo -e "  -s    Target database schema"
-    echo -e "  -t    Target table name\n"
-    echo -e "${BOLD}Optional Parameters:${RESET}"
-    echo -e "  -c    Enable Cardinality & Table Statistics Analysis"
-    echo -e "  -r    Enable Tree Representation of references"
-    echo -e "  -h    Show this help menu\n"
-    echo -e "${BOLD}Example:${RESET}"
-    echo -e "  $0 -l my_cloudsql_prod -s ecom_db -t orders -c -r"
-    exit 1
+    setup_colors
+    printf '%bMySQL Foreign Key Topology Analyzer%b\n' "${COLOR_BOLD}${COLOR_CYAN}" "$COLOR_RESET"
+    printf '\nUsage:\n'
+    printf '  %s -l NAME -s SCHEMA -t TABLE --environment ENVIRONMENT [options]\n' "${0##*/}"
+    printf '\nRequired options:\n'
+    printf '  -l, --login-path NAME                 MySQL login path\n'
+    printf '  -s, --schema NAME                     Target schema\n'
+    printf '  -t, --table NAME                      Target table\n'
+    printf '      --environment ENVIRONMENT          development, test, staging, or production\n'
+    printf '\nAnalysis options:\n'
+    printf '  -r, --tree                            Append the dependency tree\n'
+    printf '  -c                                    Compatibility mode; select metadata cardinality\n'
+    printf '      --cardinality MODE                 metadata or exact\n'
+    printf '      --physical-only                    Disable virtual relationship inference\n'
+    printf '      --allow-production                 Required only for exact production cardinality\n'
+    printf '\nOutput and client options:\n'
+    printf '      --output-file FILE                 Write a CSV or TSV report\n'
+    printf '      --format FORMAT                    csv or tsv\n'
+    printf '      --terminal-width COLUMNS           Width from 120 through 10000\n'
+    printf '      --mysql-bin PATH                   MySQL client executable\n'
+    printf '      --no-color                         Disable ANSI color sequences\n'
+    printf '  -h, --help                            Show this help\n'
+    printf '\nVirtual relationship rules:\n'
+    printf '  Virtual candidates use exact primary-key names or <table>_<primary-key>.\n'
+    printf '  A leading id column alone never starts a virtual relationship.\n'
+    printf '\nExit status:\n'
+    printf '  0 success; 2 command-line validation; 3 client or preflight failure; 4 degraded analysis.\n'
+    printf '\nExamples:\n'
+    printf '  %s -l reporting -s sales -t orders --environment test\n' "${0##*/}"
+    printf '  %s --login-path=prod --schema=sales --table=orders --environment=production --cardinality=exact --allow-production\n' "${0##*/}"
 }
 
-# Parse Arguments
-while getopts "l:s:t:crh" opt; do
-    case ${opt} in
-        l ) LOGIN_PATH=$OPTARG ;;
-        s ) SCHEMA_NAME=$OPTARG ;;
-        t ) TABLE_NAME=$OPTARG ;;
-        c ) SHOW_CARDINALITY=1 ;;
-        r ) SHOW_TREE=1 ;;
-        h | * ) usage ;;
+parse_arguments() {
+    local argument
+
+    NO_COLOR=false
+    for argument in "$@"; do
+        if [[ "$argument" == "--no-color" ]]; then
+            NO_COLOR=true
+            break
+        fi
+    done
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -l|--login-path)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                LOGIN_PATH=$2
+                shift 2
+                ;;
+            --login-path=*)
+                LOGIN_PATH=${1#--login-path=}
+                shift
+                ;;
+            -s|--schema)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                SCHEMA_NAME=$2
+                shift 2
+                ;;
+            --schema=*)
+                SCHEMA_NAME=${1#--schema=}
+                shift
+                ;;
+            -t|--table)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                TABLE_NAME=$2
+                shift 2
+                ;;
+            --table=*)
+                TABLE_NAME=${1#--table=}
+                shift
+                ;;
+            --environment)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                ENVIRONMENT=$2
+                shift 2
+                ;;
+            --environment=*)
+                ENVIRONMENT=${1#--environment=}
+                shift
+                ;;
+            -r|--tree)
+                SHOW_TREE=true
+                shift
+                ;;
+            -c)
+                CARDINALITY_MODE=metadata
+                shift
+                ;;
+            --cardinality)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                CARDINALITY_MODE=$2
+                shift 2
+                ;;
+            --cardinality=*)
+                CARDINALITY_MODE=${1#--cardinality=}
+                shift
+                ;;
+            --physical-only)
+                PHYSICAL_ONLY=true
+                shift
+                ;;
+            --allow-production)
+                ALLOW_PRODUCTION=true
+                shift
+                ;;
+            --output-file)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                OUTPUT_FILE=$2
+                OUTPUT_FILE_SET=true
+                shift 2
+                ;;
+            --output-file=*)
+                OUTPUT_FILE=${1#--output-file=}
+                OUTPUT_FILE_SET=true
+                shift
+                ;;
+            --format)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                OUTPUT_FORMAT=$2
+                OUTPUT_FORMAT_SET=true
+                shift 2
+                ;;
+            --format=*)
+                OUTPUT_FORMAT=${1#--format=}
+                OUTPUT_FORMAT_SET=true
+                shift
+                ;;
+            --terminal-width)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                TERMINAL_WIDTH_OPTION=$2
+                shift 2
+                ;;
+            --terminal-width=*)
+                TERMINAL_WIDTH_OPTION=${1#--terminal-width=}
+                shift
+                ;;
+            --mysql-bin)
+                [[ $# -ge 2 ]] || cli_error "$1 requires a value."
+                MYSQL_BIN_OPTION=$2
+                MYSQL_BIN_OPTION_SET=true
+                shift 2
+                ;;
+            --mysql-bin=*)
+                MYSQL_BIN_OPTION=${1#--mysql-bin=}
+                MYSQL_BIN_OPTION_SET=true
+                shift
+                ;;
+            --no-color)
+                NO_COLOR=true
+                shift
+                ;;
+            -h|--help)
+                usage
+                return 1
+                ;;
+            *)
+                cli_error "Unknown option: $1"
+                ;;
+        esac
+    done
+}
+
+validate_identifier() {
+    local value=$1
+    local option_name=$2
+
+    [[ ${#value} -le 64 ]] || cli_error "$option_name must be 1 to 64 characters."
+    [[ "$value" != *' ' ]] || cli_error "$option_name must not end with an ASCII space."
+    if LC_ALL=C printf '%s' "$value" | LC_ALL=C od -v -An -tu1 | awk '{ for (i = 1; i <= NF; i++) if ($i < 32 || $i == 127) { found = 1; exit } } END { exit(found ? 0 : 1) }'; then
+        cli_error "$option_name must not contain control characters."
+    fi
+}
+
+validate_terminal_width() {
+    local value=$1
+    local normalized
+
+    [[ "$value" =~ ^[0-9]+$ ]] || cli_error '--terminal-width must be an integer from 120 through 10000.'
+    normalized=$(printf '%s' "$value" | sed 's/^0*//')
+    [[ -n "$normalized" ]] || normalized=0
+
+    if [[ ${#normalized} -gt 5 ]] || \
+       [[ ${#normalized} -eq 5 && "$normalized" > "10000" ]] || \
+       [[ ${#normalized} -lt 3 ]]; then
+        cli_error '--terminal-width must be an integer from 120 through 10000.'
+    fi
+    if [[ ${#normalized} -eq 3 && "$normalized" < "120" ]]; then
+        cli_error '--terminal-width must be an integer from 120 through 10000.'
+    fi
+
+    TERMINAL_WIDTH=$normalized
+}
+
+validate_arguments() {
+    [[ -n "$LOGIN_PATH" ]] || cli_error '--login-path is required.'
+    [[ -n "$SCHEMA_NAME" ]] || cli_error '--schema is required.'
+    [[ -n "$TABLE_NAME" ]] || cli_error '--table is required.'
+    [[ -n "$ENVIRONMENT" ]] || cli_error '--environment is required.'
+
+    case "$ENVIRONMENT" in
+        development|test|staging|production) ;;
+        *) cli_error '--environment must be development, test, staging, or production.' ;;
     esac
-done
+    case "$CARDINALITY_MODE" in
+        metadata|exact) ;;
+        *) cli_error '--cardinality must be metadata or exact.' ;;
+    esac
+    case "$OUTPUT_FORMAT" in
+        ""|csv|tsv) ;;
+        *) cli_error '--format must be csv or tsv.' ;;
+    esac
 
-# Enforce mandatory parameters
-if [[ -z "$LOGIN_PATH" || -z "$SCHEMA_NAME" || -z "$TABLE_NAME" ]]; then
-    echo -e "${RED}Error: Missing required parameters.${RESET}"
-    usage
-fi
+    [[ "$OUTPUT_FILE_SET" == false || -n "$OUTPUT_FILE" ]] || cli_error '--output-file must not be empty.'
+    [[ "$OUTPUT_FORMAT_SET" == false || -n "$OUTPUT_FORMAT" ]] || cli_error '--format must not be empty.'
+    [[ "$MYSQL_BIN_OPTION_SET" == false || -n "$MYSQL_BIN_OPTION" ]] || cli_error '--mysql-bin must not be empty.'
 
-# MySQL execution wrapper
-run_mysql() {
-    local query="$1"
-    mysql --login-path="${LOGIN_PATH}" -sNe "${query}" 2>/dev/null
-    if [[ $? -ne 0 ]]; then
-        echo -e "${RED}Error executing MySQL query. Check your login-path and connection to Cloud SQL.${RESET}"
-        exit 1
+    validate_identifier "$SCHEMA_NAME" '--schema'
+    validate_identifier "$TABLE_NAME" '--table'
+
+    if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
+        validate_terminal_width "$TERMINAL_WIDTH_OPTION"
+    fi
+
+    if [[ "$ENVIRONMENT" == production && "$CARDINALITY_MODE" == exact ]]; then
+        [[ "$ALLOW_PRODUCTION" == true ]] || cli_error 'Exact cardinality in production requires --allow-production.'
+    elif [[ "$ALLOW_PRODUCTION" == true ]]; then
+        cli_error '--allow-production is valid only with --environment production --cardinality exact.'
     fi
 }
 
-echo -e "\n${BOLD}${CYAN}====================================================================${RESET}"
-echo -e "${BOLD}${CYAN}  REFERENTIAL TOPOLOGY REPORT FOR: ${YELLOW}${SCHEMA_NAME}.${TABLE_NAME}${RESET}"
-echo -e "${BOLD}${CYAN}====================================================================${RESET}\n"
+sql_literal() {
+    printf 'CONVERT(0x'
+    LC_ALL=C printf '%s' "$1" | LC_ALL=C od -v -An -tx1 | tr -d ' \n'
+    printf ' USING utf8mb4)'
+}
 
-# ---------------------------------------------------------
-# 0. Table DDL (SHOW CREATE TABLE)
-# ---------------------------------------------------------
-echo -e "${BOLD}${MAGENTA}[0] TABLE DDL${RESET}"
-DDL_QUERY="SHOW CREATE TABLE \`${SCHEMA_NAME}\`.\`${TABLE_NAME}\`;"
-# Extract the second column (the actual CREATE statement)
-DDL_RES=$(run_mysql "${DDL_QUERY}" | cut -f2)
+quote_identifier() {
+    local identifier=$1
+    identifier=${identifier//\`/\`\`}
+    printf '`%s`' "$identifier"
+}
 
-if [[ -n "$DDL_RES" ]]; then
-    echo -e "${DIM}${CYAN}┌──────────────────────────────────────────────────────────────────┐${RESET}"
-    # Use green to make the SQL visually distinct and readable
-    echo -e "${GREEN}${DDL_RES}${RESET}"
-    echo -e "${DIM}${CYAN}└──────────────────────────────────────────────────────────────────┘${RESET}\n"
-else
-    echo -e "  ${RED}Failed to retrieve DDL. Check table existence or permissions.${RESET}\n"
-fi
+cleanup() {
+    local workspace_prefix="${TMPDIR:-/tmp}/fk-analyzer."
 
-# ---------------------------------------------------------
-# 1. References FROM the table (Outbound Foreign Keys)
-# ---------------------------------------------------------
-QUERY_OUTBOUND="
-SELECT rc.CONSTRAINT_NAME, 
-       kcu.COLUMN_NAME, 
-       kcu.REFERENCED_TABLE_NAME, 
-       kcu.REFERENCED_COLUMN_NAME, 
-       rc.UPDATE_RULE, 
-       rc.DELETE_RULE
-FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
-  ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME 
- AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-WHERE rc.CONSTRAINT_SCHEMA = '${SCHEMA_NAME}' 
-  AND rc.TABLE_NAME = '${TABLE_NAME}';"
+    case "${WORK_DIR:-}" in
+        "${workspace_prefix}"*)
+            [[ -d "$WORK_DIR" ]] && rm -rf -- "$WORK_DIR"
+            ;;
+    esac
+    WORK_DIR=""
+    EXPORT_TEMP=""
+    return 0
+}
 
-echo -e "${BOLD}${MAGENTA}[1] REFERENCES FROM TABLE (OUTBOUND)${RESET}"
-echo -e "Dependencies where ${YELLOW}${TABLE_NAME}${RESET} relies on other tables:\n"
+create_workspace() {
+    WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fk-analyzer.XXXXXX") || runtime_error 3 'Unable to create temporary workspace.'
+    trap cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT TERM
+}
 
-OUTBOUND_RES=$(run_mysql "${QUERY_OUTBOUND}")
+resolve_mysql_bin() {
+    local candidate=""
 
-if [[ -z "$OUTBOUND_RES" ]]; then
-    echo -e "  ${GREEN}No outbound foreign keys found.${RESET}\n"
-else
-    echo "$OUTBOUND_RES" | while IFS=$'\t' read -r c_name col_name ref_tab ref_col upd_rule del_rule; do
-        echo -e "  ${BOLD}FK Name:${RESET} ${BLUE}${c_name}${RESET}"
-        echo -e "  ${BOLD}Mapping:${RESET} ${TABLE_NAME}(${col_name}) ${GREEN}-->${RESET} ${YELLOW}${ref_tab}${RESET}(${ref_col})"
-        echo -e "  ${BOLD}Constraints:${RESET} ON UPDATE ${upd_rule} | ON DELETE ${del_rule}"
-        echo -e "  --------------------------------------------------------"
-    done
-fi
-
-# ---------------------------------------------------------
-# 2. References TO the table (Inbound Foreign Keys)
-# ---------------------------------------------------------
-QUERY_INBOUND="
-SELECT rc.CONSTRAINT_NAME, 
-       rc.TABLE_NAME, 
-       kcu.COLUMN_NAME, 
-       kcu.REFERENCED_COLUMN_NAME, 
-       rc.UPDATE_RULE, 
-       rc.DELETE_RULE
-FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
-  ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME 
- AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-WHERE rc.CONSTRAINT_SCHEMA = '${SCHEMA_NAME}' 
-  AND rc.REFERENCED_TABLE_NAME = '${TABLE_NAME}';"
-
-echo -e "\n${BOLD}${MAGENTA}[2] REFERENCES TO TABLE (INBOUND)${RESET}"
-echo -e "Other tables that rely on ${YELLOW}${TABLE_NAME}${RESET}:\n"
-
-INBOUND_RES=$(run_mysql "${QUERY_INBOUND}")
-
-if [[ -z "$INBOUND_RES" ]]; then
-    echo -e "  ${GREEN}No inbound foreign keys found. Safe to modify/drop rows without constraint violations.${RESET}\n"
-else
-    echo "$INBOUND_RES" | while IFS=$'\t' read -r c_name src_tab src_col ref_col upd_rule del_rule; do
-        echo -e "  ${BOLD}FK Name:${RESET} ${BLUE}${c_name}${RESET}"
-        echo -e "  ${BOLD}Mapping:${RESET} ${YELLOW}${src_tab}${RESET}(${src_col}) ${GREEN}-->${RESET} ${TABLE_NAME}(${ref_col})"
-        echo -e "  ${BOLD}Constraints:${RESET} ON UPDATE ${upd_rule} | ON DELETE ${del_rule}"
-        echo -e "  --------------------------------------------------------"
-    done
-fi
-
-# ---------------------------------------------------------
-# 3. Cardinality Analysis (Safe Mode via Stats + Live PK Count)
-# ---------------------------------------------------------
-if [[ "$SHOW_CARDINALITY" -eq 1 ]]; then
-    echo -e "\n${BOLD}${MAGENTA}[3] CARDINALITY & ROW ESTIMATES (STATISTICS)${RESET}"
-
-    # ONLY proceed if there are actual foreign keys/dependencies
-    if [[ -z "$OUTBOUND_RES" && -z "$INBOUND_RES" ]]; then
-        echo -e "  ${CYAN}Info:${RESET} Cardinality and row estimation skipped. No referential dependencies (FKs) found for this table."
+    if [[ -n "$MYSQL_BIN_OPTION" ]]; then
+        candidate=$MYSQL_BIN_OPTION
+    elif [[ -n "${MYSQL_BIN:-}" ]]; then
+        candidate=$MYSQL_BIN
     else
-        # --- 3.1 Row Accounting: Live vs Dictionary ---
-        echo -e "  ${BOLD}Evaluating Row Counts (Live vs Dictionary)...${RESET}"
-        
-        PK_COL=$(run_mysql "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA='${SCHEMA_NAME}' AND TABLE_NAME='${TABLE_NAME}' AND CONSTRAINT_NAME='PRIMARY' LIMIT 1;")
-        
-        if [[ -z "$PK_COL" ]]; then
-            COUNT_QUERY="SELECT COUNT(*) FROM \`${SCHEMA_NAME}\`.\`${TABLE_NAME}\`;"
-        else
-            COUNT_QUERY="SELECT COUNT(\`${PK_COL}\`) FROM \`${SCHEMA_NAME}\`.\`${TABLE_NAME}\`;"
-        fi
-        
-        EXACT_COUNT=$(run_mysql "${COUNT_QUERY}")
-        EST_COUNT=$(run_mysql "SELECT IFNULL(TABLE_ROWS, 0) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='${SCHEMA_NAME}' AND TABLE_NAME='${TABLE_NAME}';")
-        
-        if [[ "$EXACT_COUNT" -eq 0 && "$EST_COUNT" -eq 0 ]]; then
-            DIFF_PCT=0.00
-        elif [[ "$EXACT_COUNT" -eq 0 ]]; then
-            DIFF_PCT=100.00
-        else
-            DIFF_PCT=$(awk -v exact="$EXACT_COUNT" -v est="$EST_COUNT" 'BEGIN { val = 100 * (exact - est) / exact; if (val < 0) val = -val; printf "%.2f", val }')
-        fi
-        
-        IS_STALE=$(awk -v pct="$DIFF_PCT" 'BEGIN { if (pct > 10.0) print 1; else print 0 }')
-        
-        if [[ "$IS_STALE" -eq 1 ]]; then
-            echo -e "  ${BOLD}Table Rows Displayed:${RESET} ${RED}${EXACT_COUNT}${RESET} (Live Count via PK)"
-            echo -e "  ${YELLOW}Warning:${RESET} Dictionary stats are stale! (Estimate: ${EST_COUNT} | Diff: ${RED}${DIFF_PCT}%${RESET})"
-            echo -e "  ${YELLOW}Recommendation:${RESET} Consider running 'ANALYZE TABLE \`${SCHEMA_NAME}\`.\`${TABLE_NAME}\`;'\n"
-        else
-            echo -e "  ${BOLD}Table Rows Displayed:${RESET} ${GREEN}${EST_COUNT}${RESET} (Dictionary Estimate)"
-            echo -e "  ${CYAN}Info:${RESET} Stats are healthy. (Exact: ${EXACT_COUNT} | Diff: ${GREEN}${DIFF_PCT}%${RESET})\n"
-        fi
-
-        # --- 3.2 Index Cardinality For INVOLVED RELATIONS Only ---
-        echo -e "  ${BOLD}Index Cardinalities for Involved Foreign Key Columns:${RESET}"
-        
-        CARD_DATA=""
-
-        # Process Outbound
-        if [[ -n "$OUTBOUND_RES" ]]; then
-            while IFS=$'\t' read -r c_name col_name ref_tab ref_col upd_rule del_rule; do
-                src_card=$(run_mysql "SELECT IFNULL(MAX(CARDINALITY), 'N/A') FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='${SCHEMA_NAME}' AND TABLE_NAME='${TABLE_NAME}' AND COLUMN_NAME='${col_name}';")
-                tgt_card=$(run_mysql "SELECT IFNULL(MAX(CARDINALITY), 'N/A') FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='${SCHEMA_NAME}' AND TABLE_NAME='${ref_tab}' AND COLUMN_NAME='${ref_col}';")
-                
-                [[ -z "$src_card" || "$src_card" == "NULL" ]] && src_card="N/A"
-                [[ -z "$tgt_card" || "$tgt_card" == "NULL" ]] && tgt_card="N/A"
-
-                CARD_DATA+="OUTBOUND\t${c_name}\t${TABLE_NAME}.${col_name}\t${src_card}\t${ref_tab}.${ref_col}\t${tgt_card}\n"
-            done <<< "$OUTBOUND_RES"
-        fi
-
-        # Process Inbound
-        if [[ -n "$INBOUND_RES" ]]; then
-            while IFS=$'\t' read -r c_name src_tab src_col ref_col upd_rule del_rule; do
-                src_card=$(run_mysql "SELECT IFNULL(MAX(CARDINALITY), 'N/A') FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='${SCHEMA_NAME}' AND TABLE_NAME='${src_tab}' AND COLUMN_NAME='${src_col}';")
-                tgt_card=$(run_mysql "SELECT IFNULL(MAX(CARDINALITY), 'N/A') FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='${SCHEMA_NAME}' AND TABLE_NAME='${TABLE_NAME}' AND COLUMN_NAME='${ref_col}';")
-                
-                [[ -z "$src_card" || "$src_card" == "NULL" ]] && src_card="N/A"
-                [[ -z "$tgt_card" || "$tgt_card" == "NULL" ]] && tgt_card="N/A"
-
-                CARD_DATA+="INBOUND\t${c_name}\t${src_tab}.${src_col}\t${src_card}\t${TABLE_NAME}.${ref_col}\t${tgt_card}\n"
-            done <<< "$INBOUND_RES"
-        fi
-
-        # Feed the compiled data into awk for beautiful, aligned, colorized formatting
-        echo -en "$CARD_DATA" | grep -v '^$' | awk -F'\t' '
-        BEGIN {
-            w1=8; w2=15; w3=18; w4=11; w5=18; w6=11;
-        }
-        {
-            if(length($1)>w1) w1=length($1);
-            if(length($2)>w2) w2=length($2);
-            if(length($3)>w3) w3=length($3);
-            if(length($4)>w4) w4=length($4);
-            if(length($5)>w5) w5=length($5);
-            if(length($6)>w6) w6=length($6);
-            lines[NR] = $0
-        }
-        END {
-            # Print Headers
-            printf "  %-*s   %-*s   %-*s   %-*s   %-*s   %-*s\n", \
-                   w1, "DIR", w2, "CONSTRAINT NAME", w3, "SOURCE (TABLE.COL)", w4, "CARDINALITY", w5, "TARGET (TABLE.COL)", w6, "CARDINALITY"
-            
-            # Print Separators dynamically
-            d1 = sprintf("%*s", w1, ""); gsub(/ /, "-", d1);
-            d2 = sprintf("%*s", w2, ""); gsub(/ /, "-", d2);
-            d3 = sprintf("%*s", w3, ""); gsub(/ /, "-", d3);
-            d4 = sprintf("%*s", w4, ""); gsub(/ /, "-", d4);
-            d5 = sprintf("%*s", w5, ""); gsub(/ /, "-", d5);
-            d6 = sprintf("%*s", w6, ""); gsub(/ /, "-", d6);
-            printf "  %-*s   %-*s   %-*s   %-*s   %-*s   %-*s\n", w1, d1, w2, d2, w3, d3, w4, d4, w5, d5, w6, d6
-            
-            # Print Data with Colors
-            for (i=1; i<=NR; i++) {
-                split(lines[i], f, "\t");
-                c_dir = (f[1] == "OUTBOUND") ? "\033[0;32m" : "\033[0;35m";
-                c_reset = "\033[0m"; c_blue = "\033[0;34m"; c_yellow = "\033[1;33m"; c_cyan = "\033[0;36m";
-
-                printf "  %s%-*s%s   %s%-*s%s   %s%-*s%s   %s%-*s%s   %s%-*s%s   %s%-*s%s\n", \
-                    c_dir, w1, f[1], c_reset, \
-                    c_blue, w2, f[2], c_reset, \
-                    c_yellow, w3, f[3], c_reset, \
-                    c_cyan, w4, f[4], c_reset, \
-                    c_yellow, w5, f[5], c_reset, \
-                    c_cyan, w6, f[6], c_reset;
-            }
-        }'
-    fi
-fi
-
-# ---------------------------------------------------------
-# 4. Tree Representation
-# ---------------------------------------------------------
-if [[ "$SHOW_TREE" -eq 1 ]]; then
-    echo -e "\n${BOLD}${MAGENTA}[4] DEPENDENCY TREE${RESET}\n"
-    echo -e "${YELLOW}${TABLE_NAME}${RESET}"
-    
-    # Print Outbound
-    if [[ -n "$OUTBOUND_RES" ]]; then
-        echo -e "├── ${BOLD}References (Outbound)${RESET}"
-        TOTAL_OUT=$(echo "$OUTBOUND_RES" | wc -l)
-        CURR=0
-        echo "$OUTBOUND_RES" | while IFS=$'\t' read -r c_name col_name ref_tab ref_col upd_rule del_rule; do
-            ((CURR++))
-            if [[ $CURR -eq $TOTAL_OUT ]]; then
-                echo -e "│   └── ${BLUE}${c_name}${RESET}: ${col_name} -> ${YELLOW}${ref_tab}${RESET}(${ref_col})"
-            else
-                echo -e "│   ├── ${BLUE}${c_name}${RESET}: ${col_name} -> ${YELLOW}${ref_tab}${RESET}(${ref_col})"
-            fi
-        done
-    else
-         echo -e "├── ${BOLD}References (Outbound)${RESET} -> ${GREEN}None${RESET}"
+        candidate=$(command -v mysql 2>/dev/null || true)
     fi
 
-    # Print Inbound
-    if [[ -n "$INBOUND_RES" ]]; then
-        echo -e "└── ${BOLD}Referenced By (Inbound)${RESET}"
-        TOTAL_IN=$(echo "$INBOUND_RES" | wc -l)
-        CURR=0
-        echo "$INBOUND_RES" | while IFS=$'\t' read -r c_name src_tab src_col ref_col upd_rule del_rule; do
-            ((CURR++))
-            if [[ $CURR -eq $TOTAL_IN ]]; then
-                echo -e "    └── ${BLUE}${c_name}${RESET}: ${YELLOW}${src_tab}${RESET}(${src_col}) -> ${ref_col}"
-            else
-                echo -e "    ├── ${BLUE}${c_name}${RESET}: ${YELLOW}${src_tab}${RESET}(${src_col}) -> ${ref_col}"
-            fi
-        done
-    else
-         echo -e "└── ${BOLD}Referenced By (Inbound)${RESET} -> ${GREEN}None${RESET}"
-    fi
-fi
+    [[ -n "$candidate" && -x "$candidate" ]] || runtime_error 3 'Unable to resolve an executable MySQL client.'
+    MYSQL_BIN=$candidate
+}
 
-echo -e "\n${BOLD}${CYAN}====================================================================${RESET}\n"
+run_mysql_query() {
+    local query=$1
+
+    "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names --raw -e "$query"
+}
+
+sanitize_stderr() {
+    local stderr_file=$1
+    local message
+
+    message=$(LC_ALL=C tr '\r\n' '  ' < "$stderr_file" | LC_ALL=C tr -d '[:cntrl:]')
+    message=${message:0:240}
+    printf '%s' "$message"
+}
+
+connection_preflight() {
+    local stderr_file="$WORK_DIR/connection.stderr"
+    local result
+    local diagnostic
+    local query='SELECT /* fk-analyzer:connection */ VERSION(), @@innodb_buffer_pool_size;'
+
+    if ! result=$(run_mysql_query "$query" 2> "$stderr_file"); then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
+        runtime_error 3 "MySQL connection preflight failed: $diagnostic"
+    fi
+    [[ -n "$result" ]] || runtime_error 3 'MySQL connection preflight returned no data.'
+}
+
+target_preflight() {
+    local stderr_file="$WORK_DIR/target.stderr"
+    local result
+    local diagnostic
+    local schema_literal
+    local table_literal
+    local target_table
+    local target_engine
+    local extra
+    local query
+
+    schema_literal=$(sql_literal "$SCHEMA_NAME")
+    table_literal=$(sql_literal "$TABLE_NAME")
+    query="SELECT /* fk-analyzer:target */ TABLE_NAME, ENGINE
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = ${schema_literal}
+  AND TABLE_NAME = ${table_literal}
+  AND TABLE_TYPE = 0x42415345205441424C45;"
+
+    if ! result=$(run_mysql_query "$query" 2> "$stderr_file"); then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
+        runtime_error 3 "MySQL target preflight failed: $diagnostic"
+    fi
+    [[ -n "$result" && "$result" != *$'\n'* ]] || runtime_error 3 'Target table preflight did not find exactly one base table.'
+    IFS=$'\t' read -r target_table target_engine extra <<< "$result"
+    [[ -n "$target_table" && -n "$target_engine" && -z "$extra" ]] || runtime_error 3 'Target table preflight did not find exactly one base table.'
+    TARGET_ENGINE=$target_engine
+}
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        usage
+        return 0
+    fi
+
+    if ! parse_arguments "$@"; then
+        return 0
+    fi
+    validate_arguments
+    create_workspace
+    resolve_mysql_bin
+    connection_preflight
+    target_preflight
+
+    printf 'Target preflight succeeded: %s.%s (%s)\n' "$SCHEMA_NAME" "$TABLE_NAME" "$TARGET_ENGINE"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
