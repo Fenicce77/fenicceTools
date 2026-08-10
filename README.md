@@ -9,6 +9,7 @@ The repository contains both maintained tools and historical utilities. Review e
 | Area | Tool | Purpose |
 |---|---|---|
 | MySQL | [Cardinality analyzer](mysql/estimations/README.md) | Compare InnoDB estimates with exact counts when safe and report column cardinality and selectivity. |
+| MySQL | [Foreign key topology analyzer](mysql/analysis/README.md) | Read-only analysis of physical constraints and heuristic virtual foreign-key topology, with optional atomic CSV/TSV reports. |
 | MySQL | [Transaction and lock monitor](mysql/trx/mysql_trx_monitor.sh) | Inspect active transactions and lock waits, apply exact session filters, log snapshots, and explicitly terminate a selected connection. |
 | ProxySQL | [Python monitor](mysql/proxysql/python/README.md) | Interactive, install-free ProxySQL connection and backend monitor using MySQL login paths. |
 | ProxySQL | [Go monitor](mysql/proxysql/go/README.md) | Go implementation of the ProxySQL monitor with bounded resources and persistent clients. |
@@ -40,6 +41,7 @@ The repository contains both maintained tools and historical utilities. Review e
 Run maintained test suites from the repository root:
 
 ```bash
+bash mysql/analysis/tests/test_fk_analyzer.sh
 bash mysql/trx/tests/test_mysql_trx_monitor.sh
 bash mysql/estimations/tests/test_check_cardinality.sh
 bash mysql/estimations/tests/test_analyze_prefix_index.sh
