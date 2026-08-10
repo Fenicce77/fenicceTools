@@ -167,6 +167,7 @@ The DDL is intentionally excluded because it is multiline and does not belong in
 - `2`: command-line or input validation failed.
 - `3`: the client, connection, target preflight, or report publication failed globally.
 - `4`: an optional analysis section failed while other sections remained usable.
+- `129`: `SIGHUP` interrupted execution.
 - `130`: `SIGINT` or `SIGTERM` interrupted execution.
 
 Server diagnostics are reduced to one ANSI-free, length-bounded line. A failed optional view is rendered as degraded and does not erase successful sections. Temporary resources are removed on normal exit and signals.
