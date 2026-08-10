@@ -29,6 +29,14 @@ TARGET_ENGINE=""
 
 COLOR_BOLD=""
 COLOR_CYAN=""
+COLOR_GREEN=""
+COLOR_YELLOW=""
+COLOR_MAGENTA=""
+COLOR_RED=""
+COLOR_BLUE=""
+COLOR_BOLD_YELLOW=""
+COLOR_DIM_CYAN=""
+COLOR_DIM=""
 COLOR_RESET=""
 
 cli_error() {
@@ -44,9 +52,28 @@ runtime_error() {
 }
 
 setup_colors() {
+    COLOR_BOLD=""
+    COLOR_CYAN=""
+    COLOR_GREEN=""
+    COLOR_YELLOW=""
+    COLOR_MAGENTA=""
+    COLOR_RED=""
+    COLOR_BLUE=""
+    COLOR_BOLD_YELLOW=""
+    COLOR_DIM_CYAN=""
+    COLOR_DIM=""
+    COLOR_RESET=""
     if [[ "$NO_COLOR" == false && -t 1 && "${TERM:-}" != "dumb" ]]; then
         COLOR_BOLD=$'\033[1m'
         COLOR_CYAN=$'\033[0;36m'
+        COLOR_GREEN=$'\033[0;32m'
+        COLOR_YELLOW=$'\033[0;33m'
+        COLOR_MAGENTA=$'\033[0;35m'
+        COLOR_RED=$'\033[0;31m'
+        COLOR_BLUE=$'\033[0;34m'
+        COLOR_BOLD_YELLOW=$'\033[1;33m'
+        COLOR_DIM_CYAN=$'\033[2;36m'
+        COLOR_DIM=$'\033[2m'
         COLOR_RESET=$'\033[0m'
     fi
 }
@@ -284,6 +311,413 @@ validate_arguments() {
     elif [[ "$ALLOW_PRODUCTION" == true ]]; then
         cli_error '--allow-production is valid only with --environment production --cardinality exact.'
     fi
+}
+
+normalize_detected_terminal_width() {
+    local value=$1
+    local normalized
+
+    DETECTED_TERMINAL_WIDTH=""
+    [[ "$value" =~ ^[0-9]+$ && ${#value} -le 16 ]] || return 1
+    normalized=$(printf '%s' "$value" | sed 's/^0*//')
+    [[ -n "$normalized" ]] || normalized=0
+    if [[ ${#normalized} -gt 5 ]] || \
+       [[ ${#normalized} -eq 5 && "$normalized" != "10000" ]] || \
+       [[ ${#normalized} -lt 3 ]] || \
+       [[ ${#normalized} -eq 3 && "$normalized" < "120" ]]; then
+        return 1
+    fi
+    DETECTED_TERMINAL_WIDTH=$normalized
+}
+
+read_stty_columns() {
+    local size=""
+    local rows=""
+
+    DETECTED_COLUMNS=""
+    if [[ -t 0 ]]; then
+        size=$(stty size 2>/dev/null || true)
+    elif [[ -t 1 ]]; then
+        size=$(stty size 2>/dev/null </dev/tty || true)
+    fi
+    if [[ -n "$size" ]]; then
+        read -r rows DETECTED_COLUMNS <<EOF
+$size
+EOF
+    fi
+}
+
+detect_terminal_width() {
+    local cols=""
+
+    TERMINAL_WIDTH=120
+    if [[ "$TERMINAL_WIDTH_OPTION_SET" == true ]]; then
+        TERMINAL_WIDTH=$TERMINAL_WIDTH_OPTION
+        return 0
+    fi
+
+    cols=${COLUMNS:-}
+    if normalize_detected_terminal_width "$cols"; then
+        TERMINAL_WIDTH=$DETECTED_TERMINAL_WIDTH
+        return 0
+    fi
+
+    read_stty_columns
+    if normalize_detected_terminal_width "$DETECTED_COLUMNS"; then
+        TERMINAL_WIDTH=$DETECTED_TERMINAL_WIDTH
+        return 0
+    fi
+
+    if [[ -t 0 || -t 1 ]]; then
+        cols=$(tput cols 2>/dev/null || true)
+        if normalize_detected_terminal_width "$cols"; then
+            TERMINAL_WIDTH=$DETECTED_TERMINAL_WIDTH
+        fi
+    fi
+}
+
+classification_color() {
+    case "$1" in
+        PHYSICAL_FK) FIELD_COLOR=$COLOR_CYAN ;;
+        COMPLETE_VIRTUAL_FK) FIELD_COLOR=$COLOR_GREEN ;;
+        PARTIAL_VIRTUAL_FK) FIELD_COLOR=$COLOR_YELLOW ;;
+        AMBIGUOUS_VIRTUAL_FK) FIELD_COLOR=$COLOR_MAGENTA ;;
+        *) FIELD_COLOR=$COLOR_RED ;;
+    esac
+}
+
+relation_status() {
+    local classification=$1
+    local tags=$2
+
+    if [[ "$tags" == *ERROR* ]]; then
+        RELATION_STATUS=ERROR
+        STATUS_COLOR=$COLOR_RED
+    elif [[ "$classification" == PHYSICAL_FK || "$classification" == COMPLETE_VIRTUAL_FK ]]; then
+        if [[ -n "$tags" ]]; then
+            RELATION_STATUS=WARNING
+            STATUS_COLOR=$COLOR_YELLOW
+        else
+            RELATION_STATUS=OK
+            STATUS_COLOR=$COLOR_GREEN
+        fi
+    else
+        RELATION_STATUS=WARNING
+        STATUS_COLOR=$COLOR_YELLOW
+    fi
+}
+
+wrap_relation_fields() {
+    local source_value=$1
+    local target_value=$2
+    local details_value=$3
+    local source_width=$4
+    local target_width=$5
+    local details_width=$6
+
+    WRAPPED_RELATION_FIELDS=$(printf '%s\t%s\t%s\n' \
+        "$source_value" "$target_value" "$details_value" | LC_ALL=C awk -F '\t' \
+        -v source_width="$source_width" \
+        -v target_width="$target_width" \
+        -v details_width="$details_width" '
+        function clear(values, key) {
+            for (key in values) delete values[key]
+        }
+        function wrap(value, width, values, count, rest, cut, position, character) {
+            clear(values)
+            count = 0
+            rest = value
+            if (rest == "") {
+                values[++count] = ""
+                return count
+            }
+            while (length(rest) > width) {
+                cut = width
+                for (position = width; position > 1; position--) {
+                    character = substr(rest, position, 1)
+                    if (character == " " || character == "," || character == ";" ||
+                        character == "/" || character == "." || character == "_") {
+                        cut = position
+                        break
+                    }
+                }
+                values[++count] = substr(rest, 1, cut)
+                rest = substr(rest, cut + 1)
+            }
+            values[++count] = rest
+            return count
+        }
+        {
+            source_count = wrap($1, source_width, source_lines)
+            target_count = wrap($2, target_width, target_lines)
+            details_count = wrap($3, details_width, details_lines)
+            line_count = source_count
+            if (target_count > line_count) line_count = target_count
+            if (details_count > line_count) line_count = details_count
+            for (line = 1; line <= line_count; line++) {
+                printf "%s%c%s%c%s\n", source_lines[line], 28,
+                    target_lines[line], 28, details_lines[line]
+            }
+        }
+    ')
+}
+
+repeat_table_character() {
+    local count=$1
+    local character=$2
+
+    REPEATED_TABLE_CHARACTER=$(LC_ALL=C awk -v count="$count" -v character="$character" '
+        BEGIN { for (n = 0; n < count; n++) printf "%s", character }
+    ')
+}
+
+calculate_relation_widths() {
+    local dynamic_budget
+
+    DIRECTION_WIDTH=9
+    CLASSIFICATION_WIDTH=20
+    STATUS_WIDTH=7
+    # At the 120-column minimum, each wrap-capable field receives at least
+    # 23 columns. Wider terminals distribute additional columns evenly.
+    dynamic_budget=$((TERMINAL_WIDTH - DIRECTION_WIDTH - CLASSIFICATION_WIDTH - STATUS_WIDTH - 15))
+    SOURCE_WIDTH=$((dynamic_budget / 3))
+    TARGET_WIDTH=$((dynamic_budget / 3))
+    DETAILS_WIDTH=$((dynamic_budget - SOURCE_WIDTH - TARGET_WIDTH))
+}
+
+append_relation_detail() {
+    local value=$1
+
+    [[ -n "$value" ]] || return 0
+    if [[ -n "$RELATION_DETAILS" ]]; then
+        RELATION_DETAILS="$RELATION_DETAILS; $value"
+    else
+        RELATION_DETAILS=$value
+    fi
+}
+
+render_relation_line() {
+    local direction=$1
+    local classification=$2
+    local source=$3
+    local target=$4
+    local status=$5
+    local details=$6
+    local direction_color=$7
+    local classification_field_color=$8
+    local status_field_color=$9
+    local details_color=${10}
+
+    printf '%s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s\n' \
+        "$direction_color" "$DIRECTION_WIDTH" "$direction" "$COLOR_RESET" \
+        "$classification_field_color" "$CLASSIFICATION_WIDTH" "$classification" "$COLOR_RESET" \
+        "" "$SOURCE_WIDTH" "$source" "$COLOR_RESET" \
+        "" "$TARGET_WIDTH" "$target" "$COLOR_RESET" \
+        "$status_field_color" "$STATUS_WIDTH" "$status" "$COLOR_RESET" \
+        "$details_color" "$DETAILS_WIDTH" "$details" "$COLOR_RESET"
+}
+
+render_relation_tables() {
+    local relations_file=$1
+    local direction classification source_schema source_table source_columns
+    local target_schema target_table target_columns constraint_name supporting_index
+    local status_tags details source_value target_value line_source line_target line_details
+    local relation_field_separator=$'\034'
+    local separator_line
+    local continuation
+    local details_color
+
+    calculate_relation_widths
+    repeat_table_character "$DIRECTION_WIDTH" '-'
+    separator_line=$REPEATED_TABLE_CHARACTER
+    repeat_table_character "$CLASSIFICATION_WIDTH" '-'
+    separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
+    repeat_table_character "$SOURCE_WIDTH" '-'
+    separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
+    repeat_table_character "$TARGET_WIDTH" '-'
+    separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
+    repeat_table_character "$STATUS_WIDTH" '-'
+    separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
+    repeat_table_character "$DETAILS_WIDTH" '-'
+    separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
+
+    printf 'RELATION TOPOLOGY\n'
+    render_relation_line DIRECTION CLASSIFICATION SOURCE TARGET STATUS DETAILS \
+        "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD"
+    printf '%s\n' "$separator_line"
+
+    while IFS="$relation_field_separator" read -r direction classification \
+        source_schema source_table source_columns target_schema target_table target_columns \
+        constraint_name supporting_index status_tags details; do
+        [[ -n "$direction" ]] || continue
+        source_value="${source_schema}.${source_table}${source_columns}"
+        if [[ -n "$target_schema" || -n "$target_table" ]]; then
+            target_value="${target_schema}.${target_table}${target_columns}"
+        else
+            target_value=$target_columns
+        fi
+        RELATION_DETAILS=""
+        [[ -z "$constraint_name" ]] || append_relation_detail "constraint=$constraint_name"
+        [[ -z "$supporting_index" ]] || append_relation_detail "index=$supporting_index"
+        [[ -z "$status_tags" ]] || append_relation_detail "tags=$status_tags"
+        append_relation_detail "$details"
+
+        relation_status "$classification" "$status_tags"
+        classification_color "$classification"
+        details_color=""
+        if [[ "$status_tags" == *MISMATCH* || "$status_tags" == *MISSING_COMPONENTS* ||
+              "$status_tags" == *ERROR* ]]; then
+            details_color=$COLOR_RED
+        fi
+        wrap_relation_fields "$source_value" "$target_value" "$RELATION_DETAILS" \
+            "$SOURCE_WIDTH" "$TARGET_WIDTH" "$DETAILS_WIDTH"
+        continuation=false
+        while IFS="$relation_field_separator" read -r line_source line_target line_details; do
+            if [[ "$continuation" == false ]]; then
+                render_relation_line "$direction" "$classification" "$line_source" "$line_target" \
+                    "$RELATION_STATUS" "$line_details" "$COLOR_CYAN" "$FIELD_COLOR" \
+                    "$STATUS_COLOR" "$details_color"
+                continuation=true
+            else
+                render_relation_line "" "" "$line_source" "$line_target" "" "$line_details" \
+                    "" "" "" "$details_color"
+            fi
+        done <<EOF
+$WRAPPED_RELATION_FIELDS
+EOF
+    done < <(LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" \
+        '{ print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "$relations_file")
+    printf '\n'
+}
+
+render_tree_tags() {
+    local tags=$1
+    local tag
+    local tag_color
+    local old_ifs=$IFS
+
+    [[ -n "$tags" ]] || return 0
+    IFS=','
+    for tag in $tags; do
+        case "$tag" in
+            UNINDEXED) tag_color=$COLOR_YELLOW ;;
+            *) tag_color=$COLOR_RED ;;
+        esac
+        printf ' %s[%s]%s' "$tag_color" "$tag" "$COLOR_RESET"
+    done
+    IFS=$old_ifs
+}
+
+render_tree_relation() {
+    local connector=$1
+    local classification=$2
+    local source_schema=$3
+    local source_table=$4
+    local source_columns=$5
+    local target_schema=$6
+    local target_table=$7
+    local target_columns=$8
+    local constraint_name=$9
+    local supporting_index=${10}
+    local status_tags=${11}
+    local details=${12}
+
+    classification_color "$classification"
+    printf '%s%s%s ' "$COLOR_DIM_CYAN" "$connector" "$COLOR_RESET"
+    printf '%s%s%s ' "$FIELD_COLOR" "$classification" "$COLOR_RESET"
+    printf '%s.%s%s' "$source_schema" "$source_table" "$source_columns"
+    if [[ -n "$target_schema" || -n "$target_table" ]]; then
+        printf ' -> %s.%s%s' "$target_schema" "$target_table" "$target_columns"
+    fi
+    if [[ -n "$constraint_name" ]]; then
+        printf ' constraint=%s%s%s' "$COLOR_BLUE" "$constraint_name" "$COLOR_RESET"
+    fi
+    if [[ -n "$supporting_index" ]]; then
+        printf ' index=%s%s%s' "$COLOR_BLUE" "$supporting_index" "$COLOR_RESET"
+    fi
+    render_tree_tags "$status_tags"
+    if [[ -n "$details" ]]; then
+        printf ' %s' "$details"
+    fi
+    printf '\n'
+}
+
+render_tree_branch() {
+    local relations_file=$1
+    local group_number=$2
+    local branch_label=$3
+    local group_count=$4
+    local branch_is_last=$5
+    local relation_field_separator=$'\034'
+    local branch_connector child_indent child_connector
+    local current=0
+    local direction classification source_schema source_table source_columns
+    local target_schema target_table target_columns constraint_name supporting_index
+    local status_tags details
+
+    if [[ "$branch_is_last" == true ]]; then
+        branch_connector='└──'
+        child_indent='    '
+    else
+        branch_connector='├──'
+        child_indent='│   '
+    fi
+    printf '%s%s%s %s\n' "$COLOR_DIM_CYAN" "$branch_connector" "$COLOR_RESET" "$branch_label"
+
+    if [[ "$group_count" -eq 0 ]]; then
+        printf '%s%s└──%s %sNone%s\n' "$COLOR_DIM_CYAN" "$child_indent" \
+            "$COLOR_RESET" "$COLOR_DIM" "$COLOR_RESET"
+        return 0
+    fi
+
+    while IFS="$relation_field_separator" read -r direction classification \
+        source_schema source_table source_columns target_schema target_table target_columns \
+        constraint_name supporting_index status_tags details; do
+        current=$((current + 1))
+        if [[ "$current" -eq "$group_count" ]]; then
+            child_connector="${child_indent}└──"
+        else
+            child_connector="${child_indent}├──"
+        fi
+        render_tree_relation "$child_connector" "$classification" \
+            "$source_schema" "$source_table" "$source_columns" \
+            "$target_schema" "$target_table" "$target_columns" \
+            "$constraint_name" "$supporting_index" "$status_tags" "$details"
+    done < <(LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" -v group="$group_number" '
+        {
+            if ($1 == "OUTBOUND") row_group = ($2 == "PHYSICAL_FK" ? 1 : 2)
+            else row_group = ($2 == "PHYSICAL_FK" ? 3 : 4)
+            if (row_group == group) {
+                print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+            }
+        }
+    ' "$relations_file")
+}
+
+render_tree() {
+    local relations_file=$1
+    local counts
+    local outbound_physical outbound_virtual inbound_physical inbound_virtual
+
+    counts=$(LC_ALL=C awk -F '\t' '
+        {
+            if ($1 == "OUTBOUND") group = ($2 == "PHYSICAL_FK" ? 1 : 2)
+            else group = ($2 == "PHYSICAL_FK" ? 3 : 4)
+            count[group]++
+        }
+        END { printf "%d %d %d %d", count[1], count[2], count[3], count[4] }
+    ' "$relations_file")
+    read -r outbound_physical outbound_virtual inbound_physical inbound_virtual <<EOF
+$counts
+EOF
+
+    printf 'DEPENDENCY TREE\n'
+    printf '%s%s.%s%s\n' "$COLOR_BOLD_YELLOW" "$SCHEMA_NAME" "$TABLE_NAME" "$COLOR_RESET"
+    render_tree_branch "$relations_file" 1 'OUTBOUND PHYSICAL' "$outbound_physical" false
+    render_tree_branch "$relations_file" 2 'OUTBOUND VIRTUAL' "$outbound_virtual" false
+    render_tree_branch "$relations_file" 3 'INBOUND PHYSICAL' "$inbound_physical" false
+    render_tree_branch "$relations_file" 4 'INBOUND VIRTUAL' "$inbound_virtual" true
+    printf '\n'
 }
 
 sql_literal() {
@@ -954,6 +1388,12 @@ main() {
     build_virtual_relations
 
     printf 'Target preflight succeeded: %s.%s (%s)\n' "$SCHEMA_NAME" "$TABLE_NAME" "$TARGET_ENGINE"
+    detect_terminal_width
+    setup_colors
+    render_relation_tables "$WORK_DIR/relations.tsv"
+    if [[ "$SHOW_TREE" == true ]]; then
+        render_tree "$WORK_DIR/relations.tsv"
+    fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

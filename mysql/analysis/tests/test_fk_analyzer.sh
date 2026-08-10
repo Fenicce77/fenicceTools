@@ -8,6 +8,9 @@ FAKE_MYSQL="$SCRIPT_DIR/fake_mysql_fk.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fk-analyzer-test.XXXXXX")
 OUTPUT=""
 STATUS=0
+STRIPPED_OUTPUT=""
+FIXTURE_FILE="$TMP/presentation-relations.tsv"
+FIXTURE_RUNNER="$TMP/run-fk-presentation-fixture.sh"
 
 test_cleanup() {
     rm -rf "$TMP"
@@ -91,6 +94,235 @@ assert_no_modifying_sql() {
     if LC_ALL=C grep -Eiq '(^|[^[:alnum:]_])(INSERT|UPDATE|DELETE|ALTER|ANALYZE|KILL)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])SET[[:space:]]+GLOBAL([^[:alnum:]_]|$)' "$FAKE_MYSQL_FK_LOG"; then
         fail 'metadata query log contains a forbidden SQL keyword'
     fi
+}
+
+strip_ansi() {
+    STRIPPED_OUTPUT=$(printf '%s\n' "$1" | LC_ALL=C awk '
+        {
+            gsub(/\033\[[0-9;]*[a-zA-Z]/, "")
+            sub(/\r$/, "")
+            print
+        }
+    ')
+}
+
+assert_has_ansi() {
+    [[ "$1" == *$'\033['* ]] || fail 'expected ANSI color sequences'
+}
+
+write_presentation_fixture() {
+    printf '%s\n' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(tenant_identifier_component, extremely_long_order_identifier_component, regional_partition_identifier_component)\tsales\tcustomers_archive\t(tenant_identifier_component, customer_identifier_component, regional_partition_identifier_component)\tfk_orders_customer_archive_with_long_identifier\tidx_orders_customer_archive_covering_tuple\t\tON UPDATE RESTRICT; ON DELETE CASCADE' \
+        $'OUTBOUND\tCOMPLETE_VIRTUAL_FK\tsales\taudit_orders\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_audit_orders_complete_virtual_tuple\t\tComplete ordered composite tuple and compatible index prefix' \
+        $'OUTBOUND\tPARTIAL_VIRTUAL_FK\tsales\ttyped_orders\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_typed_orders_wrong_order\tMISSING_COMPONENTS,TYPE_MISMATCH,UNINDEXED,INDEX_ORDER_MISMATCH\tPartial composite relationship with all diagnostic tags visible' \
+        $'OUTBOUND\tAMBIGUOUS_VIRTUAL_FK\tsales\tledger_entries\t(country_code_identifier_component)\t\t\t()\t\tidx_ledger_country_code\t\tCandidate targets: sales.countries(code), sales.currencies(code)' \
+        $'INBOUND\tPHYSICAL_FK\tsales\tshipment_items_archive\t(tenant_identifier_component, order_identifier_component, regional_partition_identifier_component)\tsales\torders\t(tenant_identifier_component, order_identifier_component, regional_partition_identifier_component)\tfk_shipment_items_archive_orders\tidx_shipment_items_archive_orders_tuple\tUNINDEXED\tON UPDATE CASCADE; ON DELETE RESTRICT' \
+        $'INBOUND\tCOMPLETE_VIRTUAL_FK\tsales\torder_events_archive\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_order_events_archive_tuple\t\tComplete inbound virtual composite relationship' \
+        > "$FIXTURE_FILE"
+
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
+        'source "${FK_ANALYZER_SCRIPT:?}"' \
+        'resolve_mysql_bin() { :; }' \
+        'connection_preflight() { :; }' \
+        'target_preflight() { TARGET_ENGINE=InnoDB; }' \
+        'acquire_metadata() { :; }' \
+        'build_physical_relations() { cp "${FK_FIXTURE_FILE:?}" "$WORK_DIR/relations.tsv"; }' \
+        'build_virtual_relations() { :; }' \
+        'main "$@"' \
+        > "$FIXTURE_RUNNER"
+    chmod +x "$FIXTURE_RUNNER"
+}
+
+run_fixture_case() {
+    local name=$1
+    shift
+    : > "$FAKE_MYSQL_FK_LOG"
+    set +e
+    OUTPUT=$(FK_ANALYZER_SCRIPT="$SCRIPT" FK_FIXTURE_FILE="$FIXTURE_FILE" \
+        /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+    printf 'ok: %s\n' "$name"
+}
+
+run_fixture_tty() {
+    local name=$1 runner_command
+    shift
+    : > "$FAKE_MYSQL_FK_LOG"
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null env \
+                "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env TERM=xterm \
+                "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                /bin/bash "$FIXTURE_RUNNER" "$@"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+    printf 'ok: %s\n' "$name"
+}
+
+run_fixture_tty_width() {
+    local width=$1 name=$2 runner_command
+    shift 2
+    [[ "$width" =~ ^[0-9]+$ ]] || fail "pseudo-TTY width must contain digits only: [$width]"
+    : > "$FAKE_MYSQL_FK_LOG"
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null /bin/bash -c \
+                'stty cols "$1"; shift; unset COLUMNS; exec "$@"' \
+                width-runner "$width" env \
+                "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env TERM=xterm \
+                "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                /bin/bash "$FIXTURE_RUNNER" "$@"
+            runner_command="stty cols $width; unset COLUMNS; exec $runner_command"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+    printf 'ok: %s\n' "$name"
+}
+
+run_fixture_tty_width_with_redirected_stdin() {
+    local width=$1 name=$2 runner_command
+    shift 2
+    [[ "$width" =~ ^[0-9]+$ ]] || fail "pseudo-TTY width must contain digits only: [$width]"
+    : > "$FAKE_MYSQL_FK_LOG"
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null /bin/bash -c \
+                'stty cols "$1"; shift; unset COLUMNS; exec "$@" </dev/null' \
+                width-runner "$width" env \
+                "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "PATH=${STTY_TEST_PATH_PREFIX:-}$PATH" \
+                /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env TERM=xterm \
+                "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "PATH=${STTY_TEST_PATH_PREFIX:-}$PATH" \
+                /bin/bash "$FIXTURE_RUNNER" "$@"
+            runner_command="stty cols $width; unset COLUMNS; exec $runner_command </dev/null"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+    printf 'ok: %s\n' "$name"
+}
+
+fixture_arguments() {
+    FIXTURE_ARGUMENTS=(-l test -s sales -t orders --environment test)
+}
+
+extract_table() {
+    TABLE_OUTPUT=$(printf '%s\n' "$1" | LC_ALL=C awk '
+        /^RELATION TOPOLOGY$/ { active = 1 }
+        active && /^DEPENDENCY TREE$/ { exit }
+        active { print }
+    ')
+}
+
+extract_tree() {
+    TREE_OUTPUT=$(printf '%s\n' "$1" | LC_ALL=C awk '
+        /^DEPENDENCY TREE$/ { active = 1 }
+        active { print }
+    ')
+}
+
+assert_table_geometry() {
+    local output=$1 expected_width=$2
+
+    printf '%s\n' "$output" | LC_ALL=C awk -v width="$expected_width" '
+        /^DIRECTION[ ]*[|]/ { active = 1; seen = 1 }
+        active && NF == 0 { exit }
+        active {
+            separator_count = gsub(/[|]/, "|")
+            plus_count = gsub(/[+]/, "+")
+            if (separator_count == 5 || plus_count == 5) {
+                if (length($0) != width) {
+                    printf "line width %d, expected %d: [%s]\n", length($0), width, $0 > "/dev/stderr"
+                    failed = 1
+                }
+            }
+        }
+        END { exit(failed || !seen) }
+    ' || fail "table geometry does not use exactly $expected_width visible columns"
+}
+
+assert_continuations_and_values() {
+    local output=$1
+
+    printf '%s\n' "$output" | LC_ALL=C awk -F '[|]' '
+        function trim(value) {
+            sub(/^[ ]+/, "", value)
+            sub(/[ ]+$/, "", value)
+            return value
+        }
+        /^OUTBOUND[ ]*[|][ ]*PHYSICAL_FK/ { active = 1 }
+        active && $0 ~ /^[ ]*[|]/ {
+            direction = trim($1)
+            classification = trim($2)
+            status = trim($5)
+            if (direction != "" || classification != "" || status != "") failed = 1
+            continuation_count++
+        }
+        active && $0 !~ /^OUTBOUND[ ]*[|][ ]*PHYSICAL_FK/ && $0 !~ /^[ ]*[|]/ { active = 0 }
+        END { exit !(continuation_count > 0 && !failed) }
+    ' || fail 'continuation rows must blank direction, classification, and status'
+
+    reconstructed=$(printf '%s\n' "$output" | LC_ALL=C awk -F '[|]' '
+        function compact(value) {
+            gsub(/[ ]/, "", value)
+            return value
+        }
+        /^OUTBOUND[ ]*[|][ ]*PHYSICAL_FK/ { active = 1 }
+        active && ($0 ~ /^OUTBOUND[ ]*[|][ ]*PHYSICAL_FK/ || $0 ~ /^[ ]*[|]/) {
+            source = source compact($3)
+            target = target compact($4)
+            details = details compact($6)
+            next
+        }
+        active { exit }
+        END { print source "\t" target "\t" details }
+    ')
+    assert_contains "$reconstructed" 'tenant_identifier_component'
+    assert_contains "$reconstructed" 'extremely_long_order_identifier_component'
+    assert_contains "$reconstructed" 'regional_partition_identifier_component'
+    assert_contains "$reconstructed" 'customer_identifier_component'
+    assert_contains "$reconstructed" 'fk_orders_customer_archive_with_long_identifier'
+    assert_contains "$reconstructed" 'idx_orders_customer_archive_covering_tuple'
 }
 
 run_case() {
@@ -459,16 +691,148 @@ run_virtual_tests() {
     printf 'PASS: fk_analyzer virtual relations\n'
 }
 
+run_presentation_tests() {
+    local width colored_table no_color_table fixture_snapshot fake_stty
+
+    write_presentation_fixture
+    fixture_arguments
+
+    for width in 120 160 220; do
+        run_fixture_case "presentation_width_$width" "${FIXTURE_ARGUMENTS[@]}" \
+            --terminal-width "$width" --no-color
+        assert_status 0
+        strip_ansi "$OUTPUT"
+        extract_table "$STRIPPED_OUTPUT"
+        assert_table_geometry "$TABLE_OUTPUT" "$width"
+        assert_continuations_and_values "$TABLE_OUTPUT"
+    done
+
+    COLUMNS=220 run_fixture_case presentation_explicit_precedence \
+        "${FIXTURE_ARGUMENTS[@]}" --terminal-width 160 --no-color
+    assert_status 0
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    assert_table_geometry "$TABLE_OUTPUT" 160
+
+    COLUMNS=160 run_fixture_case presentation_columns "${FIXTURE_ARGUMENTS[@]}" --no-color
+    assert_status 0
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    assert_table_geometry "$TABLE_OUTPUT" 160
+
+    COLUMNS=invalid run_fixture_case presentation_invalid_columns_fallback \
+        "${FIXTURE_ARGUMENTS[@]}" --no-color
+    assert_status 0
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    assert_table_geometry "$TABLE_OUTPUT" 120
+
+    run_fixture_tty_width 180 presentation_active_stty "${FIXTURE_ARGUMENTS[@]}" --no-color
+    assert_status 0
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    assert_table_geometry "$TABLE_OUTPUT" 180
+
+    fake_stty="$TMP/stty"
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -t 0 ]] || exit 1' 'printf "24 180\\n"' > "$fake_stty"
+    chmod +x "$fake_stty"
+    STTY_TEST_PATH_PREFIX="$TMP:"
+    run_fixture_tty_width_with_redirected_stdin 180 presentation_redirected_stdin \
+        "${FIXTURE_ARGUMENTS[@]}" --no-color
+    unset STTY_TEST_PATH_PREFIX
+    assert_status 0
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    assert_table_geometry "$TABLE_OUTPUT" 180
+
+    run_fixture_tty_width 160 presentation_colored "${FIXTURE_ARGUMENTS[@]}"
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    colored_table=$TABLE_OUTPUT
+
+    run_fixture_tty_width 160 presentation_no_color "${FIXTURE_ARGUMENTS[@]}" --no-color
+    assert_status 0
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    no_color_table=$TABLE_OUTPUT
+    assert_equals "$colored_table" "$no_color_table"
+
+    fixture_snapshot="$TMP/presentation-relations.snapshot.tsv"
+    cp "$FIXTURE_FILE" "$fixture_snapshot"
+    (
+        # shellcheck source=/dev/null
+        source "$SCRIPT"
+        TERMINAL_WIDTH_OPTION=120
+        TERMINAL_WIDTH_OPTION_SET=true
+        NO_COLOR=true
+        detect_terminal_width
+        render_relation_tables "$FIXTURE_FILE" >/dev/null
+    )
+    cmp -s "$fixture_snapshot" "$FIXTURE_FILE" || fail 'presentation modified the normalized relation stream'
+
+    printf 'PASS: fk_analyzer terminal presentation\n'
+}
+
+run_tree_tests() {
+    local colored_tree no_color_tree branch_order
+
+    write_presentation_fixture
+    fixture_arguments
+
+    run_fixture_case tree_plain "${FIXTURE_ARGUMENTS[@]}" --tree --terminal-width 160 --no-color
+    assert_status 0
+    extract_tree "$OUTPUT"
+    no_color_tree=$TREE_OUTPUT
+    branch_order=$(printf '%s\n' "$no_color_tree" | LC_ALL=C awk '
+        /OUTBOUND PHYSICAL$/ { print "OUTBOUND PHYSICAL" }
+        /OUTBOUND VIRTUAL$/ { print "OUTBOUND VIRTUAL" }
+        /INBOUND PHYSICAL$/ { print "INBOUND PHYSICAL" }
+        /INBOUND VIRTUAL$/ { print "INBOUND VIRTUAL" }
+    ')
+    assert_equals "$branch_order" $'OUTBOUND PHYSICAL\nOUTBOUND VIRTUAL\nINBOUND PHYSICAL\nINBOUND VIRTUAL'
+    assert_contains "$no_color_tree" '(tenant_identifier_component, extremely_long_order_identifier_component, regional_partition_identifier_component)'
+    assert_contains "$no_color_tree" '(tenant_identifier, order_identifier, regional_partition_identifier)'
+    assert_contains "$no_color_tree" '[MISSING_COMPONENTS]'
+    assert_contains "$no_color_tree" '[TYPE_MISMATCH]'
+    assert_contains "$no_color_tree" '[UNINDEXED]'
+    assert_contains "$no_color_tree" '[INDEX_ORDER_MISMATCH]'
+    assert_contains "$no_color_tree" 'Candidate targets: sales.countries(code), sales.currencies(code)'
+
+    run_fixture_tty_width 160 tree_colored "${FIXTURE_ARGUMENTS[@]}" --tree
+    assert_status 0
+    assert_contains "$OUTPUT" $'\033[1;33msales.orders\033[0m'
+    assert_contains "$OUTPUT" $'\033[2;36m├──\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;36mPHYSICAL_FK\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;32mCOMPLETE_VIRTUAL_FK\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;33mPARTIAL_VIRTUAL_FK\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;35mAMBIGUOUS_VIRTUAL_FK\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;31m[TYPE_MISMATCH]\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;34mfk_orders_customer_archive_with_long_identifier\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;34midx_orders_customer_archive_covering_tuple\033[0m'
+    strip_ansi "$OUTPUT"
+    extract_tree "$STRIPPED_OUTPUT"
+    colored_tree=$TREE_OUTPUT
+    assert_equals "$colored_tree" "$no_color_tree"
+
+    printf 'PASS: fk_analyzer semantic tree\n'
+}
+
 if [[ $# -eq 0 ]]; then
     run_cli_tests
     run_physical_tests
     run_virtual_tests
+    run_presentation_tests
+    run_tree_tests
 else
     for test_group in "$@"; do
         case "$test_group" in
             cli) run_cli_tests ;;
             physical) run_physical_tests ;;
             virtual) run_virtual_tests ;;
+            presentation) run_presentation_tests ;;
+            tree) run_tree_tests ;;
             *) fail "unknown test group: $test_group" ;;
         esac
     done
