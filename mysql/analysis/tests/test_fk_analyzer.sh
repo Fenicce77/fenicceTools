@@ -91,6 +91,13 @@ assert_status 2
 run_case width_small -l test -s sales -t orders --environment test --terminal-width 119
 assert_status 2
 
+run_case width_empty_equals -l test -s sales -t orders --environment test \
+    --terminal-width= --mysql-bin "$FAKE_MYSQL"
+assert_status 2
+run_case width_empty_space -l test -s sales -t orders --environment test \
+    --terminal-width "" --mysql-bin "$FAKE_MYSQL"
+assert_status 2
+
 run_case missing_client -l test -s sales -t orders --environment test \
     --mysql-bin "$TMP/missing-mysql"
 assert_status 3

@@ -10,6 +10,7 @@ ALLOW_PRODUCTION=false
 OUTPUT_FILE=""
 OUTPUT_FORMAT=""
 TERMINAL_WIDTH_OPTION=""
+TERMINAL_WIDTH_OPTION_SET=false
 NO_COLOR=false
 WORK_DIR=""
 EXPORT_TEMP=""
@@ -182,10 +183,12 @@ parse_arguments() {
             --terminal-width)
                 [[ $# -ge 2 ]] || cli_error "$1 requires a value."
                 TERMINAL_WIDTH_OPTION=$2
+                TERMINAL_WIDTH_OPTION_SET=true
                 shift 2
                 ;;
             --terminal-width=*)
                 TERMINAL_WIDTH_OPTION=${1#--terminal-width=}
+                TERMINAL_WIDTH_OPTION_SET=true
                 shift
                 ;;
             --mysql-bin)
@@ -266,12 +269,13 @@ validate_arguments() {
 
     [[ "$OUTPUT_FILE_SET" == false || -n "$OUTPUT_FILE" ]] || cli_error '--output-file must not be empty.'
     [[ "$OUTPUT_FORMAT_SET" == false || -n "$OUTPUT_FORMAT" ]] || cli_error '--format must not be empty.'
+    [[ "$TERMINAL_WIDTH_OPTION_SET" == false || -n "$TERMINAL_WIDTH_OPTION" ]] || cli_error '--terminal-width must not be empty.'
     [[ "$MYSQL_BIN_OPTION_SET" == false || -n "$MYSQL_BIN_OPTION" ]] || cli_error '--mysql-bin must not be empty.'
 
     validate_identifier "$SCHEMA_NAME" '--schema'
     validate_identifier "$TABLE_NAME" '--table'
 
-    if [[ -n "$TERMINAL_WIDTH_OPTION" ]]; then
+    if [[ "$TERMINAL_WIDTH_OPTION_SET" == true ]]; then
         validate_terminal_width "$TERMINAL_WIDTH_OPTION"
     fi
 
