@@ -304,6 +304,7 @@ validate_arguments() {
 
     if [[ "$TERMINAL_WIDTH_OPTION_SET" == true ]]; then
         validate_terminal_width "$TERMINAL_WIDTH_OPTION"
+        TERMINAL_WIDTH_OPTION=$TERMINAL_WIDTH
     fi
 
     if [[ "$ENVIRONMENT" == production && "$CARDINALITY_MODE" == exact ]]; then

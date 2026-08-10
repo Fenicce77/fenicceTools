@@ -135,6 +135,46 @@ write_presentation_fixture() {
     chmod +x "$FIXTURE_RUNNER"
 }
 
+write_tree_golden_fixture() {
+    printf '%s\n' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(first_id)\tsales\tfirst_parent\t(id)\tfk_orders_first\tidx_orders_first\t\tON UPDATE RESTRICT; ON DELETE CASCADE' \
+        $'INBOUND\tCOMPLETE_VIRTUAL_FK\tsales\taudit_orders\t(orders_id)\tsales\torders\t(id)\t\tidx_audit_orders\t\t' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(second_id)\tsales\tsecond_parent\t(id)\tfk_orders_second\tidx_orders_second\t\t' \
+        $'OUTBOUND\tPARTIAL_VIRTUAL_FK\tsales\torders\t(third_id)\tsales\tthird_parent\t(id)\t\tidx_orders_third\tTYPE_MISMATCH\tType differs' \
+        > "$FIXTURE_FILE"
+}
+
+write_terminal_probe_fixtures() {
+    PROBE_BIN="$TMP/terminal-probe-bin"
+    TERMINAL_PROBE_LOG="$TMP/terminal-probe.log"
+    mkdir -p "$PROBE_BIN"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
+        'if [[ -t 0 ]]; then input=tty; else input=redirected; fi' \
+        'printf "stty:%s\\n" "$input" >> "${TERMINAL_PROBE_LOG:?}"' \
+        '[[ "${1:-}" == size ]] || exit 64' \
+        'printf "%s\\n" "${FAKE_STTY_RESULT:?}"' \
+        > "$PROBE_BIN/stty"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
+        'printf "tput:%s\\n" "${1:-}" >> "${TERMINAL_PROBE_LOG:?}"' \
+        '[[ "${1:-}" == cols ]] || exit 64' \
+        'printf "%s\\n" "${FAKE_TPUT_RESULT:?}"' \
+        > "$PROBE_BIN/tput"
+    chmod +x "$PROBE_BIN/stty" "$PROBE_BIN/tput"
+    export PROBE_BIN TERMINAL_PROBE_LOG
+}
+
+assert_terminal_probe_log() {
+    local expected=$1
+    local actual=""
+
+    [[ -f "$TERMINAL_PROBE_LOG" ]] && actual=$(<"$TERMINAL_PROBE_LOG")
+    assert_equals "$actual" "$expected"
+}
+
 run_fixture_case() {
     local name=$1
     shift
@@ -188,11 +228,13 @@ run_fixture_tty_width() {
                 'stty cols "$1"; shift; unset COLUMNS; exec "$@"' \
                 width-runner "$width" env \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
             ;;
         Linux)
             printf -v runner_command '%q ' env TERM=xterm \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@"
             runner_command="stty cols $width; unset COLUMNS; exec $runner_command"
             OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
@@ -220,13 +262,13 @@ run_fixture_tty_width_with_redirected_stdin() {
                 'stty cols "$1"; shift; unset COLUMNS; exec "$@" </dev/null' \
                 width-runner "$width" env \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
-                "PATH=${STTY_TEST_PATH_PREFIX:-}$PATH" \
+                "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
             ;;
         Linux)
             printf -v runner_command '%q ' env TERM=xterm \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
-                "PATH=${STTY_TEST_PATH_PREFIX:-}$PATH" \
+                "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@"
             runner_command="stty cols $width; unset COLUMNS; exec $runner_command </dev/null"
             OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
@@ -692,7 +734,8 @@ run_virtual_tests() {
 }
 
 run_presentation_tests() {
-    local width colored_table no_color_table fixture_snapshot fake_stty
+    local width width_case width_input width_expected
+    local colored_table no_color_table fixture_snapshot
 
     write_presentation_fixture
     fixture_arguments
@@ -705,6 +748,17 @@ run_presentation_tests() {
         extract_table "$STRIPPED_OUTPUT"
         assert_table_geometry "$TABLE_OUTPUT" "$width"
         assert_continuations_and_values "$TABLE_OUTPUT"
+    done
+
+    for width_case in '0120:120' '0190:190' '010000:10000'; do
+        width_input=${width_case%%:*}
+        width_expected=${width_case#*:}
+        run_fixture_case "presentation_decimal_width_$width_input" \
+            "${FIXTURE_ARGUMENTS[@]}" --terminal-width "$width_input" --no-color
+        assert_status 0
+        strip_ansi "$OUTPUT"
+        extract_table "$STRIPPED_OUTPUT"
+        assert_table_geometry "$TABLE_OUTPUT" "$width_expected"
     done
 
     COLUMNS=220 run_fixture_case presentation_explicit_precedence \
@@ -727,23 +781,43 @@ run_presentation_tests() {
     extract_table "$STRIPPED_OUTPUT"
     assert_table_geometry "$TABLE_OUTPUT" 120
 
+    write_terminal_probe_fixtures
+    : > "$TERMINAL_PROBE_LOG"
+    FAKE_STTY_RESULT='24 171'
+    FAKE_TPUT_RESULT=163
+    PROBE_TEST_PATH_PREFIX="$PROBE_BIN:"
+    export FAKE_STTY_RESULT FAKE_TPUT_RESULT PROBE_TEST_PATH_PREFIX
     run_fixture_tty_width 180 presentation_active_stty "${FIXTURE_ARGUMENTS[@]}" --no-color
     assert_status 0
     strip_ansi "$OUTPUT"
     extract_table "$STRIPPED_OUTPUT"
-    assert_table_geometry "$TABLE_OUTPUT" 180
+    assert_table_geometry "$TABLE_OUTPUT" 171
+    assert_terminal_probe_log 'stty:tty'
 
-    fake_stty="$TMP/stty"
-    printf '%s\n' '#!/usr/bin/env bash' '[[ -t 0 ]] || exit 1' 'printf "24 180\\n"' > "$fake_stty"
-    chmod +x "$fake_stty"
-    STTY_TEST_PATH_PREFIX="$TMP:"
-    run_fixture_tty_width_with_redirected_stdin 180 presentation_redirected_stdin \
+    : > "$TERMINAL_PROBE_LOG"
+    FAKE_STTY_RESULT='24 invalid'
+    FAKE_TPUT_RESULT=163
+    export FAKE_STTY_RESULT FAKE_TPUT_RESULT
+    run_fixture_tty_width 180 presentation_invalid_stty_uses_tput \
         "${FIXTURE_ARGUMENTS[@]}" --no-color
-    unset STTY_TEST_PATH_PREFIX
     assert_status 0
     strip_ansi "$OUTPUT"
     extract_table "$STRIPPED_OUTPUT"
-    assert_table_geometry "$TABLE_OUTPUT" 180
+    assert_table_geometry "$TABLE_OUTPUT" 163
+    assert_terminal_probe_log $'stty:tty\ntput:cols'
+
+    : > "$TERMINAL_PROBE_LOG"
+    FAKE_STTY_RESULT='24 173'
+    FAKE_TPUT_RESULT=163
+    export FAKE_STTY_RESULT FAKE_TPUT_RESULT
+    run_fixture_tty_width_with_redirected_stdin 180 presentation_redirected_stdin \
+        "${FIXTURE_ARGUMENTS[@]}" --no-color
+    assert_status 0
+    strip_ansi "$OUTPUT"
+    extract_table "$STRIPPED_OUTPUT"
+    assert_table_geometry "$TABLE_OUTPUT" 173
+    assert_terminal_probe_log 'stty:tty'
+    unset FAKE_STTY_RESULT FAKE_TPUT_RESULT PROBE_TEST_PATH_PREFIX
 
     run_fixture_tty_width 160 presentation_colored "${FIXTURE_ARGUMENTS[@]}"
     assert_status 0
@@ -776,7 +850,7 @@ run_presentation_tests() {
 }
 
 run_tree_tests() {
-    local colored_tree no_color_tree branch_order
+    local colored_tree no_color_tree branch_order golden_tree
 
     write_presentation_fixture
     fixture_arguments
@@ -815,6 +889,14 @@ run_tree_tests() {
     extract_tree "$STRIPPED_OUTPUT"
     colored_tree=$TREE_OUTPUT
     assert_equals "$colored_tree" "$no_color_tree"
+
+    write_tree_golden_fixture
+    run_fixture_case tree_golden_connectors "${FIXTURE_ARGUMENTS[@]}" \
+        --tree --terminal-width 160 --no-color
+    assert_status 0
+    extract_tree "$OUTPUT"
+    golden_tree=$'DEPENDENCY TREE\nsales.orders\n├── OUTBOUND PHYSICAL\n│   ├── PHYSICAL_FK sales.orders(first_id) -> sales.first_parent(id) constraint=fk_orders_first index=idx_orders_first ON UPDATE RESTRICT; ON DELETE CASCADE\n│   └── PHYSICAL_FK sales.orders(second_id) -> sales.second_parent(id) constraint=fk_orders_second index=idx_orders_second\n├── OUTBOUND VIRTUAL\n│   └── PARTIAL_VIRTUAL_FK sales.orders(third_id) -> sales.third_parent(id) index=idx_orders_third [TYPE_MISMATCH] Type differs\n├── INBOUND PHYSICAL\n│   └── None\n└── INBOUND VIRTUAL\n    └── COMPLETE_VIRTUAL_FK sales.audit_orders(orders_id) -> sales.orders(id) index=idx_audit_orders'
+    assert_equals "$TREE_OUTPUT" "$golden_tree"
 
     printf 'PASS: fk_analyzer semantic tree\n'
 }
