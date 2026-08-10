@@ -15,6 +15,11 @@ NO_COLOR=false
 WORK_DIR=""
 EXPORT_TEMP=""
 FINAL_STATUS=0
+REPORT_ELIGIBLE=true
+PHYSICAL_AVAILABLE=true
+VIRTUAL_METADATA_AVAILABLE=true
+STATS_AVAILABLE=true
+EXACT_AVAILABLE=false
 
 LOGIN_PATH=""
 SCHEMA_NAME=""
@@ -736,6 +741,9 @@ quote_identifier() {
 cleanup() {
     local workspace_prefix="${TMPDIR:-/tmp}/fk-analyzer."
 
+    if [[ -n "${EXPORT_TEMP:-}" && -f "$EXPORT_TEMP" ]]; then
+        rm -f -- "$EXPORT_TEMP"
+    fi
     case "${WORK_DIR:-}" in
         "${workspace_prefix}"*)
             [[ -d "$WORK_DIR" ]] && rm -rf -- "$WORK_DIR"
@@ -827,18 +835,52 @@ WHERE TABLE_SCHEMA = ${schema_literal}
     TARGET_ENGINE=$target_engine
 }
 
-run_metadata_query() {
+mark_degraded() {
+    local message=$1
+
+    printf 'DEGRADED: %s\n' "$message" >&2
+    if [[ "$FINAL_STATUS" -eq 0 ]]; then
+        FINAL_STATUS=4
+    fi
+    REPORT_ELIGIBLE=false
+}
+
+run_optional_query() {
     local label=$1
     local query=$2
     local output_file=$3
     local stderr_file="$WORK_DIR/${label}.stderr"
     local diagnostic
 
-    if ! run_mysql_query "$query" > "$output_file" 2> "$stderr_file"; then
+    if run_mysql_query "$query" > "$output_file" 2> "$stderr_file"; then
+        return 0
+    fi
+
+    diagnostic=$(sanitize_stderr "$stderr_file")
+    [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
+    : > "$output_file"
+    mark_degraded "MySQL optional query (${label}) failed: $diagnostic"
+    return 1
+}
+
+acquire_ddl() {
+    local stderr_file="$WORK_DIR/ddl.stderr"
+    local diagnostic
+    local quoted_schema
+    local quoted_table
+    local query
+
+    quoted_schema=$(quote_identifier "$SCHEMA_NAME")
+    quoted_table=$(quote_identifier "$TABLE_NAME")
+    query="SHOW /* fk-analyzer:ddl */ CREATE TABLE ${quoted_schema}.${quoted_table};"
+
+    if ! run_mysql_query "$query" > "$WORK_DIR/ddl.tsv" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
-        runtime_error 3 "MySQL metadata query (${label}) failed: $diagnostic"
+        runtime_error 3 "MySQL DDL query failed: $diagnostic"
     fi
+    LC_ALL=C awk -F '\t' 'NR == 1 && NF >= 2 { found = 1 } END { exit !found }' \
+        "$WORK_DIR/ddl.tsv" || runtime_error 3 'MySQL DDL query returned no usable definition.'
 }
 
 acquire_metadata() {
@@ -854,7 +896,9 @@ acquire_metadata() {
 FROM information_schema.COLUMNS
 WHERE TABLE_SCHEMA = ${schema_literal}
 ORDER BY TABLE_NAME, ORDINAL_POSITION;"
-    run_metadata_query columns "$query" "$WORK_DIR/columns.tsv"
+    if ! run_optional_query columns "$query" "$WORK_DIR/columns.tsv"; then
+        VIRTUAL_METADATA_AVAILABLE=false
+    fi
 
     query="SELECT /* fk-analyzer:pks */ kcu.CONSTRAINT_SCHEMA, kcu.TABLE_NAME,
        kcu.COLUMN_NAME, kcu.ORDINAL_POSITION
@@ -866,7 +910,9 @@ JOIN information_schema.TABLE_CONSTRAINTS AS tc
 WHERE kcu.CONSTRAINT_SCHEMA = ${schema_literal}
   AND tc.CONSTRAINT_TYPE = 0x5052494D415259204B4559
 ORDER BY kcu.TABLE_NAME, kcu.ORDINAL_POSITION;"
-    run_metadata_query pks "$query" "$WORK_DIR/pks.tsv"
+    if ! run_optional_query pks "$query" "$WORK_DIR/pks.tsv"; then
+        VIRTUAL_METADATA_AVAILABLE=false
+    fi
 
     query="SELECT /* fk-analyzer:physical */ kcu.CONSTRAINT_NAME, kcu.CONSTRAINT_SCHEMA,
        kcu.TABLE_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_SCHEMA,
@@ -883,25 +929,48 @@ WHERE kcu.CONSTRAINT_SCHEMA = ${schema_literal}
        OR (kcu.REFERENCED_TABLE_SCHEMA = ${schema_literal}
            AND kcu.REFERENCED_TABLE_NAME = ${table_literal}))
 ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;"
-    run_metadata_query physical "$query" "$WORK_DIR/physical-components.tsv"
+    if ! run_optional_query physical "$query" "$WORK_DIR/physical-components.tsv"; then
+        PHYSICAL_AVAILABLE=false
+    fi
 
     query="SELECT /* fk-analyzer:indexes */ TABLE_SCHEMA, TABLE_NAME, INDEX_NAME,
        NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, CARDINALITY
 FROM information_schema.STATISTICS
 WHERE TABLE_SCHEMA = ${schema_literal}
 ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;"
-    run_metadata_query indexes "$query" "$WORK_DIR/indexes.tsv"
+    run_optional_query indexes "$query" "$WORK_DIR/indexes.tsv" || true
 
-    query="SELECT /* fk-analyzer:stats */ TABLE_ROWS
+    query="SELECT /* fk-analyzer:stats */ COALESCE(TABLE_ROWS, 0)
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = ${schema_literal}
   AND TABLE_NAME = ${table_literal};"
-    run_metadata_query stats "$query" "$WORK_DIR/stats.tsv"
+    if ! run_optional_query stats "$query" "$WORK_DIR/stats.tsv"; then
+        STATS_AVAILABLE=false
+    fi
+}
+
+acquire_exact_cardinality() {
+    local quoted_schema
+    local quoted_table
+    local query
+
+    [[ "$CARDINALITY_MODE" == exact ]] || return 0
+    quoted_schema=$(quote_identifier "$SCHEMA_NAME")
+    quoted_table=$(quote_identifier "$TABLE_NAME")
+    query="SELECT /* fk-analyzer:exact */ COUNT(*) FROM ${quoted_schema}.${quoted_table};"
+    if run_optional_query exact "$query" "$WORK_DIR/exact.tsv"; then
+        EXACT_AVAILABLE=true
+    fi
 }
 
 build_physical_relations() {
     local physical_file="$WORK_DIR/physical-components.tsv"
     local indexes_file="$WORK_DIR/indexes.tsv"
+
+    if [[ "$PHYSICAL_AVAILABLE" == false ]]; then
+        : > "$WORK_DIR/relations.tsv"
+        return 0
+    fi
 
     awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" \
         -v selected_schema="$SCHEMA_NAME" -v selected_table="$TABLE_NAME" '
@@ -992,7 +1061,7 @@ build_virtual_relations() {
     local virtual_file="$WORK_DIR/virtual-relations.tsv"
     local combined_file="$WORK_DIR/combined-relations.tsv"
 
-    [[ "$PHYSICAL_ONLY" == false ]] || return 0
+    [[ "$PHYSICAL_ONLY" == false && "$VIRTUAL_METADATA_AVAILABLE" == true ]] || return 0
 
     LC_ALL=C awk -F '\t' -v OFS='\t' \
         -v columns_file="$columns_file" \
@@ -1370,6 +1439,135 @@ build_virtual_relations() {
     mv "$combined_file" "$relations_file"
 }
 
+render_ddl() {
+    printf 'TABLE DDL\n'
+    LC_ALL=C cut -f2- "$WORK_DIR/ddl.tsv"
+    printf '\n'
+}
+
+read_cardinality_value() {
+    local file=$1
+    local label=$2
+    local value=""
+
+    [[ -f "$file" ]] && value=$(<"$file")
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        mark_degraded "$label returned an invalid non-negative integer."
+        CARDINALITY_VALUE=""
+        return 1
+    fi
+    CARDINALITY_VALUE=$value
+}
+
+render_cardinality() {
+    local estimated=""
+    local exact=""
+    local comparison
+    local absolute_difference
+    local percentage_drift
+
+    printf 'CARDINALITY\n'
+    if [[ "$STATS_AVAILABLE" == true ]] && \
+       read_cardinality_value "$WORK_DIR/stats.tsv" 'Metadata cardinality'; then
+        estimated=$CARDINALITY_VALUE
+        printf 'Estimated rows: %s\n' "$estimated"
+    else
+        STATS_AVAILABLE=false
+        printf 'Estimated rows: unavailable\n'
+    fi
+
+    if [[ "$CARDINALITY_MODE" == exact ]]; then
+        if [[ "$EXACT_AVAILABLE" == true ]] && \
+           read_cardinality_value "$WORK_DIR/exact.tsv" 'Exact cardinality'; then
+            exact=$CARDINALITY_VALUE
+            printf 'Exact rows: %s\n' "$exact"
+        else
+            EXACT_AVAILABLE=false
+            printf 'Exact rows: unavailable\n'
+        fi
+
+        if [[ -n "$estimated" && -n "$exact" ]]; then
+            comparison=$(LC_ALL=C awk -v estimated="$estimated" -v exact="$exact" '
+                BEGIN {
+                    difference = exact - estimated
+                    if (difference < 0) difference = -difference
+                    if (exact == 0) {
+                        percentage = (estimated == 0 ? 0 : 100)
+                    } else {
+                        percentage = 100 * difference / exact
+                    }
+                    printf "%.0f\t%.2f", difference, percentage
+                }
+            ')
+            IFS=$'\t' read -r absolute_difference percentage_drift <<EOF
+$comparison
+EOF
+            printf 'Absolute difference: %s\n' "$absolute_difference"
+            printf 'Percentage drift: %s%%\n' "$percentage_drift"
+        fi
+    fi
+    printf '\n'
+}
+
+resolve_output_format() {
+    if [[ -n "$OUTPUT_FORMAT" ]]; then
+        return 0
+    fi
+    case "$OUTPUT_FILE" in
+        *.tsv|*.TSV) OUTPUT_FORMAT=tsv ;;
+        *) OUTPUT_FORMAT=csv ;;
+    esac
+}
+
+publish_report() {
+    local output_directory
+
+    [[ -n "$OUTPUT_FILE" && "$REPORT_ELIGIBLE" == true ]] || return 0
+    resolve_output_format
+    output_directory=$(dirname "$OUTPUT_FILE")
+    EXPORT_TEMP=$(mktemp "$output_directory/.fk-analyzer.XXXXXX") \
+        || runtime_error 3 'Unable to create a temporary report.'
+
+    case "$OUTPUT_FORMAT" in
+        csv)
+            if ! {
+                printf '%s\n' 'Direction,Classification,Source_Schema,Source_Table,Source_Columns,Target_Schema,Target_Table,Target_Columns,Constraint_Name,Supporting_Index,Status_Tags,Details'
+                LC_ALL=C awk -F '\t' -v report_conversion=csv '
+                    function quote_csv(value) {
+                        gsub(/"/, "\"\"", value)
+                        return "\"" value "\""
+                    }
+                    NF != 12 { exit 1 }
+                    {
+                        for (field = 1; field <= 12; field++) {
+                            printf "%s%s", (field == 1 ? "" : ","), quote_csv($field)
+                        }
+                        printf "\n"
+                    }
+                ' "$WORK_DIR/relations.tsv"
+            } > "$EXPORT_TEMP"; then
+                runtime_error 3 'Unable to convert the report to CSV.'
+            fi
+            ;;
+        tsv)
+            if ! {
+                printf '%s\n' $'Direction\tClassification\tSource_Schema\tSource_Table\tSource_Columns\tTarget_Schema\tTarget_Table\tTarget_Columns\tConstraint_Name\tSupporting_Index\tStatus_Tags\tDetails'
+                LC_ALL=C awk -F '\t' -v report_conversion=tsv '
+                    NF != 12 { exit 1 }
+                    { print $0 }
+                ' "$WORK_DIR/relations.tsv"
+            } > "$EXPORT_TEMP"; then
+                runtime_error 3 'Unable to convert the report to TSV.'
+            fi
+            ;;
+    esac
+
+    if ! mv -f -- "$EXPORT_TEMP" "$OUTPUT_FILE"; then
+        runtime_error 3 'Unable to publish the report.'
+    fi
+    EXPORT_TEMP=""
+}
+
 main() {
     if [[ $# -eq 0 ]]; then
         usage
@@ -1380,21 +1578,34 @@ main() {
         return 0
     fi
     validate_arguments
+    FINAL_STATUS=0
+    REPORT_ELIGIBLE=true
+    PHYSICAL_AVAILABLE=true
+    VIRTUAL_METADATA_AVAILABLE=true
+    STATS_AVAILABLE=true
+    EXACT_AVAILABLE=false
+    EXPORT_TEMP=""
     create_workspace
     resolve_mysql_bin
     connection_preflight
     target_preflight
+    acquire_ddl
     acquire_metadata
+    acquire_exact_cardinality
     build_physical_relations
     build_virtual_relations
 
     printf 'Target preflight succeeded: %s.%s (%s)\n' "$SCHEMA_NAME" "$TABLE_NAME" "$TARGET_ENGINE"
     detect_terminal_width
     setup_colors
+    render_ddl
     render_relation_tables "$WORK_DIR/relations.tsv"
     if [[ "$SHOW_TREE" == true ]]; then
         render_tree "$WORK_DIR/relations.tsv"
     fi
+    render_cardinality
+    publish_report
+    return "$FINAL_STATUS"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

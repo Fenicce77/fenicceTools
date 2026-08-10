@@ -3,6 +3,7 @@
 set -euo pipefail
 
 query=""
+mode=${FAKE_MYSQL_FK_MODE:-physical}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,7 +39,7 @@ done
 printf '%s\n' "$query" >> "${FAKE_MYSQL_FK_LOG:?}"
 
 if [[ "$query" == *"fk-analyzer:connection"* ]]; then
-    case "${FAKE_MYSQL_FK_MODE:-physical}" in
+    case "$mode" in
         connection-failure)
             printf '%s\n' 'access denied for configured login path' >&2
             exit 1
@@ -50,17 +51,31 @@ if [[ "$query" == *"fk-analyzer:connection"* ]]; then
     esac
 fi
 
-if [[ "${FAKE_MYSQL_FK_MODE:-physical}" == "metadata-failure" && "$query" == *"fk-analyzer:physical"* ]]; then
-    printf '\033]0;unsafe title\007\033[31mmetadata access denied\033[0m\n' >&2
-    exit 1
-fi
+case "$mode:$query" in
+    ddl-failure:*fk-analyzer:ddl*)
+        printf '\033]0;unsafe title\007\033[31mDDL access denied\033[0m\ninjected line\n' >&2
+        exit 1
+        ;;
+    metadata-failure:*fk-analyzer:physical*|physical-failure:*fk-analyzer:physical*|report-failure:*fk-analyzer:physical*)
+        printf '\033]0;unsafe title\007\033[31mphysical metadata access denied\033[0m\ninjected line\n' >&2
+        exit 1
+        ;;
+    virtual-metadata-failure:*fk-analyzer:columns*)
+        printf '\033]0;unsafe title\007\033[31mvirtual metadata access denied\033[0m\ninjected line\n' >&2
+        exit 1
+        ;;
+    stats-failure:*fk-analyzer:stats*)
+        printf '\033]0;unsafe title\007\033[31mstatistics access denied\033[0m\ninjected line\n' >&2
+        exit 1
+        ;;
+esac
 
 case "$query" in
     *"fk-analyzer:connection"*)
         printf '8.4.2\t8589934592\n'
         ;;
     *"fk-analyzer:target"*)
-        if [[ "${FAKE_MYSQL_FK_MODE:-physical}" != "target-missing" ]]; then
+        if [[ "$mode" != "target-missing" ]]; then
             printf 'orders\tInnoDB\n'
         fi
         ;;
@@ -68,7 +83,13 @@ case "$query" in
         printf 'orders\tCREATE TABLE `orders` (`id` bigint unsigned NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB\n'
         ;;
     *"fk-analyzer:columns"*)
-        case "${FAKE_MYSQL_FK_MODE:-physical}" in
+        case "$mode" in
+            report|slow-report)
+                printf 'sales\taudit_orders\torders_id\t1\tbigint unsigned\t\t\n'
+                printf 'sales\torders\tid\t1\tbigint unsigned\t\t\n'
+                printf 'sales\torders\tcustomer_id\t2\tbigint unsigned\t\t\n'
+                printf 'sales\tshipment_items\torder_id\t1\tbigint unsigned\t\t\n'
+                ;;
             composite)
                 printf 'sales\taudit_orders\torders_tenant_id\t1\tbigint unsigned\t\t\n'
                 printf 'sales\taudit_orders\torders_order_id\t2\tbigint unsigned\t\t\n'
@@ -118,7 +139,10 @@ case "$query" in
         esac
         ;;
     *"fk-analyzer:pks"*)
-        case "${FAKE_MYSQL_FK_MODE:-physical}" in
+        case "$mode" in
+            report|slow-report)
+                printf 'sales\torders\tid\t1\n'
+                ;;
             composite)
                 printf 'sales\torders\ttenant_id\t1\n'
                 printf 'sales\torders\torder_id\t2\n'
@@ -149,7 +173,11 @@ case "$query" in
         esac
         ;;
     *"fk-analyzer:physical"*)
-        case "${FAKE_MYSQL_FK_MODE:-physical}" in
+        case "$mode" in
+            report|slow-report)
+                printf 'fk_orders_"customer"\tsales\torders\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\\tAUDIT\tCASCADE\n'
+                printf 'fk_items_order\tsales\tshipment_items\torder_id\tsales\torders\tid\t1\tRESTRICT\tCASCADE\n'
+                ;;
             naming)
                 printf 'fk_settlements_customer\tsales\tsettlements\tcustomers_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE\n'
                 ;;
@@ -163,7 +191,13 @@ case "$query" in
         esac
         ;;
     *"fk-analyzer:indexes"*)
-        case "${FAKE_MYSQL_FK_MODE:-physical}" in
+        case "$mode" in
+            report|slow-report)
+                printf 'sales\taudit_orders\tidx_audit_orders_fk\t1\t1\torders_id\t42\n'
+                printf 'sales\torders\tPRIMARY\t0\t1\tid\t42\n'
+                printf 'sales\torders\tidx_orders_customer\t1\t1\tcustomer_id\t42\n'
+                printf 'sales\tshipment_items\tidx_shipment_items_order\t1\t1\torder_id\t42\n'
+                ;;
             composite)
                 printf 'sales\taudit_orders\tidx_audit_orders_fk\t1\t1\torders_tenant_id\t42\n'
                 printf 'sales\taudit_orders\tidx_audit_orders_fk\t1\t2\torders_order_id\t42\n'
@@ -214,9 +248,16 @@ case "$query" in
         esac
         ;;
     *"fk-analyzer:stats"*)
-        printf '42\n'
+        case "$mode" in
+            cardinality|report|slow-report) printf '40\n' ;;
+            exact-zero) printf '5\n' ;;
+            *) printf '42\n' ;;
+        esac
         ;;
     *"fk-analyzer:exact"*)
-        printf '42\n'
+        case "$mode" in
+            exact-zero) printf '0\n' ;;
+            *) printf '42\n' ;;
+        esac
         ;;
 esac

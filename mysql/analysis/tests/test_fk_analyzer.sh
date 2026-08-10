@@ -45,6 +45,37 @@ assert_equals() {
     [[ "$actual" == "$expected" ]] || fail "expected: $expected; got: $actual"
 }
 
+assert_file_content() {
+    local file=$1
+    local expected=$2
+    local actual=""
+
+    [[ -f "$file" ]] || fail "expected file to exist: $file"
+    actual=$(<"$file")
+    assert_equals "$actual" "$expected"
+}
+
+assert_no_report_temp() {
+    local directory=$1
+    local candidate
+
+    for candidate in "$directory"/.fk-analyzer.*; do
+        [[ ! -e "$candidate" ]] || fail "unexpected unpublished report temporary file: $candidate"
+    done
+}
+
+report_temp_exists() {
+    local directory=$1
+    local candidate
+
+    for candidate in "$directory"/.fk-analyzer.*; do
+        if [[ -e "$candidate" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 assert_marker_once() {
     local marker=$1
     local count
@@ -127,9 +158,12 @@ write_presentation_fixture() {
         'resolve_mysql_bin() { :; }' \
         'connection_preflight() { :; }' \
         'target_preflight() { TARGET_ENGINE=InnoDB; }' \
+        'acquire_ddl() { printf "orders\\tCREATE TABLE orders (id bigint)\\n" > "$WORK_DIR/ddl.tsv"; }' \
         'acquire_metadata() { :; }' \
         'build_physical_relations() { cp "${FK_FIXTURE_FILE:?}" "$WORK_DIR/relations.tsv"; }' \
         'build_virtual_relations() { :; }' \
+        'render_ddl() { :; }' \
+        'render_cardinality() { :; }' \
         'main "$@"' \
         > "$FIXTURE_RUNNER"
     chmod +x "$FIXTURE_RUNNER"
@@ -522,10 +556,9 @@ unset FAKE_MYSQL_FK_MODE
 FAKE_MYSQL_FK_MODE=metadata-failure
 export FAKE_MYSQL_FK_MODE
 run_case metadata_failure -l test -s sales -t orders --environment test --mysql-bin "$FAKE_MYSQL"
-assert_status 3
-assert_contains "$OUTPUT" 'metadata access denied'
+assert_status 4
+assert_contains "$OUTPUT" 'physical metadata access denied'
 assert_not_contains "$OUTPUT" $'\033'
-assert_not_contains "$OUTPUT" $'\n'
 unset FAKE_MYSQL_FK_MODE
 
 printf 'PASS: fk_analyzer CLI contract\n'
@@ -733,6 +766,276 @@ run_virtual_tests() {
     printf 'PASS: fk_analyzer virtual relations\n'
 }
 
+write_report_awk_wrapper() {
+    local wrapper_dir=$1
+
+    mkdir -p "$wrapper_dir"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
+        'for argument in "$@"; do' \
+        '    case "$argument" in' \
+        '        report_conversion=csv|report_conversion=tsv)' \
+        '            case "${FAKE_REPORT_AWK_MODE:-delegate}" in' \
+        '                fail) exit 71 ;;' \
+        '                slow)' \
+        '                    printf "%s\\n" "$$" > "${FAKE_REPORT_AWK_PID_FILE:?}"' \
+        '                    trap "exit 143" HUP INT TERM' \
+        '                    while :; do sleep 1; done' \
+        '                    ;;' \
+        '            esac' \
+        '            ;;' \
+        '    esac' \
+        'done' \
+        'exec "${REAL_AWK:?}" "$@"' \
+        > "$wrapper_dir/awk"
+    chmod +x "$wrapper_dir/awk"
+}
+
+run_cardinality_tests() {
+    local query_log exact_query
+
+    FAKE_MYSQL_FK_MODE=cardinality
+    export FAKE_MYSQL_FK_MODE
+    run_case cardinality_metadata -l test -s sales -t orders --environment development \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 0
+    query_log=$(<"$FAKE_MYSQL_FK_LOG")
+    assert_contains "$query_log" 'FROM information_schema.TABLES'
+    assert_contains "$query_log" 'FROM information_schema.STATISTICS'
+    assert_not_contains "$query_log" 'fk-analyzer:exact'
+    assert_not_contains "$query_log" 'COUNT('
+    assert_contains "$OUTPUT" 'Estimated rows: 40'
+    assert_not_contains "$OUTPUT" 'Exact rows:'
+
+    run_case cardinality_exact_development -l test -s sales -t orders --environment development \
+        --cardinality exact --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 0
+    assert_marker_once 'fk-analyzer:exact'
+    exact_query=$(LC_ALL=C grep 'fk-analyzer:exact' "$FAKE_MYSQL_FK_LOG")
+    assert_equals "$exact_query" 'SELECT /* fk-analyzer:exact */ COUNT(*) FROM `sales`.`orders`;'
+    assert_not_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'COUNT(DISTINCT'
+    assert_contains "$OUTPUT" 'Estimated rows: 40'
+    assert_contains "$OUTPUT" 'Exact rows: 42'
+    assert_contains "$OUTPUT" 'Absolute difference: 2'
+    assert_contains "$OUTPUT" 'Percentage drift: 4.76%'
+
+    run_case cardinality_exact_production_rejected -l test -s sales -t orders \
+        --environment production --cardinality exact --mysql-bin "$FAKE_MYSQL"
+    assert_status 2
+    assert_not_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:exact'
+
+    run_case cardinality_exact_production_allowed -l test -s sales -t orders \
+        --environment production --cardinality exact --allow-production \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 0
+    assert_marker_once 'fk-analyzer:exact'
+
+    FAKE_MYSQL_FK_MODE=exact-zero
+    export FAKE_MYSQL_FK_MODE
+    run_case cardinality_exact_zero -l test -s sales -t orders --environment development \
+        --cardinality exact --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 0
+    assert_contains "$OUTPUT" 'Estimated rows: 5'
+    assert_contains "$OUTPUT" 'Exact rows: 0'
+    assert_contains "$OUTPUT" 'Absolute difference: 5'
+    assert_contains "$OUTPUT" 'Percentage drift: 100.00%'
+    unset FAKE_MYSQL_FK_MODE
+
+    printf 'PASS: fk_analyzer cardinality modes\n'
+}
+
+run_degraded_tests() {
+    local mode expected_diagnostic degraded_count degraded_line query_log
+
+    for mode in physical-failure virtual-metadata-failure stats-failure; do
+        FAKE_MYSQL_FK_MODE=$mode
+        export FAKE_MYSQL_FK_MODE
+        run_case "degraded_$mode" -l test -s sales -t orders --environment test \
+            --mysql-bin "$FAKE_MYSQL" --no-color
+        assert_status 4
+        degraded_count=$(printf '%s\n' "$OUTPUT" | LC_ALL=C grep -c '^DEGRADED:' || true)
+        assert_equals "$degraded_count" 1
+        degraded_line=$(printf '%s\n' "$OUTPUT" | LC_ALL=C grep '^DEGRADED:' || true)
+        assert_not_contains "$degraded_line" $'\033'
+        assert_not_contains "$degraded_line" $'\n'
+        assert_contains "$OUTPUT" 'TABLE DDL'
+        assert_contains "$OUTPUT" 'RELATION TOPOLOGY'
+        case "$mode" in
+            physical-failure)
+                expected_diagnostic='physical metadata access denied'
+                assert_contains "$OUTPUT" 'Estimated rows: 42'
+                ;;
+            virtual-metadata-failure)
+                expected_diagnostic='virtual metadata access denied'
+                assert_contains "$OUTPUT" 'PHYSICAL_FK'
+                ;;
+            stats-failure)
+                expected_diagnostic='statistics access denied'
+                assert_contains "$OUTPUT" 'PHYSICAL_FK'
+                assert_contains "$OUTPUT" 'Estimated rows: unavailable'
+                ;;
+        esac
+        assert_contains "$degraded_line" "$expected_diagnostic"
+        query_log=$(<"$FAKE_MYSQL_FK_LOG")
+        assert_contains "$query_log" 'fk-analyzer:ddl'
+        assert_contains "$query_log" 'fk-analyzer:stats'
+    done
+    unset FAKE_MYSQL_FK_MODE
+
+    FAKE_MYSQL_FK_MODE=ddl-failure
+    export FAKE_MYSQL_FK_MODE
+    run_case ddl_global_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 3
+    assert_contains "$OUTPUT" 'DDL access denied'
+    assert_not_contains "$OUTPUT" $'\033'
+    assert_not_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:columns'
+    unset FAKE_MYSQL_FK_MODE
+
+    printf 'PASS: fk_analyzer degraded sections\n'
+}
+
+run_export_tests() {
+    local csv_report="$TMP/relations.csv"
+    local tsv_report="$TMP/relations.tsv"
+    local stable_report="$TMP/relations-stable.tsv"
+    local query_failure_report="$TMP/query-failure.tsv"
+    local conversion_failure_report="$TMP/conversion-failure.csv"
+    local wrapper_dir="$TMP/failing-report-awk"
+    local expected_csv_header terminal_order report_order original_path
+    local report_text
+
+    expected_csv_header='Direction,Classification,Source_Schema,Source_Table,Source_Columns,Target_Schema,Target_Table,Target_Columns,Constraint_Name,Supporting_Index,Status_Tags,Details'
+    FAKE_MYSQL_FK_MODE=report
+    export FAKE_MYSQL_FK_MODE
+    run_case export_csv -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$csv_report" --format csv \
+        --terminal-width 120 --no-color
+    assert_status 0
+    assert_equals "$(LC_ALL=C awk 'NR == 1 { print; exit }' "$csv_report")" "$expected_csv_header"
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$csv_report")" 4
+    report_text=$(<"$csv_report")
+    assert_contains "$report_text" '"fk_orders_""customer"""'
+    assert_not_contains "$report_text" $'\033'
+
+    run_case export_inferred_tsv -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$tsv_report" \
+        --terminal-width 10000 --no-color
+    assert_status 0
+    assert_equals "$(LC_ALL=C awk 'NR == 1 { print; exit }' "$tsv_report")" \
+        $'Direction\tClassification\tSource_Schema\tSource_Table\tSource_Columns\tTarget_Schema\tTarget_Table\tTarget_Columns\tConstraint_Name\tSupporting_Index\tStatus_Tags\tDetails'
+    LC_ALL=C awk -F '\t' 'NR > 1 && NF != 12 { exit 1 }' "$tsv_report" \
+        || fail 'TSV report data rows must have exactly 12 fields'
+    assert_equals "$(LC_ALL=C awk 'END { print NR + 0 }' "$tsv_report")" 4
+    report_text=$(<"$tsv_report")
+    assert_contains "$report_text" 'RESTRICT\tAUDIT'
+    assert_not_contains "$report_text" $'\033'
+
+    terminal_order=$(printf '%s\n' "$OUTPUT" | LC_ALL=C awk -F '[|]' '
+        /^(INBOUND|OUTBOUND)/ {
+            for (field = 1; field <= 3; field++) {
+                sub(/^[ ]+/, "", $field)
+                sub(/[ ]+$/, "", $field)
+            }
+            print $1 "|" $2 "|" $3
+        }
+    ')
+    report_order=$(LC_ALL=C awk -F '\t' 'NR > 1 { print $1 "|" $2 "|" $3 "." $4 $5 }' "$tsv_report")
+    assert_equals "$terminal_order" "$report_order"
+    assert_equals "$report_order" $'INBOUND|COMPLETE_VIRTUAL_FK|sales.audit_orders(orders_id)\nINBOUND|PHYSICAL_FK|sales.shipment_items(order_id)\nOUTBOUND|PHYSICAL_FK|sales.orders(customer_id)'
+
+    run_case export_stable_repeat -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$stable_report" --format tsv \
+        --terminal-width 120 --no-color
+    assert_status 0
+    cmp -s "$tsv_report" "$stable_report" || fail 'public TSV report ordering is not byte-stable'
+
+    printf 'ORIGINAL\n' > "$query_failure_report"
+    FAKE_MYSQL_FK_MODE=report-failure
+    export FAKE_MYSQL_FK_MODE
+    run_case export_query_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$query_failure_report" --format tsv --no-color
+    assert_status 4
+    assert_file_content "$query_failure_report" 'ORIGINAL'
+    assert_no_report_temp "$TMP"
+
+    printf 'ORIGINAL\n' > "$conversion_failure_report"
+    REAL_AWK=$(command -v awk)
+    export REAL_AWK
+    write_report_awk_wrapper "$wrapper_dir"
+    original_path=$PATH
+    PATH="$wrapper_dir:$PATH"
+    export PATH
+    FAKE_REPORT_AWK_MODE=fail
+    FAKE_MYSQL_FK_MODE=report
+    export FAKE_REPORT_AWK_MODE FAKE_MYSQL_FK_MODE
+    run_case export_conversion_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$conversion_failure_report" --format csv --no-color
+    PATH=$original_path
+    export PATH
+    unset FAKE_REPORT_AWK_MODE FAKE_MYSQL_FK_MODE REAL_AWK
+    assert_status 3
+    assert_file_content "$conversion_failure_report" 'ORIGINAL'
+    assert_no_report_temp "$TMP"
+
+    printf 'PASS: fk_analyzer atomic exports\n'
+}
+
+run_signal_tests() {
+    local destination="$TMP/signal-report.tsv"
+    local wrapper_dir="$TMP/slow-report-awk"
+    local pid_file="$TMP/slow-report-awk.pid"
+    local output_file="$TMP/signal-output.log"
+    local analyzer_pid wrapper_pid original_path attempt=0
+
+    printf 'ORIGINAL\n' > "$destination"
+    REAL_AWK=$(command -v awk)
+    export REAL_AWK
+    write_report_awk_wrapper "$wrapper_dir"
+    original_path=$PATH
+    PATH="$wrapper_dir:$PATH"
+    export PATH
+    FAKE_REPORT_AWK_MODE=slow
+    FAKE_REPORT_AWK_PID_FILE=$pid_file
+    FAKE_MYSQL_FK_MODE=slow-report
+    export FAKE_REPORT_AWK_MODE FAKE_REPORT_AWK_PID_FILE FAKE_MYSQL_FK_MODE
+    : > "$FAKE_MYSQL_FK_LOG"
+
+    /bin/bash "$SCRIPT" -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$destination" --format tsv --no-color \
+        > "$output_file" 2>&1 &
+    analyzer_pid=$!
+
+    while [[ ! -s "$pid_file" ]] || ! report_temp_exists "$TMP"; do
+        if ! kill -0 "$analyzer_pid" 2>/dev/null; then
+            wait "$analyzer_pid" || true
+            fail "analyzer exited before the slow report conversion boundary: $(<"$output_file")"
+        fi
+        attempt=$((attempt + 1))
+        [[ "$attempt" -lt 200 ]] || fail 'timed out waiting for slow report conversion'
+        sleep 0.05
+    done
+
+    wrapper_pid=$(<"$pid_file")
+    kill -TERM "$analyzer_pid"
+    kill -TERM "$wrapper_pid" 2>/dev/null || true
+    set +e
+    wait "$analyzer_pid"
+    STATUS=$?
+    set -e
+    OUTPUT=$(<"$output_file")
+
+    PATH=$original_path
+    export PATH
+    unset FAKE_REPORT_AWK_MODE FAKE_REPORT_AWK_PID_FILE FAKE_MYSQL_FK_MODE REAL_AWK
+    assert_status 130
+    assert_file_content "$destination" 'ORIGINAL'
+    assert_no_report_temp "$TMP"
+
+    printf 'PASS: fk_analyzer report interruption\n'
+}
+
 run_presentation_tests() {
     local width width_case width_input width_expected
     local colored_table no_color_table fixture_snapshot
@@ -907,6 +1210,10 @@ if [[ $# -eq 0 ]]; then
     run_virtual_tests
     run_presentation_tests
     run_tree_tests
+    run_cardinality_tests
+    run_degraded_tests
+    run_export_tests
+    run_signal_tests
 else
     for test_group in "$@"; do
         case "$test_group" in
@@ -915,6 +1222,10 @@ else
             virtual) run_virtual_tests ;;
             presentation) run_presentation_tests ;;
             tree) run_tree_tests ;;
+            cardinality) run_cardinality_tests ;;
+            degraded) run_degraded_tests ;;
+            export) run_export_tests ;;
+            signals) run_signal_tests ;;
             *) fail "unknown test group: $test_group" ;;
         esac
     done
