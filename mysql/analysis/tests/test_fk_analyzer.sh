@@ -149,6 +149,7 @@ write_presentation_fixture() {
         $'OUTBOUND\tCOMPLETE_VIRTUAL_FK\tsales\taudit_orders\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_audit_orders_complete_virtual_tuple\t\tComplete ordered composite tuple and compatible index prefix' \
         $'OUTBOUND\tPARTIAL_VIRTUAL_FK\tsales\ttyped_orders\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_typed_orders_wrong_order\tMISSING_COMPONENTS,TYPE_MISMATCH,UNINDEXED,INDEX_ORDER_MISMATCH\tPartial composite relationship with all diagnostic tags visible' \
         $'OUTBOUND\tAMBIGUOUS_VIRTUAL_FK\tsales\tledger_entries\t(country_code_identifier_component)\t\t\t()\t\tidx_ledger_country_code\t\tCandidate targets: sales.countries(code), sales.currencies(code)' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(short_id)\tsales\tshort_parent\t(id)\tfk_short\tidx_short\t\tShort detail' \
         $'INBOUND\tPHYSICAL_FK\tsales\tshipment_items_archive\t(tenant_identifier_component, order_identifier_component, regional_partition_identifier_component)\tsales\torders\t(tenant_identifier_component, order_identifier_component, regional_partition_identifier_component)\tfk_shipment_items_archive_orders\tidx_shipment_items_archive_orders_tuple\tUNINDEXED\tON UPDATE CASCADE; ON DELETE RESTRICT' \
         $'INBOUND\tCOMPLETE_VIRTUAL_FK\tsales\torder_events_archive\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_order_events_archive_tuple\t\tComplete inbound virtual composite relationship' \
         > "$FIXTURE_FILE"
@@ -1274,6 +1275,20 @@ run_presentation_tests() {
     run_fixture_tty_width 160 presentation_colored "${FIXTURE_ARGUMENTS[@]}"
     assert_status 0
     assert_has_ansi "$OUTPUT"
+    assert_contains "$OUTPUT" $'\033[1;33msales.orders\033[0m'
+    assert_contains "$OUTPUT" $'\033[1;33msales.short_parent(id)'
+    assert_contains "$OUTPUT" $'constraint=\033[0;34mfk_short\033[0m;'
+    assert_contains "$OUTPUT" $'index=\033[0;34midx_short\033[0m;'
+    assert_contains "$OUTPUT" $'constraint=\033[0;34mfk_orders_customer_\033[0m'
+    assert_contains "$OUTPUT" $'index=\033[0;34midx_orders_customer_archive_\033[0m'
+    assert_contains "$OUTPUT" 'Short detail'
+    assert_not_contains "$OUTPUT" $'\033[0;34mconstraint='
+    assert_not_contains "$OUTPUT" $'\033[0;34m; Short detail'
+    assert_contains "$OUTPUT" $'\033[0;36mPHYSICAL_FK'
+    assert_contains "$OUTPUT" $'\033[0;32mCOMPLETE_VIRTUAL_FK'
+    assert_contains "$OUTPUT" $'\033[0;33mPARTIAL_VIRTUAL_FK'
+    assert_contains "$OUTPUT" $'\033[0;35mAMBIGUOUS_VIRTUAL_FK'
+    assert_contains "$OUTPUT" $'\033[0;31m'
     strip_ansi "$OUTPUT"
     extract_table "$STRIPPED_OUTPUT"
     colored_table=$TABLE_OUTPUT

@@ -430,12 +430,15 @@ wrap_relation_fields() {
         function clear(values, key) {
             for (key in values) delete values[key]
         }
-        function wrap(value, width, values, count, rest, cut, position, character) {
+        function wrap(value, width, values, starts, count, rest, rest_start, cut, position, character) {
             clear(values)
+            clear(starts)
             count = 0
             rest = value
+            rest_start = 1
             if (rest == "") {
                 values[++count] = ""
+                starts[count] = rest_start
                 return count
             }
             while (length(rest) > width) {
@@ -449,21 +452,24 @@ wrap_relation_fields() {
                     }
                 }
                 values[++count] = substr(rest, 1, cut)
+                starts[count] = rest_start
                 rest = substr(rest, cut + 1)
+                rest_start += cut
             }
             values[++count] = rest
+            starts[count] = rest_start
             return count
         }
         {
-            source_count = wrap($1, source_width, source_lines)
-            target_count = wrap($2, target_width, target_lines)
-            details_count = wrap($3, details_width, details_lines)
+            source_count = wrap($1, source_width, source_lines, source_starts)
+            target_count = wrap($2, target_width, target_lines, target_starts)
+            details_count = wrap($3, details_width, details_lines, details_starts)
             line_count = source_count
             if (target_count > line_count) line_count = target_count
             if (details_count > line_count) line_count = details_count
             for (line = 1; line <= line_count; line++) {
-                printf "%s%c%s%c%s\n", source_lines[line], 28,
-                    target_lines[line], 28, details_lines[line]
+                printf "%s%c%s%c%s%c%s\n", source_lines[line], 28,
+                    target_lines[line], 28, details_lines[line], 28, details_starts[line]
             }
         }
     ')
@@ -503,6 +509,68 @@ append_relation_detail() {
     fi
 }
 
+color_relation_detail_names() {
+    local line_details=$1
+    local line_offset=$2
+    local details=$3
+    local constraint_name=$4
+    local supporting_index=$5
+    local details_color=$6
+
+    COLORED_RELATION_DETAILS=$(printf '%s' "$line_details" | LC_ALL=C awk \
+        -v details="$details" \
+        -v line_offset="$line_offset" \
+        -v constraint_name="$constraint_name" \
+        -v supporting_index="$supporting_index" \
+        -v blue="$COLOR_BLUE" \
+        -v reset="$COLOR_RESET" \
+        -v resume="$details_color" '
+        function segment_start(marker, name, position) {
+            if (name == "") return 0
+            position = index(details, marker name)
+            return position == 0 ? 0 : position + length(marker)
+        }
+        function print_segment(value, start, segment_length, line_start, line_end,
+                               overlap_start, overlap_end, cursor) {
+            overlap_start = (start > line_start ? start : line_start)
+            overlap_end = (start + segment_length - 1 < line_end ? start + segment_length - 1 : line_end)
+            if (overlap_start > overlap_end) return line_start
+            cursor = overlap_start - line_start + 1
+            printf "%s%s%s%s", blue, substr(value, cursor, overlap_end - overlap_start + 1), reset, resume
+            return overlap_end + 1
+        }
+        {
+            value = $0
+            line_start = line_offset + 0
+            line_end = line_start + length(value) - 1
+            constraint_start = segment_start("constraint=", constraint_name)
+            index_start = segment_start("index=", supporting_index)
+            cursor = line_start
+            for (segment = 1; segment <= 2; segment++) {
+                if (constraint_start != 0 &&
+                    (index_start == 0 || constraint_start < index_start)) {
+                    start = constraint_start
+                    name_length = length(constraint_name)
+                    constraint_start = 0
+                } else if (index_start != 0) {
+                    start = index_start
+                    name_length = length(supporting_index)
+                    index_start = 0
+                } else {
+                    break
+                }
+                overlap_start = (start > line_start ? start : line_start)
+                overlap_end = (start + name_length - 1 < line_end ? start + name_length - 1 : line_end)
+                if (overlap_start <= overlap_end) {
+                    printf "%s", substr(value, cursor - line_start + 1, overlap_start - cursor)
+                    cursor = print_segment(value, start, name_length, line_start, line_end)
+                }
+            }
+            printf "%s", substr(value, cursor - line_start + 1)
+        }
+    ')
+}
+
 render_relation_line() {
     local direction=$1
     local classification=$2
@@ -512,16 +580,23 @@ render_relation_line() {
     local details=$6
     local direction_color=$7
     local classification_field_color=$8
-    local status_field_color=$9
-    local details_color=${10}
+    local target_field_color=$9
+    local status_field_color=${10}
+    local details_color=${11}
+    local colored_details=${12:-$details}
+    local detail_padding=$((DETAILS_WIDTH - ${#details}))
 
-    printf '%s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s\n' \
+    if [[ "$detail_padding" -lt 0 ]]; then
+        detail_padding=0
+    fi
+
+    printf '%s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s | %s%-*s%s | ' \
         "$direction_color" "$DIRECTION_WIDTH" "$direction" "$COLOR_RESET" \
         "$classification_field_color" "$CLASSIFICATION_WIDTH" "$classification" "$COLOR_RESET" \
         "" "$SOURCE_WIDTH" "$source" "$COLOR_RESET" \
-        "" "$TARGET_WIDTH" "$target" "$COLOR_RESET" \
-        "$status_field_color" "$STATUS_WIDTH" "$status" "$COLOR_RESET" \
-        "$details_color" "$DETAILS_WIDTH" "$details" "$COLOR_RESET"
+        "$target_field_color" "$TARGET_WIDTH" "$target" "$COLOR_RESET" \
+        "$status_field_color" "$STATUS_WIDTH" "$status" "$COLOR_RESET"
+    printf '%s%s%*s%s\n' "$details_color" "$colored_details" "$detail_padding" '' "$COLOR_RESET"
 }
 
 filter_relation_section() {
@@ -555,7 +630,7 @@ render_relation_section() {
     local section=$3
     local direction classification source_schema source_table source_columns
     local target_schema target_table target_columns constraint_name supporting_index
-    local status_tags details source_value target_value line_source line_target line_details
+    local status_tags details source_value target_value line_source line_target line_details line_details_offset
     local relation_field_separator=$'\034'
     local separator_line
     local continuation
@@ -577,7 +652,7 @@ render_relation_section() {
 
     printf '%s\n' "$section_title"
     render_relation_line DIRECTION CLASSIFICATION SOURCE TARGET STATUS DETAILS \
-        "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD"
+        "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD"
     printf '%s\n' "$separator_line"
 
     while IFS="$relation_field_separator" read -r direction classification \
@@ -607,15 +682,17 @@ render_relation_section() {
         wrap_relation_fields "$source_value" "$target_value" "$RELATION_DETAILS" \
             "$SOURCE_WIDTH" "$TARGET_WIDTH" "$DETAILS_WIDTH"
         continuation=false
-        while IFS="$relation_field_separator" read -r line_source line_target line_details; do
+        while IFS="$relation_field_separator" read -r line_source line_target line_details line_details_offset; do
+            color_relation_detail_names "$line_details" "$line_details_offset" "$RELATION_DETAILS" \
+                "$constraint_name" "$supporting_index" "$details_color"
             if [[ "$continuation" == false ]]; then
                 render_relation_line "$direction" "$classification" "$line_source" "$line_target" \
                     "$RELATION_STATUS" "$line_details" "$COLOR_CYAN" "$FIELD_COLOR" \
-                    "$STATUS_COLOR" "$details_color"
+                    "$COLOR_BOLD_YELLOW" "$STATUS_COLOR" "$details_color" "$COLORED_RELATION_DETAILS"
                 continuation=true
             else
                 render_relation_line "" "" "$line_source" "$line_target" "" "$line_details" \
-                    "" "" "" "$details_color"
+                    "" "" "$COLOR_BOLD_YELLOW" "" "$details_color" "$COLORED_RELATION_DETAILS"
             fi
         done <<EOF
 $WRAPPED_RELATION_FIELDS
@@ -632,7 +709,7 @@ render_index_coverage() {
     local component_file="$WORK_DIR/relation-component-counts.tsv"
     local indexes_file="$WORK_DIR/indexes.tsv"
     local coverage_field_separator=$'\034'
-    local source_value supporting_index cardinality line_source line_index line_cardinality
+    local source_value supporting_index cardinality line_source line_index line_cardinality line_cardinality_offset
     local separator_line
     local found=false
     local coverage_budget coverage_source_width coverage_index_width coverage_cardinality_width
@@ -660,7 +737,7 @@ render_index_coverage() {
         found=true
         wrap_relation_fields "$source_value" "$supporting_index" "$cardinality" \
             "$coverage_source_width" "$coverage_index_width" "$coverage_cardinality_width"
-        while IFS="$coverage_field_separator" read -r line_source line_index line_cardinality; do
+        while IFS="$coverage_field_separator" read -r line_source line_index line_cardinality line_cardinality_offset; do
             printf '%-*s | %s%-*s%s | %-*s\n' \
                 "$coverage_source_width" "$line_source" \
                 "$COLOR_BLUE" "$coverage_index_width" "$line_index" "$COLOR_RESET" \
@@ -1798,9 +1875,10 @@ main() {
     build_physical_relations
     build_virtual_relations
 
-    printf 'Target preflight succeeded: %s.%s (%s)\n' "$SCHEMA_NAME" "$TABLE_NAME" "$TARGET_ENGINE"
     detect_terminal_width
     setup_colors
+    printf 'Target preflight succeeded: %s%s.%s%s (%s)\n' \
+        "$COLOR_BOLD_YELLOW" "$SCHEMA_NAME" "$TABLE_NAME" "$COLOR_RESET" "$TARGET_ENGINE"
     render_ddl
     render_relation_tables "$WORK_DIR/relations.tsv"
     render_cardinality
