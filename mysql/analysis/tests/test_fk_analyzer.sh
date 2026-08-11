@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+TEST_SCRIPT="$SCRIPT_DIR/test_fk_analyzer.sh"
 SCRIPT="$SCRIPT_DIR/../fk_analyzer.sh"
 FAKE_MYSQL="$SCRIPT_DIR/fake_mysql_fk.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fk-analyzer-test.XXXXXX")
@@ -13,11 +14,44 @@ FIXTURE_FILE="$TMP/presentation-relations.tsv"
 INDEX_FIXTURE_FILE="$TMP/presentation-indexes.tsv"
 COMPONENT_FIXTURE_FILE="$TMP/presentation-component-counts.tsv"
 FIXTURE_RUNNER="$TMP/run-fk-presentation-fixture.sh"
+RUNNER_NO_COLOR=false
+RUNNER_COLOR_BOLD=""
+RUNNER_COLOR_CYAN=""
+RUNNER_COLOR_RESET=""
 
 test_cleanup() {
     rm -rf "$TMP"
 }
 trap test_cleanup EXIT
+
+setup_runner_colors() {
+    RUNNER_COLOR_BOLD=""
+    RUNNER_COLOR_CYAN=""
+    RUNNER_COLOR_RESET=""
+    if [[ "$RUNNER_NO_COLOR" == false && -t 1 && "${TERM:-dumb}" != dumb ]]; then
+        RUNNER_COLOR_BOLD=$'\033[1m'
+        RUNNER_COLOR_CYAN=$'\033[0;36m'
+        RUNNER_COLOR_RESET=$'\033[0m'
+    fi
+}
+
+runner_usage() {
+    setup_runner_colors
+    printf '%bForeign key analyzer test runner%b\n' \
+        "${RUNNER_COLOR_BOLD}${RUNNER_COLOR_CYAN}" "$RUNNER_COLOR_RESET"
+    printf '\nUsage:\n'
+    printf '  %s [--no-color] [TEST_GROUP ...]\n' "${0##*/}"
+    printf '  %s --help\n' "${0##*/}"
+    printf '\nTest groups:\n'
+    printf '  tooling cli physical scoping ordering virtual scale presentation coverage tree\n'
+    printf '  cardinality degraded failures export signals mysql-signals\n'
+    printf '\nOptions:\n'
+    printf '  -h, --help     Show this help\n'
+    printf '      --no-color Disable ANSI colors in help output\n'
+    printf '\nExamples:\n'
+    printf '  %s\n' "${0##*/}"
+    printf '  %s cli virtual degraded\n' "${0##*/}"
+}
 
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
@@ -463,6 +497,52 @@ run_case() {
     printf 'ok: %s\n' "$name"
 }
 
+run_command_tty() {
+    local name=$1 runner_command
+    shift
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(TERM=xterm script -q /dev/null "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env TERM=xterm "$@"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+    printf 'ok: %s\n' "$name"
+}
+
+run_command_tty_without_term() {
+    local name=$1 runner_command
+    shift
+    set +e
+    case "$(uname -s)" in
+        Darwin)
+            OUTPUT=$(script -q /dev/null env -u TERM "$@" 2>&1)
+            ;;
+        Linux)
+            printf -v runner_command '%q ' env -u TERM "$@"
+            OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
+            ;;
+        *)
+            set -e
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+    STATUS=$?
+    set -e
+    OUTPUT=${OUTPUT//$'\r'/}
+    printf 'ok: %s\n' "$name"
+}
+
 repeat_char() {
     local count=$1
     local character=$2
@@ -525,6 +605,7 @@ assert_status 0
 assert_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:connection'
 assert_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:target'
 assert_contains "$(<"$FAKE_MYSQL_FK_LOG")" 'fk-analyzer:physical'
+assert_contains "$OUTPUT" 'Environment: test'
 
 run_case long_space --login-path test --schema sales --table orders --environment test \
     --mysql-bin "$FAKE_MYSQL" --terminal-width 10000 --format csv --output-file "$TMP/report.csv"
@@ -596,6 +677,9 @@ run_case connection_failure_ansi -l test -s sales -t orders --environment test -
 assert_status 3
 assert_not_contains "$OUTPUT" $'\033'
 assert_not_contains "$OUTPUT" $'\n'
+assert_not_contains "$OUTPUT" 'unsafe title'
+assert_not_contains "$OUTPUT" '[31m'
+assert_not_contains "$OUTPUT" '[0m'
 unset FAKE_MYSQL_FK_MODE
 
 FAKE_MYSQL_FK_MODE=target-missing
@@ -613,6 +697,39 @@ assert_not_contains "$OUTPUT" $'\033'
 unset FAKE_MYSQL_FK_MODE
 
 printf 'PASS: fk_analyzer CLI contract\n'
+}
+
+run_tooling_help_tests() {
+    set +e
+    OUTPUT=$(/bin/bash "$TEST_SCRIPT" --help --no-color 2>&1)
+    STATUS=$?
+    set -e
+    printf 'ok: runner_help\n'
+    assert_status 0
+    assert_contains "$OUTPUT" 'Foreign key analyzer test runner'
+    assert_contains "$OUTPUT" 'Usage:'
+    assert_contains "$OUTPUT" 'Test groups:'
+    assert_contains "$OUTPUT" 'Examples:'
+    assert_not_contains "$OUTPUT" $'\033'
+
+    set +e
+    OUTPUT=$(/bin/bash "$FAKE_MYSQL" --help 2>&1)
+    STATUS=$?
+    set -e
+    assert_status 0
+    assert_contains "$OUTPUT" 'Deterministic fake MySQL client'
+    assert_contains "$OUTPUT" 'Internal invocation contract:'
+    assert_contains "$OUTPUT" 'FAKE_MYSQL_FK_LOG'
+
+    run_command_tty runner_help_color /bin/bash "$TEST_SCRIPT" --help
+    assert_status 0
+    assert_has_ansi "$OUTPUT"
+
+    run_command_tty_without_term analyzer_help_unset_term /bin/bash "$SCRIPT" --help
+    assert_status 0
+    assert_not_contains "$OUTPUT" $'\033'
+
+    printf 'PASS: fk_analyzer test tooling help\n'
 }
 
 run_physical_tests() {
@@ -663,6 +780,32 @@ run_physical_tests() {
     assert_marker_once 'fk-analyzer:stats'
     assert_no_modifying_sql
     printf 'PASS: fk_analyzer physical relations\n'
+}
+
+run_backslash_scope_tests() {
+    local schema_with_backslash='sales\archive'
+    local table_with_backslash='orders\archive'
+
+    FAKE_MYSQL_FK_MODE=schema-backslash
+    export FAKE_MYSQL_FK_MODE
+    run_case schema_backslash_scope -l test -s "$schema_with_backslash" -t orders \
+        --environment test --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 0
+    assert_contains "$OUTPUT" "Target preflight succeeded: ${schema_with_backslash}.orders"
+    assert_contains "$OUTPUT" 'PHYSICAL_FK'
+    assert_contains "$OUTPUT" 'COMPLETE_VIRTUAL_FK'
+
+    FAKE_MYSQL_FK_MODE=table-backslash
+    export FAKE_MYSQL_FK_MODE
+    run_case table_backslash_scope -l test -s sales -t "$table_with_backslash" \
+        --environment test --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 0
+    assert_contains "$OUTPUT" "Target preflight succeeded: sales.${table_with_backslash}"
+    assert_contains "$OUTPUT" 'PHYSICAL_FK'
+    assert_contains "$OUTPUT" 'COMPLETE_VIRTUAL_FK'
+    unset FAKE_MYSQL_FK_MODE
+
+    printf 'PASS: fk_analyzer backslash identifier scoping\n'
 }
 
 run_ordering_tests() {
@@ -858,6 +1001,25 @@ run_virtual_tests() {
     printf 'PASS: fk_analyzer virtual relations\n'
 }
 
+run_schema_scale_tests() {
+    local started elapsed
+
+    FAKE_MYSQL_FK_MODE=schema-scale
+    FAKE_MYSQL_FK_SCALE=8000
+    export FAKE_MYSQL_FK_MODE FAKE_MYSQL_FK_SCALE
+    started=$SECONDS
+    run_case schema_scale_linear_sorting -l test -s sales -t probe --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    elapsed=$((SECONDS - started))
+    unset FAKE_MYSQL_FK_MODE FAKE_MYSQL_FK_SCALE
+    assert_status 0
+    [[ "$elapsed" -le 8 ]] \
+        || fail "schema-scale metadata processing exceeded 8 seconds: ${elapsed}s"
+    assert_contains "$OUTPUT" 'Target preflight succeeded: sales.probe'
+
+    printf 'PASS: fk_analyzer schema-scale ordering\n'
+}
+
 write_report_awk_wrapper() {
     local wrapper_dir=$1
 
@@ -881,6 +1043,108 @@ write_report_awk_wrapper() {
         'exec "${REAL_AWK:?}" "$@"' \
         > "$wrapper_dir/awk"
     chmod +x "$wrapper_dir/awk"
+}
+
+write_stage_failure_wrappers() {
+    local wrapper_dir=$1
+
+    mkdir -p "$wrapper_dir"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
+        'stage=""' \
+        'for argument in "$@"; do' \
+        '    case "$argument" in' \
+        '        physical_file=*) stage=physical ;;' \
+        '        component_file=*/virtual-relation-component-counts.tsv) stage=virtual ;;' \
+        '    esac' \
+        'done' \
+        'if [[ -n "${FAKE_STAGE_AWK_FAILURE:-}" && "$stage" == "$FAKE_STAGE_AWK_FAILURE" ]]; then' \
+        '    printf "\033]0;unsafe reducer title\007\033[31msimulated %s reducer failure\033[0m\n" "$stage" >&2' \
+        '    exit 71' \
+        'fi' \
+        'exec "${REAL_AWK:?}" "$@"' \
+        > "$wrapper_dir/awk"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
+        'for argument in "$@"; do' \
+        '    if [[ "${FAKE_STAGE_MV_FAILURE:-}" == relation-sort && "$argument" == */sorted-relations.tsv ]]; then' \
+        '        printf "\033]0;unsafe move title\007\033[31msimulated relation publication failure\033[0m\n" >&2' \
+        '        exit 72' \
+        '    fi' \
+        'done' \
+        'exec "${REAL_MV:?}" "$@"' \
+        > "$wrapper_dir/mv"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
+        'for argument in "$@"; do' \
+        '    if [[ "${FAKE_STAGE_CUT_FAILURE:-}" == ddl && "$argument" == -f2- ]]; then' \
+        '        printf "\033]0;unsafe cut title\007\033[31msimulated DDL rendering failure\033[0m\n" >&2' \
+        '        exit 73' \
+        '    fi' \
+        'done' \
+        'exec "${REAL_CUT:?}" "$@"' \
+        > "$wrapper_dir/cut"
+    chmod +x "$wrapper_dir/awk" "$wrapper_dir/mv" "$wrapper_dir/cut"
+}
+
+run_pipeline_failure_tests() {
+    local wrapper_dir="$TMP/stage-failure-bin"
+    local original_path=$PATH
+
+    REAL_AWK=$(command -v awk)
+    REAL_MV=$(command -v mv)
+    REAL_CUT=$(command -v cut)
+    export REAL_AWK REAL_MV REAL_CUT
+    write_stage_failure_wrappers "$wrapper_dir"
+    PATH="$wrapper_dir:$PATH"
+    export PATH
+    FAKE_MYSQL_FK_MODE=report
+    export FAKE_MYSQL_FK_MODE
+
+    FAKE_STAGE_AWK_FAILURE=physical
+    export FAKE_STAGE_AWK_FAILURE
+    run_case physical_reducer_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 3
+    assert_contains "$OUTPUT" 'Physical relation reduction failed: simulated physical reducer failure'
+    assert_not_contains "$OUTPUT" 'unsafe reducer title'
+    assert_not_contains "$OUTPUT" '[31m'
+
+    FAKE_STAGE_AWK_FAILURE=virtual
+    export FAKE_STAGE_AWK_FAILURE
+    run_case virtual_reducer_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 4
+    assert_contains "$OUTPUT" 'Virtual relation inference failed: simulated virtual reducer failure'
+    assert_contains "$OUTPUT" 'PHYSICAL_FK'
+    assert_not_contains "$OUTPUT" 'COMPLETE_VIRTUAL_FK'
+
+    unset FAKE_STAGE_AWK_FAILURE
+    FAKE_STAGE_MV_FAILURE=relation-sort
+    export FAKE_STAGE_MV_FAILURE
+    run_case relation_sort_publication_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 3
+    assert_contains "$OUTPUT" 'Unable to publish sorted relations: simulated relation publication failure'
+    assert_not_contains "$OUTPUT" 'unsafe move title'
+
+    unset FAKE_STAGE_MV_FAILURE
+    FAKE_STAGE_CUT_FAILURE=ddl
+    export FAKE_STAGE_CUT_FAILURE
+    run_case ddl_render_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 3
+    assert_contains "$OUTPUT" 'Unable to render table DDL: simulated DDL rendering failure'
+    assert_not_contains "$OUTPUT" 'unsafe cut title'
+
+    PATH=$original_path
+    export PATH
+    unset FAKE_STAGE_CUT_FAILURE FAKE_MYSQL_FK_MODE REAL_AWK REAL_MV REAL_CUT
+
+    printf 'PASS: fk_analyzer reducer and workspace failures\n'
 }
 
 run_cardinality_tests() {
@@ -972,6 +1236,44 @@ run_degraded_tests() {
         assert_contains "$query_log" 'fk-analyzer:ddl'
         assert_contains "$query_log" 'fk-analyzer:stats'
     done
+    unset FAKE_MYSQL_FK_MODE
+
+    FAKE_MYSQL_FK_MODE=index-failure-naming
+    export FAKE_MYSQL_FK_MODE
+    run_case degraded_index_metadata -l test -s sales -t purchases --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 4
+    assert_contains "$OUTPUT" 'index metadata access denied'
+    assert_contains "$OUTPUT" 'Unavailable: index metadata unavailable.'
+    assert_not_contains "$OUTPUT" 'COMPLETE_VIRTUAL_FK'
+    assert_not_contains "$OUTPUT" 'PARTIAL_VIRTUAL_FK'
+    assert_not_contains "$OUTPUT" 'UNINDEXED'
+    assert_not_contains "$OUTPUT" 'INDEX_ORDER_MISMATCH'
+
+    FAKE_MYSQL_FK_MODE=physical-failure-naming
+    export FAKE_MYSQL_FK_MODE
+    run_case degraded_physical_precedence -l test -s sales -t purchases --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    assert_status 4
+    assert_contains "$OUTPUT" 'physical metadata access denied'
+    assert_contains "$OUTPUT" 'Unavailable: physical metadata unavailable.'
+    assert_contains "$OUTPUT" 'Unavailable: virtual inference requires physical metadata.'
+    assert_not_contains "$OUTPUT" 'COMPLETE_VIRTUAL_FK'
+    assert_not_contains "$OUTPUT" 'PARTIAL_VIRTUAL_FK'
+
+    FAKE_MYSQL_FK_MODE=physical-failure
+    export FAKE_MYSQL_FK_MODE
+    run_command_tty degraded_diagnostic_color /bin/bash "$SCRIPT" -l test -s sales -t orders \
+        --environment test --mysql-bin "$FAKE_MYSQL"
+    assert_status 4
+    assert_contains "$OUTPUT" $'\033[0;31mDEGRADED:'
+
+    FAKE_MYSQL_FK_MODE=connection-failure
+    export FAKE_MYSQL_FK_MODE
+    run_command_tty fatal_diagnostic_color /bin/bash "$SCRIPT" -l test -s sales -t orders \
+        --environment test --mysql-bin "$FAKE_MYSQL"
+    assert_status 3
+    assert_contains "$OUTPUT" $'\033[0;31mERROR:'
     unset FAKE_MYSQL_FK_MODE
 
     FAKE_MYSQL_FK_MODE=ddl-failure
@@ -1180,6 +1482,80 @@ run_signal_tests() {
     printf 'PASS: fk_analyzer report interruption\n'
 }
 
+run_mysql_signal_case() {
+    local mode=$1
+    local case_name=$2
+    local pid_file="$TMP/${case_name}.mysql.pid"
+    local output_file="$TMP/${case_name}.output.log"
+    local workspace_parent="$TMP/${case_name}.tmp"
+    local analyzer_pid mysql_pid attempt=0 cleanup_attempt=0
+
+    mkdir "$workspace_parent"
+    : > "$FAKE_MYSQL_FK_LOG"
+    : > "$pid_file"
+    FAKE_MYSQL_FK_MODE=$mode
+    FAKE_MYSQL_FK_PID_FILE=$pid_file
+    FAKE_MYSQL_FK_DELAY=30
+    export FAKE_MYSQL_FK_MODE FAKE_MYSQL_FK_PID_FILE FAKE_MYSQL_FK_DELAY
+
+    TMPDIR="$workspace_parent" /bin/bash "$SCRIPT" -l test -s sales -t orders \
+        --environment development --cardinality exact --mysql-bin "$FAKE_MYSQL" --no-color \
+        > "$output_file" 2>&1 &
+    analyzer_pid=$!
+
+    while [[ ! -s "$pid_file" ]]; do
+        if ! kill -0 "$analyzer_pid" 2>/dev/null; then
+            wait "$analyzer_pid" || true
+            fail "analyzer exited before the slow MySQL query boundary: $(<"$output_file")"
+        fi
+        attempt=$((attempt + 1))
+        [[ "$attempt" -lt 200 ]] || fail 'timed out waiting for slow MySQL query'
+        sleep 0.05
+    done
+
+    mysql_pid=$(<"$pid_file")
+    kill -TERM "$analyzer_pid"
+    attempt=0
+    while kill -0 "$analyzer_pid" 2>/dev/null && [[ "$attempt" -lt 60 ]]; do
+        attempt=$((attempt + 1))
+        sleep 0.05
+    done
+    if kill -0 "$analyzer_pid" 2>/dev/null; then
+        kill -KILL "$analyzer_pid" 2>/dev/null || true
+        kill -KILL "$mysql_pid" 2>/dev/null || true
+        wait "$analyzer_pid" 2>/dev/null || true
+        fail "TERM sent only to the analyzer did not stop $mode within three seconds"
+    fi
+
+    set +e
+    wait "$analyzer_pid"
+    STATUS=$?
+    set -e
+    OUTPUT=$(<"$output_file")
+    unset FAKE_MYSQL_FK_MODE FAKE_MYSQL_FK_PID_FILE FAKE_MYSQL_FK_DELAY
+    assert_status 130
+
+    while kill -0 "$mysql_pid" 2>/dev/null && [[ "$cleanup_attempt" -lt 20 ]]; do
+        cleanup_attempt=$((cleanup_attempt + 1))
+        sleep 0.05
+    done
+    if kill -0 "$mysql_pid" 2>/dev/null; then
+        kill -KILL "$mysql_pid" 2>/dev/null || true
+        fail "MySQL client remains alive after analyzer exit: $mysql_pid"
+    fi
+    if find "$workspace_parent" -mindepth 1 -maxdepth 1 -name 'fk-analyzer.*' | LC_ALL=C grep -q .; then
+        fail "temporary analyzer workspace remains after $mode interruption"
+    fi
+    printf 'ok: %s\n' "$case_name"
+}
+
+run_mysql_signal_tests() {
+    run_mysql_signal_case slow-exact mysql_query_term
+    run_mysql_signal_case slow-exact-ignore-term mysql_query_term_escalation
+
+    printf 'PASS: fk_analyzer MySQL query interruption\n'
+}
+
 run_presentation_tests() {
     local width width_case width_input width_expected section_order
     local colored_table no_color_table fixture_snapshot
@@ -1294,6 +1670,8 @@ run_presentation_tests() {
     assert_contains "$OUTPUT" $'\033[0;33mPARTIAL_VIRTUAL_FK'
     assert_contains "$OUTPUT" $'\033[0;35mAMBIGUOUS_VIRTUAL_FK'
     assert_contains "$OUTPUT" $'\033[0;31m'
+    assert_contains "$OUTPUT" $'\033[0;33mtags=UNINDEXED'
+    assert_contains "$OUTPUT" $'\033[0;31mtags=MISSING_COMPONENTS,TYPE_'
     strip_ansi "$OUTPUT"
     extract_table "$STRIPPED_OUTPUT"
     colored_table=$TABLE_OUTPUT
@@ -1329,13 +1707,16 @@ run_coverage_tests() {
     write_presentation_fixture
     printf '%s\n' \
         $'OUTBOUND\tPHYSICAL_FK\tsales\tcomma_child\t(a,b)\tsales\torders\t(id)\tfk_comma\tidx_comma\t\tON UPDATE RESTRICT; ON DELETE CASCADE' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\tnull_child\t(order_id)\tsales\torders\t(id)\tfk_null\tidx_null\t\tON UPDATE RESTRICT; ON DELETE CASCADE' \
         >> "$FIXTURE_FILE"
     printf '%s\n' \
         $'sales\tcomma_child\tidx_comma\t1\t1\ta,b\t555' \
         $'sales\tcomma_child\tidx_comma\t1\t2\textra\t999' \
+        $'sales\tnull_child\tidx_null\t1\t1\torder_id\t\N' \
         >> "$INDEX_FIXTURE_FILE"
     printf '%s\n' \
         $'OUTBOUND\tPHYSICAL_FK\tsales\tcomma_child\t(a,b)\tsales\torders\t(id)\tfk_comma\tidx_comma\t1' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\tnull_child\t(order_id)\tsales\torders\t(id)\tfk_null\tidx_null\t1' \
         >> "$COMPONENT_FIXTURE_FILE"
     fixture_arguments
 
@@ -1346,6 +1727,16 @@ run_coverage_tests() {
     assert_contains "$OUTPUT" '420'
     assert_contains "$OUTPUT" '555'
     assert_not_contains "$OUTPUT" '999'
+    assert_equals "$(printf '%s\n' "$OUTPUT" | LC_ALL=C awk -F '[|]' '
+        /^SUPPORTING INDEX COVERAGE$/ { active = 1; next }
+        active && /^CARDINALITY$/ { active = 0 }
+        active && /idx_null/ {
+            value = $3
+            sub(/^[ ]+/, "", value)
+            sub(/[ ]+$/, "", value)
+            print value
+        }
+    ')" 'unavailable'
     strip_ansi "$OUTPUT"
     assert_coverage_geometry "$STRIPPED_OUTPUT" 160
 
@@ -1408,33 +1799,77 @@ run_tree_tests() {
     printf 'PASS: fk_analyzer semantic tree\n'
 }
 
-if [[ $# -eq 0 ]]; then
+run_all_test_groups() {
+    run_tooling_help_tests
     run_cli_tests
     run_physical_tests
+    run_backslash_scope_tests
     run_ordering_tests
     run_virtual_tests
+    run_schema_scale_tests
     run_presentation_tests
     run_coverage_tests
     run_tree_tests
     run_cardinality_tests
     run_degraded_tests
+    run_pipeline_failure_tests
     run_export_tests
     run_signal_tests
-else
+    run_mysql_signal_tests
+}
+
+run_selected_test_groups() {
+    local test_group
+
     for test_group in "$@"; do
         case "$test_group" in
             cli) run_cli_tests ;;
+            tooling) run_tooling_help_tests ;;
             physical) run_physical_tests ;;
+            scoping) run_backslash_scope_tests ;;
             ordering) run_ordering_tests ;;
             virtual) run_virtual_tests ;;
+            scale) run_schema_scale_tests ;;
             presentation) run_presentation_tests ;;
             coverage) run_coverage_tests ;;
             tree) run_tree_tests ;;
             cardinality) run_cardinality_tests ;;
             degraded) run_degraded_tests ;;
+            failures) run_pipeline_failure_tests ;;
             export) run_export_tests ;;
             signals) run_signal_tests ;;
+            mysql-signals) run_mysql_signal_tests ;;
             *) fail "unknown test group: $test_group" ;;
         esac
     done
-fi
+}
+
+runner_main() {
+    local argument
+    local selected_groups=()
+
+    for argument in "$@"; do
+        [[ "$argument" == --no-color ]] && RUNNER_NO_COLOR=true
+    done
+    for argument in "$@"; do
+        case "$argument" in
+            -h|--help)
+                runner_usage
+                return 0
+                ;;
+            --no-color)
+                ;;
+            *)
+                selected_groups+=("$argument")
+                ;;
+        esac
+    done
+
+    if [[ ${#selected_groups[@]} -eq 0 ]]; then
+        run_all_test_groups
+    else
+        run_selected_test_groups "${selected_groups[@]}"
+    fi
+}
+
+runner_main "$@"

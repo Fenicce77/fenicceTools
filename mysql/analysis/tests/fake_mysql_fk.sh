@@ -5,9 +5,47 @@ set -euo pipefail
 query=""
 mode=${FAKE_MYSQL_FK_MODE:-physical}
 raw_output=false
+HELP_NO_COLOR=false
+HELP_BOLD=""
+HELP_CYAN=""
+HELP_RESET=""
+
+fake_usage() {
+    HELP_BOLD=""
+    HELP_CYAN=""
+    HELP_RESET=""
+    if [[ "$HELP_NO_COLOR" == false && -t 1 && "${TERM:-dumb}" != dumb ]]; then
+        HELP_BOLD=$'\033[1m'
+        HELP_CYAN=$'\033[0;36m'
+        HELP_RESET=$'\033[0m'
+    fi
+    printf '%bDeterministic fake MySQL client%b\n' "${HELP_BOLD}${HELP_CYAN}" "$HELP_RESET"
+    printf '\nUsage:\n'
+    printf '  %s [MYSQL_CLIENT_OPTIONS] -e QUERY\n' "${0##*/}"
+    printf '  %s --help\n' "${0##*/}"
+    printf '\nInternal invocation contract:\n'
+    printf '  This fixture is invoked by fk_analyzer.sh with MySQL batch options.\n'
+    printf '  FAKE_MYSQL_FK_LOG is required for normal query execution.\n'
+    printf '  FAKE_MYSQL_FK_MODE selects a deterministic response or failure fixture.\n'
+    printf '  FAKE_MYSQL_FK_OPTIONS_LOG optionally records raw-output selection.\n'
+    printf '\nExamples:\n'
+    printf '  FAKE_MYSQL_FK_LOG=/tmp/fk.log %s --batch -e "SELECT 1"\n' "${0##*/}"
+    printf '  FAKE_MYSQL_FK_MODE=report FAKE_MYSQL_FK_LOG=/tmp/fk.log %s --batch -e "SELECT /* fk-analyzer:columns */ 1"\n' "${0##*/}"
+}
+
+for argument in "$@"; do
+    [[ "$argument" == --no-color ]] && HELP_NO_COLOR=true
+done
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            fake_usage
+            exit 0
+            ;;
+        --no-color)
+            shift
+            ;;
         -e|--execute)
             [[ $# -ge 2 ]] || exit 64
             query=$2
@@ -64,7 +102,7 @@ case "$mode:$query" in
         printf '\033]0;unsafe title\007\033[31mDDL access denied\033[0m\ninjected line\n' >&2
         exit 1
         ;;
-    metadata-failure:*fk-analyzer:physical*|physical-failure:*fk-analyzer:physical*|report-failure:*fk-analyzer:physical*)
+    metadata-failure:*fk-analyzer:physical*|physical-failure:*fk-analyzer:physical*|physical-failure-naming:*fk-analyzer:physical*|report-failure:*fk-analyzer:physical*)
         printf '\033]0;unsafe title\007\033[31mphysical metadata access denied\033[0m\ninjected line\n' >&2
         exit 1
         ;;
@@ -76,6 +114,20 @@ case "$mode:$query" in
         printf '\033]0;unsafe title\007\033[31mstatistics access denied\033[0m\ninjected line\n' >&2
         exit 1
         ;;
+    index-failure-naming:*fk-analyzer:indexes*)
+        printf '\033]0;unsafe title\007\033[31mindex metadata access denied\033[0m\ninjected line\n' >&2
+        exit 1
+        ;;
+esac
+
+case "$mode:$query" in
+    slow-exact:*fk-analyzer:exact*|slow-exact-ignore-term:*fk-analyzer:exact*)
+        printf '%s\n' "$$" > "${FAKE_MYSQL_FK_PID_FILE:?}"
+        if [[ "$mode" == slow-exact-ignore-term ]]; then
+            trap '' TERM
+        fi
+        exec sleep "${FAKE_MYSQL_FK_DELAY:-30}"
+        ;;
 esac
 
 case "$query" in
@@ -84,7 +136,11 @@ case "$query" in
         ;;
     *"fk-analyzer:target"*)
         if [[ "$mode" != "target-missing" ]]; then
-            printf 'orders\tInnoDB\n'
+            case "$mode" in
+                table-backslash) printf '%s\tInnoDB\n' 'orders\\archive' ;;
+                schema-scale) printf 'probe\tInnoDB\n' ;;
+                *) printf 'orders\tInnoDB\n' ;;
+            esac
         fi
         ;;
     *"fk-analyzer:ddl"*)
@@ -129,7 +185,7 @@ case "$query" in
                 printf 'sales\tline_items\torder_id\t2\tbigint unsigned\t\t\n'
                 printf 'sales\tline_items\tline_id\t3\tbigint unsigned\t\t\n'
                 ;;
-            naming)
+            naming|index-failure-naming|physical-failure-naming)
                 printf 'sales\taddresses\tcode\t1\tvarchar(2)\tutf8mb4\tutf8mb4_unicode_ci\n'
                 printf 'sales\taddresses\tcountries_code\t2\tvarchar(2)\tutf8mb4\tutf8mb4_unicode_ci\n'
                 printf 'sales\tcountries\tcode\t1\tvarchar(2)\tutf8mb4\tutf8mb4_unicode_ci\n'
@@ -139,6 +195,21 @@ case "$query" in
                 printf 'sales\tpurchases\tcustomers_id\t1\tbigint unsigned\t\t\n'
                 printf 'sales\tsettlements\tcustomers_id\t1\tbigint unsigned\t\t\n'
                 printf 'sales\tsource\tid\t1\tbigint unsigned\t\t\n'
+                ;;
+            schema-backslash)
+                printf '%s\taudit_orders\torders_id\t1\tbigint unsigned\t\t\n' 'sales\\archive'
+                printf '%s\torders\tid\t1\tbigint unsigned\t\t\n' 'sales\\archive'
+                printf '%s\torders\tcustomer_id\t2\tbigint unsigned\t\t\n' 'sales\\archive'
+                printf '%s\tshipment_items\torder_id\t1\tbigint unsigned\t\t\n' 'sales\\archive'
+                ;;
+            table-backslash)
+                printf '%s\t%s\t%s\t1\tbigint unsigned\t\t\n' 'sales' 'audit_orders' 'orders\\archive_id'
+                printf '%s\t%s\tid\t1\tbigint unsigned\t\t\n' 'sales' 'orders\\archive'
+                printf '%s\t%s\tcustomer_id\t2\tbigint unsigned\t\t\n' 'sales' 'orders\\archive'
+                printf '%s\tshipment_items\torder_id\t1\tbigint unsigned\t\t\n' 'sales'
+                ;;
+            schema-scale)
+                printf 'sales\tprobe\tunrelated_id\t1\tbigint unsigned\t\t\n'
                 ;;
             ambiguity)
                 printf 'sales\tcurrencies\tcode\t1\tvarchar(3)\tutf8mb4\tutf8mb4_unicode_ci\n'
@@ -170,10 +241,23 @@ case "$query" in
                 printf 'sales\tline_items\torder_id\t2\n'
                 printf 'sales\tline_items\tline_id\t3\n'
                 ;;
-            naming)
+            naming|index-failure-naming|physical-failure-naming)
                 printf 'sales\tcountries\tcode\t1\n'
                 printf 'sales\tcurrencies\tcode\t1\n'
                 printf 'sales\tcustomers\tid\t1\n'
+                ;;
+            schema-backslash)
+                printf '%s\torders\tid\t1\n' 'sales\\archive'
+                ;;
+            table-backslash)
+                printf '%s\t%s\tid\t1\n' 'sales' 'orders\\archive'
+                ;;
+            schema-scale)
+                counter=1
+                while [[ "$counter" -le "${FAKE_MYSQL_FK_SCALE:-8000}" ]]; do
+                    printf 'sales\ttable_%05d\tid\t1\n' "$counter"
+                    counter=$((counter + 1))
+                done
                 ;;
             ambiguity)
                 printf 'sales\tcurrencies\tcode\t1\n'
@@ -198,8 +282,16 @@ case "$query" in
                 fi
                 printf 'fk_items_order\tsales\tshipment_items\torder_id\tsales\torders\tid\t1\tRESTRICT\tCASCADE\n'
                 ;;
-            naming)
+            naming|index-failure-naming)
                 printf 'fk_settlements_customer\tsales\tsettlements\tcustomers_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE\n'
+                ;;
+            schema-backslash)
+                printf 'fk_orders_customer\t%s\torders\tcustomer_id\t%s\tcustomers\tid\t1\tRESTRICT\tCASCADE\n' 'sales\\archive' 'sales\\archive'
+                printf 'fk_items_order\t%s\tshipment_items\torder_id\t%s\torders\tid\t1\tRESTRICT\tCASCADE\n' 'sales\\archive' 'sales\\archive'
+                ;;
+            table-backslash)
+                printf 'fk_orders_customer\tsales\t%s\tcustomer_id\tsales\tcustomers\tid\t1\tRESTRICT\tCASCADE\n' 'orders\\archive'
+                printf 'fk_items_order\tsales\tshipment_items\torder_id\tsales\t%s\tid\t1\tRESTRICT\tCASCADE\n' 'orders\\archive'
                 ;;
             composite|composite-direct|gapped|ambiguity)
                 ;;
@@ -244,7 +336,7 @@ case "$query" in
                 printf 'sales\tline_items\tPRIMARY\t0\t2\torder_id\t42\n'
                 printf 'sales\tline_items\tPRIMARY\t0\t3\tline_id\t42\n'
                 ;;
-            naming)
+            naming|physical-failure-naming)
                 printf 'sales\taddresses\tidx_addresses_code\t1\t1\tcode\t42\n'
                 printf 'sales\taddresses\tidx_addresses_countries_code\t1\t1\tcountries_code\t42\n'
                 printf 'sales\tcountries\tPRIMARY\t0\t1\tcode\t42\n'
@@ -253,6 +345,25 @@ case "$query" in
                 printf 'sales\tlocalized_addresses\tidx_localized_country\t1\t1\tcountries_code\t42\n'
                 printf 'sales\tpurchases\tidx_purchases_customer\t1\t1\tcustomers_id\t42\n'
                 printf 'sales\tsettlements\tidx_settlements_customer\t1\t1\tcustomers_id\t42\n'
+                ;;
+            schema-backslash)
+                printf '%s\taudit_orders\tidx_audit_orders_fk\t1\t1\torders_id\t42\n' 'sales\\archive'
+                printf '%s\torders\tPRIMARY\t0\t1\tid\t42\n' 'sales\\archive'
+                printf '%s\torders\tidx_orders_customer\t1\t1\tcustomer_id\t42\n' 'sales\\archive'
+                printf '%s\tshipment_items\tidx_shipment_items_order\t1\t1\torder_id\t42\n' 'sales\\archive'
+                ;;
+            table-backslash)
+                printf '%s\taudit_orders\tidx_audit_orders_fk\t1\t1\t%s\t42\n' 'sales' 'orders\\archive_id'
+                printf '%s\t%s\tPRIMARY\t0\t1\tid\t42\n' 'sales' 'orders\\archive'
+                printf '%s\t%s\tidx_orders_customer\t1\t1\tcustomer_id\t42\n' 'sales' 'orders\\archive'
+                printf 'sales\tshipment_items\tidx_shipment_items_order\t1\t1\torder_id\t42\n'
+                ;;
+            schema-scale)
+                counter=1
+                while [[ "$counter" -le "${FAKE_MYSQL_FK_SCALE:-8000}" ]]; do
+                    printf 'sales\ttable_%05d\tPRIMARY\t0\t1\tid\t1\n' "$counter"
+                    counter=$((counter + 1))
+                done
                 ;;
             ambiguity)
                 printf 'sales\tcurrencies\tPRIMARY\t0\t1\tcode\t42\n'

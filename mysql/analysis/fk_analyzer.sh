@@ -18,9 +18,11 @@ FINAL_STATUS=0
 REPORT_ELIGIBLE=true
 PHYSICAL_AVAILABLE=true
 VIRTUAL_METADATA_AVAILABLE=true
+INDEX_METADATA_AVAILABLE=true
 STATS_AVAILABLE=true
 EXACT_AVAILABLE=false
 ACTIVE_CHILD_PID=""
+PENDING_SIGNAL_STATUS=0
 
 LOGIN_PATH=""
 SCHEMA_NAME=""
@@ -53,7 +55,7 @@ cli_error() {
 runtime_error() {
     local status=$1
     shift
-    printf 'ERROR: %s\n' "$*" >&2
+    printf '%sERROR:%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$*" >&2
     exit "$status"
 }
 
@@ -69,7 +71,7 @@ setup_colors() {
     COLOR_DIM_CYAN=""
     COLOR_DIM=""
     COLOR_RESET=""
-    if [[ "$NO_COLOR" == false && -t 1 && "${TERM:-}" != "dumb" ]]; then
+    if [[ "$NO_COLOR" == false && -t 1 && "${TERM:-dumb}" != "dumb" ]]; then
         COLOR_BOLD=$'\033[1m'
         COLOR_CYAN=$'\033[0;36m'
         COLOR_GREEN=$'\033[0;32m'
@@ -516,9 +518,12 @@ color_relation_detail_names() {
     local constraint_name=$4
     local supporting_index=$5
     local details_color=$6
+    local status_tags=$7
+    local tag_color=$8
 
-    COLORED_RELATION_DETAILS=$(printf '%s\034%s\034%s\034%s\034%s\034%s\n' \
-        "$line_details" "$details" "$line_offset" "$constraint_name" "$supporting_index" "$details_color" | \
+    COLORED_RELATION_DETAILS=$(printf '%s\034%s\034%s\034%s\034%s\034%s\034%s\034%s\n' \
+        "$line_details" "$details" "$line_offset" "$constraint_name" "$supporting_index" \
+        "$details_color" "$status_tags" "$tag_color" | \
         LC_ALL=C awk -F $'\034' \
         -v blue="$COLOR_BLUE" \
         -v reset="$COLOR_RESET" '
@@ -527,13 +532,13 @@ color_relation_detail_names() {
             position = index(details, marker name)
             return position == 0 ? 0 : position + length(marker)
         }
-        function print_segment(value, start, segment_length, line_start, line_end,
+        function print_segment(value, start, segment_length, line_start, line_end, segment_color,
                                overlap_start, overlap_end, cursor) {
             overlap_start = (start > line_start ? start : line_start)
             overlap_end = (start + segment_length - 1 < line_end ? start + segment_length - 1 : line_end)
             if (overlap_start > overlap_end) return line_start
             cursor = overlap_start - line_start + 1
-            printf "%s%s%s%s", blue, substr(value, cursor, overlap_end - overlap_start + 1), reset, resume
+            printf "%s%s%s%s", segment_color, substr(value, cursor, overlap_end - overlap_start + 1), reset, resume
             return overlap_end + 1
         }
         {
@@ -543,28 +548,48 @@ color_relation_detail_names() {
             constraint_name = $4
             supporting_index = $5
             resume = $6
+            status_tags = $7
+            tag_color = $8
             line_end = line_start + length(value) - 1
             constraint_start = segment_start("constraint=", constraint_name)
             index_start = segment_start("index=", supporting_index)
+            tag_start = (status_tags == "" ? 0 : index(details, "tags=" status_tags))
             cursor = line_start
-            for (segment = 1; segment <= 2; segment++) {
-                if (constraint_start != 0 &&
-                    (index_start == 0 || constraint_start < index_start)) {
+            for (segment = 1; segment <= 3; segment++) {
+                start = 0
+                if (constraint_start != 0) {
                     start = constraint_start
                     name_length = length(constraint_name)
-                    constraint_start = 0
-                } else if (index_start != 0) {
+                    segment_color = blue
+                    segment_kind = 1
+                }
+                if (index_start != 0 && (start == 0 || index_start < start)) {
                     start = index_start
                     name_length = length(supporting_index)
+                    segment_color = blue
+                    segment_kind = 2
+                }
+                if (tag_start != 0 && (start == 0 || tag_start < start)) {
+                    start = tag_start
+                    name_length = length("tags=") + length(status_tags)
+                    segment_color = tag_color
+                    segment_kind = 3
+                }
+                if (start == 0) {
+                    break
+                }
+                if (segment_kind == 1) {
+                    constraint_start = 0
+                } else if (segment_kind == 2) {
                     index_start = 0
                 } else {
-                    break
+                    tag_start = 0
                 }
                 overlap_start = (start > line_start ? start : line_start)
                 overlap_end = (start + name_length - 1 < line_end ? start + name_length - 1 : line_end)
                 if (overlap_start <= overlap_end) {
                     printf "%s", substr(value, cursor - line_start + 1, overlap_start - cursor)
-                    cursor = print_segment(value, start, name_length, line_start, line_end)
+                    cursor = print_segment(value, start, name_length, line_start, line_end, segment_color)
                 }
             }
             printf "%s", substr(value, cursor - line_start + 1)
@@ -679,13 +704,15 @@ render_relation_section() {
         if [[ "$status_tags" == *MISMATCH* || "$status_tags" == *MISSING_COMPONENTS* ||
               "$status_tags" == *ERROR* ]]; then
             details_color=$COLOR_RED
+        elif [[ "$status_tags" == *UNINDEXED* ]]; then
+            details_color=$COLOR_YELLOW
         fi
         wrap_relation_fields "$source_value" "$target_value" "$RELATION_DETAILS" \
             "$SOURCE_WIDTH" "$TARGET_WIDTH" "$DETAILS_WIDTH"
         continuation=false
         while IFS="$relation_field_separator" read -r line_source line_target line_details line_details_offset; do
             color_relation_detail_names "$line_details" "$line_details_offset" "$RELATION_DETAILS" \
-                "$constraint_name" "$supporting_index" "$details_color"
+                "$constraint_name" "$supporting_index" "$details_color" "$status_tags" "$details_color"
             if [[ "$continuation" == false ]]; then
                 render_relation_line "$direction" "$classification" "$line_source" "$line_target" \
                     "$RELATION_STATUS" "$line_details" "$COLOR_CYAN" "$FIELD_COLOR" \
@@ -705,6 +732,14 @@ EOF
     printf '\n'
 }
 
+render_unavailable_relation_section() {
+    local section_title=$1
+    local reason=$2
+
+    printf '%s\n' "$section_title"
+    printf '%sUnavailable:%s %s\n\n' "$COLOR_RED" "$COLOR_RESET" "$reason"
+}
+
 render_index_coverage() {
     local relations_file=$1
     local component_file="$WORK_DIR/relation-component-counts.tsv"
@@ -715,12 +750,17 @@ render_index_coverage() {
     local found=false
     local coverage_budget coverage_source_width coverage_index_width coverage_cardinality_width
 
+    printf 'SUPPORTING INDEX COVERAGE\n'
+    if [[ "$INDEX_METADATA_AVAILABLE" == false ]]; then
+        printf '%sUnavailable:%s index metadata unavailable.\n\n' "$COLOR_RED" "$COLOR_RESET"
+        return 0
+    fi
+
     coverage_budget=$((TERMINAL_WIDTH - 6))
     coverage_source_width=$((coverage_budget / 2))
     coverage_index_width=$((coverage_budget / 3))
     coverage_cardinality_width=$((coverage_budget - coverage_source_width - coverage_index_width))
 
-    printf 'SUPPORTING INDEX COVERAGE\n'
     repeat_table_character "$coverage_source_width" '-'
     separator_line=$REPEATED_TABLE_CHARACTER
     repeat_table_character "$coverage_index_width" '-'
@@ -764,7 +804,7 @@ EOF
             next
         }
         {
-            cardinality[$1 SUBSEP $2 SUBSEP $3 SUBSEP $5] = $7
+            cardinality[$1 SUBSEP $2 SUBSEP $3 SUBSEP $5] = ($7 == "\\N" ? "unavailable" : $7)
         }
         END {
             for (key in source) {
@@ -788,10 +828,36 @@ render_relation_tables() {
     local relations_file=$1
 
     calculate_relation_widths
-    render_relation_section "$relations_file" 'PHYSICAL OUTBOUND' physical_outbound
-    render_relation_section "$relations_file" 'PHYSICAL INBOUND' physical_inbound
-    render_relation_section "$relations_file" 'COMPLETE VIRTUAL RELATIONSHIPS' complete_virtual
-    render_relation_section "$relations_file" 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' partial_ambiguous_virtual
+    if [[ "$PHYSICAL_AVAILABLE" == true ]]; then
+        render_relation_section "$relations_file" 'PHYSICAL OUTBOUND' physical_outbound
+        render_relation_section "$relations_file" 'PHYSICAL INBOUND' physical_inbound
+    else
+        render_unavailable_relation_section 'PHYSICAL OUTBOUND' 'physical metadata unavailable.'
+        render_unavailable_relation_section 'PHYSICAL INBOUND' 'physical metadata unavailable.'
+    fi
+
+    if [[ "$PHYSICAL_ONLY" == true ]]; then
+        render_relation_section "$relations_file" 'COMPLETE VIRTUAL RELATIONSHIPS' complete_virtual
+        render_relation_section "$relations_file" 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' partial_ambiguous_virtual
+    elif [[ "$PHYSICAL_AVAILABLE" == false ]]; then
+        render_unavailable_relation_section 'COMPLETE VIRTUAL RELATIONSHIPS' \
+            'virtual inference requires physical metadata.'
+        render_unavailable_relation_section 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' \
+            'virtual inference requires physical metadata.'
+    elif [[ "$VIRTUAL_METADATA_AVAILABLE" == false ]]; then
+        render_unavailable_relation_section 'COMPLETE VIRTUAL RELATIONSHIPS' \
+            'virtual metadata unavailable.'
+        render_unavailable_relation_section 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' \
+            'virtual metadata unavailable.'
+    elif [[ "$INDEX_METADATA_AVAILABLE" == false ]]; then
+        render_unavailable_relation_section 'COMPLETE VIRTUAL RELATIONSHIPS' \
+            'index metadata unavailable.'
+        render_unavailable_relation_section 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' \
+            'index metadata unavailable.'
+    else
+        render_relation_section "$relations_file" 'COMPLETE VIRTUAL RELATIONSHIPS' complete_virtual
+        render_relation_section "$relations_file" 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' partial_ambiguous_virtual
+    fi
     render_index_coverage "$relations_file"
 }
 
@@ -937,6 +1003,13 @@ quote_identifier() {
     printf '`%s`' "$identifier"
 }
 
+mysql_batch_escape() {
+    local value=$1
+
+    value=${value//\\/\\\\}
+    printf '%s' "$value"
+}
+
 cleanup() {
     local workspace_prefix="${TMPDIR:-/tmp}/fk-analyzer."
 
@@ -956,11 +1029,30 @@ cleanup() {
 
 terminate_active_child() {
     local child_pid=${ACTIVE_CHILD_PID:-}
+    local attempt=0
 
     [[ -n "$child_pid" ]] || return 0
     kill -TERM "$child_pid" 2>/dev/null || true
+    while tracked_child_is_running "$child_pid" && [[ "$attempt" -lt 10 ]]; do
+        attempt=$((attempt + 1))
+        sleep 0.05
+    done
+    if tracked_child_is_running "$child_pid"; then
+        kill -KILL "$child_pid" 2>/dev/null || true
+    fi
     wait "$child_pid" 2>/dev/null || true
     ACTIVE_CHILD_PID=""
+}
+
+tracked_child_is_running() {
+    local child_pid=$1
+    local running_pids
+
+    running_pids=$(jobs -pr)
+    case $'\n'"$running_pids"$'\n' in
+        *$'\n'"$child_pid"$'\n'*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 handle_signal() {
@@ -993,43 +1085,69 @@ resolve_mysql_bin() {
     MYSQL_BIN=$candidate
 }
 
+prepare_tracked_child_start() {
+    PENDING_SIGNAL_STATUS=0
+    trap 'PENDING_SIGNAL_STATUS=129' HUP
+    trap 'PENDING_SIGNAL_STATUS=130' INT TERM
+}
+
+finish_tracked_child_start() {
+    trap 'handle_signal 129' HUP
+    trap 'handle_signal 130' INT TERM
+    if [[ "$PENDING_SIGNAL_STATUS" -ne 0 ]]; then
+        handle_signal "$PENDING_SIGNAL_STATUS"
+    fi
+}
+
 run_mysql_query() {
     local query=$1
 
-    "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names -e "$query"
+    prepare_tracked_child_start
+    "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names -e "$query" &
+    ACTIVE_CHILD_PID=$!
+    finish_tracked_child_start
+    wait_for_active_child
 }
 
 run_mysql_raw_query() {
     local query=$1
 
-    "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names --raw -e "$query"
+    prepare_tracked_child_start
+    "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names --raw -e "$query" &
+    ACTIVE_CHILD_PID=$!
+    finish_tracked_child_start
+    wait_for_active_child
 }
 
 sanitize_stderr() {
     local stderr_file=$1
     local message
 
-    message=$(LC_ALL=C tr '\r\n' '  ' < "$stderr_file" | LC_ALL=C tr -d '[:cntrl:]')
+    message=$(LC_ALL=C sed $'s/\033\\][^\007]*\007//g; s/\033\\][^\033]*\033\\\\//g; s/\033\\[[0-?]*[ -\\/]*[@-~]//g' \
+        "$stderr_file" | LC_ALL=C tr '\r\n' '  ' | LC_ALL=C tr -d '[:cntrl:]')
     message=${message:0:240}
     printf '%s' "$message"
 }
 
 connection_preflight() {
     local stderr_file="$WORK_DIR/connection.stderr"
+    local output_file="$WORK_DIR/connection.tsv"
     local result
     local diagnostic
     local query='SELECT /* fk-analyzer:connection */ VERSION(), @@innodb_buffer_pool_size;'
 
-    if ! result=$(run_mysql_query "$query" 2> "$stderr_file"); then
+    if ! run_mysql_query "$query" > "$output_file" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
         runtime_error 3 "MySQL connection preflight failed: $diagnostic"
     fi
+    result=$(<"$output_file")
     [[ -n "$result" ]] || runtime_error 3 'MySQL connection preflight returned no data.'
 }
 
 target_preflight() {
     local stderr_file="$WORK_DIR/target.stderr"
+    local output_file="$WORK_DIR/target.tsv"
     local result
     local diagnostic
     local schema_literal
@@ -1047,11 +1165,12 @@ WHERE TABLE_SCHEMA = ${schema_literal}
   AND TABLE_NAME = ${table_literal}
   AND TABLE_TYPE = 0x42415345205441424C45;"
 
-    if ! result=$(run_mysql_query "$query" 2> "$stderr_file"); then
+    if ! run_mysql_query "$query" > "$output_file" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the MySQL client'
         runtime_error 3 "MySQL target preflight failed: $diagnostic"
     fi
+    result=$(<"$output_file")
     [[ -n "$result" && "$result" != *$'\n'* ]] || runtime_error 3 'Target table preflight did not find exactly one base table.'
     IFS=$'\t' read -r target_table target_engine extra <<< "$result"
     [[ -n "$target_table" && -n "$target_engine" && -z "$extra" ]] || runtime_error 3 'Target table preflight did not find exactly one base table.'
@@ -1061,7 +1180,7 @@ WHERE TABLE_SCHEMA = ${schema_literal}
 mark_degraded() {
     local message=$1
 
-    printf 'DEGRADED: %s\n' "$message" >&2
+    printf '%sDEGRADED:%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$message" >&2
     if [[ "$FINAL_STATUS" -eq 0 ]]; then
         FINAL_STATUS=4
     fi
@@ -1161,7 +1280,9 @@ ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;"
 FROM information_schema.STATISTICS
 WHERE TABLE_SCHEMA = ${schema_literal}
 ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;"
-    run_optional_query indexes "$query" "$WORK_DIR/indexes.tsv" || true
+    if ! run_optional_query indexes "$query" "$WORK_DIR/indexes.tsv"; then
+        INDEX_METADATA_AVAILABLE=false
+    fi
 
     query="SELECT /* fk-analyzer:stats */ COALESCE(TABLE_ROWS, 0)
 FROM information_schema.TABLES
@@ -1190,6 +1311,10 @@ build_physical_relations() {
     local physical_file="$WORK_DIR/physical-components.tsv"
     local indexes_file="$WORK_DIR/indexes.tsv"
     local component_file="$WORK_DIR/relation-component-counts.tsv"
+    local stderr_file="$WORK_DIR/physical-reducer.stderr"
+    local diagnostic
+    local selected_schema
+    local selected_table
 
     : > "$component_file"
 
@@ -1198,8 +1323,16 @@ build_physical_relations() {
         return 0
     fi
 
-    awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" -v component_file="$component_file" \
-        -v selected_schema="$SCHEMA_NAME" -v selected_table="$TABLE_NAME" '
+    selected_schema=$(mysql_batch_escape "$SCHEMA_NAME")
+    selected_table=$(mysql_batch_escape "$TABLE_NAME")
+    if ! FK_ANALYZER_SELECTED_SCHEMA="$selected_schema" \
+        FK_ANALYZER_SELECTED_TABLE="$selected_table" \
+        awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" -v component_file="$component_file" \
+        -v index_metadata_available="$INDEX_METADATA_AVAILABLE" '
+        BEGIN {
+            selected_schema = ENVIRON["FK_ANALYZER_SELECTED_SCHEMA"]
+            selected_table = ENVIRON["FK_ANALYZER_SELECTED_TABLE"]
+        }
         FILENAME == physical_file {
             if (!(($2 == selected_schema && $3 == selected_table) ||
                   ($5 == selected_schema && $6 == selected_table))) {
@@ -1249,26 +1382,28 @@ build_physical_relations() {
                 target_tuple = target_tuple ")"
 
                 supporting_index = ""
-                for (index_number = 1; index_number <= index_count; index_number++) {
-                    index_key = index_order[index_number]
-                    split(index_key, index_parts, SUBSEP)
-                    if (index_parts[1] != source_schema[key] || index_parts[2] != source_table[key]) {
-                        continue
-                    }
-                    matches = 1
-                    for (ordinal = 1; ordinal <= ordinal_max[key]; ordinal++) {
-                        if (index_column[index_key, ordinal] != source_column[key, ordinal]) {
-                            matches = 0
+                if (index_metadata_available == "true") {
+                    for (index_number = 1; index_number <= index_count; index_number++) {
+                        index_key = index_order[index_number]
+                        split(index_key, index_parts, SUBSEP)
+                        if (index_parts[1] != source_schema[key] || index_parts[2] != source_table[key]) {
+                            continue
+                        }
+                        matches = 1
+                        for (ordinal = 1; ordinal <= ordinal_max[key]; ordinal++) {
+                            if (index_column[index_key, ordinal] != source_column[key, ordinal]) {
+                                matches = 0
+                                break
+                            }
+                        }
+                        if (matches) {
+                            supporting_index = index_parts[3]
                             break
                         }
                     }
-                    if (matches) {
-                        supporting_index = index_parts[3]
-                        break
-                    }
                 }
 
-                status_tags = (supporting_index == "" ? "UNINDEXED" : "")
+                status_tags = (index_metadata_available == "true" && supporting_index == "" ? "UNINDEXED" : "")
                 direction = (source_schema[key] == selected_schema && source_table[key] == selected_table ? "OUTBOUND" : "INBOUND")
                 details = "ON UPDATE " update_rule[key] "; ON DELETE " delete_rule[key]
                 print direction, "PHYSICAL_FK", source_schema[key], source_table[key], source_tuple,
@@ -1279,26 +1414,42 @@ build_physical_relations() {
                     supporting_index, ordinal_max[key] > component_file
             }
         }
-    ' "$physical_file" "$indexes_file" > "$WORK_DIR/relations.tsv"
+    ' "$physical_file" "$indexes_file" > "$WORK_DIR/relations.tsv" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the reducer'
+        runtime_error 3 "Physical relation reduction failed: $diagnostic"
+    fi
 }
 
 sort_relations() {
     local relations_file="$WORK_DIR/relations.tsv"
     local sorted_file="$WORK_DIR/sorted-relations.tsv"
+    local stderr_file="$WORK_DIR/relation-sort.stderr"
+    local diagnostic
 
     [[ -f "$relations_file" ]] || return 0
-    LC_ALL=C awk -F '\t' -v OFS='\t' '
-        {
-            direction_rank = ($1 == "OUTBOUND" ? 1 : 2)
-            if ($2 == "PHYSICAL_FK") classification_rank = 1
-            else if ($2 == "COMPLETE_VIRTUAL_FK") classification_rank = 2
-            else if ($2 == "PARTIAL_VIRTUAL_FK") classification_rank = 3
-            else classification_rank = 4
-            print direction_rank, classification_rank, $3, $4, $9, $0
-        }
-    ' "$relations_file" | LC_ALL=C sort -t $'\t' -k1,1n -k2,2n -k3,3 -k4,4 -k5,5 | \
-        LC_ALL=C cut -f6- > "$sorted_file"
-    mv "$sorted_file" "$relations_file"
+    if ! {
+        LC_ALL=C awk -F '\t' -v OFS='\t' '
+            {
+                direction_rank = ($1 == "OUTBOUND" ? 1 : 2)
+                if ($2 == "PHYSICAL_FK") classification_rank = 1
+                else if ($2 == "COMPLETE_VIRTUAL_FK") classification_rank = 2
+                else if ($2 == "PARTIAL_VIRTUAL_FK") classification_rank = 3
+                else classification_rank = 4
+                print direction_rank, classification_rank, $3, $4, $9, $0
+            }
+        ' "$relations_file" | LC_ALL=C sort -t $'\t' -k1,1n -k2,2n -k3,3 -k4,4 -k5,5 | \
+            LC_ALL=C cut -f6- > "$sorted_file"
+    } 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the sorting pipeline'
+        runtime_error 3 "Relation sorting failed: $diagnostic"
+    fi
+    if ! mv "$sorted_file" "$relations_file" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the move utility'
+        runtime_error 3 "Unable to publish sorted relations: $diagnostic"
+    fi
 }
 
 build_virtual_relations() {
@@ -1311,22 +1462,33 @@ build_virtual_relations() {
     local virtual_component_file="$WORK_DIR/virtual-relation-component-counts.tsv"
     local combined_file="$WORK_DIR/combined-relations.tsv"
     local combined_component_file="$WORK_DIR/combined-relation-component-counts.tsv"
+    local stderr_file="$WORK_DIR/virtual-reducer.stderr"
+    local diagnostic
+    local selected_schema
+    local selected_table
 
-    if [[ "$PHYSICAL_ONLY" == true || "$VIRTUAL_METADATA_AVAILABLE" == false ]]; then
+    if [[ "$PHYSICAL_ONLY" == true || "$VIRTUAL_METADATA_AVAILABLE" == false ||
+          "$PHYSICAL_AVAILABLE" == false || "$INDEX_METADATA_AVAILABLE" == false ]]; then
         sort_relations
         return 0
     fi
 
     : > "$virtual_component_file"
+    selected_schema=$(mysql_batch_escape "$SCHEMA_NAME")
+    selected_table=$(mysql_batch_escape "$TABLE_NAME")
 
-    LC_ALL=C awk -F '\t' -v OFS='\t' \
+    if ! FK_ANALYZER_SELECTED_SCHEMA="$selected_schema" \
+        FK_ANALYZER_SELECTED_TABLE="$selected_table" \
+        LC_ALL=C awk -F '\t' -v OFS='\t' \
         -v columns_file="$columns_file" \
         -v pks_file="$pks_file" \
         -v indexes_file="$indexes_file" \
         -v relations_file="$relations_file" \
-        -v component_file="$virtual_component_file" \
-        -v selected_schema="$SCHEMA_NAME" \
-        -v selected_table="$TABLE_NAME" '
+        -v component_file="$virtual_component_file" '
+        BEGIN {
+            selected_schema = ENVIRON["FK_ANALYZER_SELECTED_SCHEMA"]
+            selected_table = ENVIRON["FK_ANALYZER_SELECTED_TABLE"]
+        }
         function sort_list(values, count, left, right, temporary) {
             for (left = 1; left <= count; left++) {
                 for (right = left + 1; right <= count; right++) {
@@ -1635,11 +1797,6 @@ build_virtual_relations() {
             next
         }
         END {
-            sort_list(source_tables, source_table_count)
-            sort_list(target_tables, target_table_count)
-            sort_list(first_pk_names, first_pk_count)
-            sort_list(sorted_indexes, index_count)
-
             for (source_number = 1; source_number <= source_table_count; source_number++) {
                 source_key = source_tables[source_number]
                 split(source_key, source_parts, SUBSEP)
@@ -1695,18 +1852,55 @@ build_virtual_relations() {
                 }
             }
         }
-    ' "$columns_file" "$pks_file" "$indexes_file" "$relations_file" > "$virtual_file"
+    ' "$columns_file" "$pks_file" "$indexes_file" "$relations_file" > "$virtual_file" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the reducer'
+        mark_degraded "Virtual relation inference failed: $diagnostic"
+        sort_relations
+        return 0
+    fi
 
-    cat "$relations_file" "$virtual_file" > "$combined_file"
-    mv "$combined_file" "$relations_file"
-    cat "$component_file" "$virtual_component_file" > "$combined_component_file"
-    mv "$combined_component_file" "$component_file"
+    if ! cat "$relations_file" "$virtual_file" > "$combined_file" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the combination utility'
+        mark_degraded "Virtual relation combination failed: $diagnostic"
+        sort_relations
+        return 0
+    fi
+    if ! cat "$component_file" "$virtual_component_file" > "$combined_component_file" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the combination utility'
+        mark_degraded "Virtual component combination failed: $diagnostic"
+        sort_relations
+        return 0
+    fi
+    if ! mv "$combined_component_file" "$component_file" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the move utility'
+        mark_degraded "Virtual component publication failed: $diagnostic"
+        sort_relations
+        return 0
+    fi
+    if ! mv "$combined_file" "$relations_file" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the move utility'
+        mark_degraded "Virtual relation publication failed: $diagnostic"
+        sort_relations
+        return 0
+    fi
     sort_relations
 }
 
 render_ddl() {
+    local stderr_file="$WORK_DIR/ddl-render.stderr"
+    local diagnostic
+
     printf 'TABLE DDL\n'
-    LC_ALL=C cut -f2- "$WORK_DIR/ddl.tsv"
+    if ! LC_ALL=C cut -f2- "$WORK_DIR/ddl.tsv" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the cut utility'
+        runtime_error 3 "Unable to render table DDL: $diagnostic"
+    fi
     printf '\n'
 }
 
@@ -1787,6 +1981,7 @@ resolve_output_format() {
 wait_for_active_child() {
     local child_status
 
+    [[ -n "$ACTIVE_CHILD_PID" ]] || return 0
     if wait "$ACTIVE_CHILD_PID"; then
         ACTIVE_CHILD_PID=""
         return 0
@@ -1810,6 +2005,7 @@ publish_report() {
         csv)
             printf '%s\n' 'Direction,Classification,Source_Schema,Source_Table,Source_Columns,Target_Schema,Target_Table,Target_Columns,Constraint_Name,Supporting_Index,Status_Tags,Details' \
                 > "$EXPORT_TEMP" || runtime_error 3 'Unable to write the CSV report header.'
+            prepare_tracked_child_start
             LC_ALL=C awk -F '\t' -v report_conversion=csv '
                 function quote_csv(value) {
                     gsub(/"/, "\"\"", value)
@@ -1824,6 +2020,7 @@ publish_report() {
                 }
             ' "$WORK_DIR/relations.tsv" >> "$EXPORT_TEMP" &
             ACTIVE_CHILD_PID=$!
+            finish_tracked_child_start
             if ! wait_for_active_child; then
                 runtime_error 3 'Unable to convert the report to CSV.'
             fi
@@ -1831,11 +2028,13 @@ publish_report() {
         tsv)
             printf '%s\n' $'Direction\tClassification\tSource_Schema\tSource_Table\tSource_Columns\tTarget_Schema\tTarget_Table\tTarget_Columns\tConstraint_Name\tSupporting_Index\tStatus_Tags\tDetails' \
                 > "$EXPORT_TEMP" || runtime_error 3 'Unable to write the TSV report header.'
+            prepare_tracked_child_start
             LC_ALL=C awk -F '\t' -v report_conversion=tsv '
                 NF != 12 { exit 1 }
                 { print $0 }
             ' "$WORK_DIR/relations.tsv" >> "$EXPORT_TEMP" &
             ACTIVE_CHILD_PID=$!
+            finish_tracked_child_start
             if ! wait_for_active_child; then
                 runtime_error 3 'Unable to convert the report to TSV.'
             fi
@@ -1858,14 +2057,17 @@ main() {
         return 0
     fi
     validate_arguments
+    setup_colors
     FINAL_STATUS=0
     REPORT_ELIGIBLE=true
     PHYSICAL_AVAILABLE=true
     VIRTUAL_METADATA_AVAILABLE=true
+    INDEX_METADATA_AVAILABLE=true
     STATS_AVAILABLE=true
     EXACT_AVAILABLE=false
     EXPORT_TEMP=""
     ACTIVE_CHILD_PID=""
+    PENDING_SIGNAL_STATUS=0
     create_workspace
     resolve_mysql_bin
     connection_preflight
@@ -1880,6 +2082,7 @@ main() {
     setup_colors
     printf 'Target preflight succeeded: %s%s.%s%s (%s)\n' \
         "$COLOR_BOLD_YELLOW" "$SCHEMA_NAME" "$TABLE_NAME" "$COLOR_RESET" "$TARGET_ENGINE"
+    printf 'Environment: %s\n' "$ENVIRONMENT"
     render_ddl
     render_relation_tables "$WORK_DIR/relations.tsv"
     render_cardinality

@@ -95,6 +95,13 @@ coverage section reports the relevant `STATISTICS.CARDINALITY` estimate for the
 index prefix matching each relation tuple. It is metadata, not an exact
 distinct-value count; unavailable index metadata is shown explicitly.
 
+The target identity block prints the selected `--environment`. If physical
+metadata is unavailable, virtual inference is suppressed because physical
+precedence cannot be established. If index metadata is unavailable, the
+analyzer suppresses index-dependent tags and virtual classifications rather
+than converting missing evidence into `UNINDEXED` or index-order facts. Each
+affected terminal section is marked explicitly as unavailable.
+
 `metadata` reports the target `information_schema.TABLES.TABLE_ROWS` estimate
 and relevant `information_schema.STATISTICS.CARDINALITY`, without scanning
 application tables. `exact` adds one target-only `COUNT(*)` and compares it
@@ -104,7 +111,9 @@ both `--environment production` and `--allow-production`.
 
 The runtime uses metadata reads, `SHOW CREATE TABLE`, and the optional exact
 target count. It issues no DDL, DML, `ANALYZE`, configuration changes, or
-automatic remediation.
+automatic remediation. MySQL client processes are tracked and reaped during
+normal execution and analyzer-only signal cleanup; cleanup sends `TERM`, waits
+for a bounded interval, then escalates to `KILL` if required.
 
 ## CSV and TSV reports
 
@@ -136,7 +145,7 @@ Details
 |---:|---|
 | `0` | Analysis completed; partial and ambiguous virtual findings are not failures. |
 | `2` | Command-line or input validation failure. |
-| `3` | Client, connection, target preflight, or report-publication failure. |
+| `3` | Client, connection, target preflight, required reducer/rendering pipeline, or report-publication failure. |
 | `4` | An optional section degraded while other analysis remained usable. |
 | `129` | Interrupted by `SIGHUP`. |
 | `130` | Interrupted by `SIGINT` or `SIGTERM`. |
