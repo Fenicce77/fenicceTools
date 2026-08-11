@@ -524,8 +524,35 @@ render_relation_line() {
         "$details_color" "$DETAILS_WIDTH" "$details" "$COLOR_RESET"
 }
 
-render_relation_tables() {
+filter_relation_section() {
     local relations_file=$1
+    local section=$2
+    local relation_field_separator=$'\034'
+
+    case "$section" in
+        physical_outbound)
+            LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" \
+                '$1 == "OUTBOUND" && $2 == "PHYSICAL_FK" { print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "$relations_file"
+            ;;
+        physical_inbound)
+            LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" \
+                '$1 == "INBOUND" && $2 == "PHYSICAL_FK" { print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "$relations_file"
+            ;;
+        complete_virtual)
+            LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" \
+                '$2 == "COMPLETE_VIRTUAL_FK" { print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "$relations_file"
+            ;;
+        partial_ambiguous_virtual)
+            LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" \
+                '$2 == "PARTIAL_VIRTUAL_FK" || $2 == "AMBIGUOUS_VIRTUAL_FK" { print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "$relations_file"
+            ;;
+    esac
+}
+
+render_relation_section() {
+    local relations_file=$1
+    local section_title=$2
+    local section=$3
     local direction classification source_schema source_table source_columns
     local target_schema target_table target_columns constraint_name supporting_index
     local status_tags details source_value target_value line_source line_target line_details
@@ -533,8 +560,8 @@ render_relation_tables() {
     local separator_line
     local continuation
     local details_color
+    local found=false
 
-    calculate_relation_widths
     repeat_table_character "$DIRECTION_WIDTH" '-'
     separator_line=$REPEATED_TABLE_CHARACTER
     repeat_table_character "$CLASSIFICATION_WIDTH" '-'
@@ -548,7 +575,7 @@ render_relation_tables() {
     repeat_table_character "$DETAILS_WIDTH" '-'
     separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
 
-    printf 'RELATION TOPOLOGY\n'
+    printf '%s\n' "$section_title"
     render_relation_line DIRECTION CLASSIFICATION SOURCE TARGET STATUS DETAILS \
         "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD" "$COLOR_BOLD"
     printf '%s\n' "$separator_line"
@@ -557,6 +584,7 @@ render_relation_tables() {
         source_schema source_table source_columns target_schema target_table target_columns \
         constraint_name supporting_index status_tags details; do
         [[ -n "$direction" ]] || continue
+        found=true
         source_value="${source_schema}.${source_table}${source_columns}"
         if [[ -n "$target_schema" || -n "$target_table" ]]; then
             target_value="${target_schema}.${target_table}${target_columns}"
@@ -592,9 +620,101 @@ render_relation_tables() {
         done <<EOF
 $WRAPPED_RELATION_FIELDS
 EOF
-    done < <(LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" \
-        '{ print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "$relations_file")
+    done < <(filter_relation_section "$relations_file" "$section")
+    if [[ "$found" == false ]]; then
+        printf '%sNone%s\n' "$COLOR_DIM" "$COLOR_RESET"
+    fi
     printf '\n'
+}
+
+render_index_coverage() {
+    local relations_file=$1
+    local component_file="$WORK_DIR/relation-component-counts.tsv"
+    local indexes_file="$WORK_DIR/indexes.tsv"
+    local coverage_field_separator=$'\034'
+    local source_value supporting_index cardinality line_source line_index line_cardinality
+    local separator_line
+    local found=false
+    local coverage_budget coverage_source_width coverage_index_width coverage_cardinality_width
+
+    coverage_budget=$((TERMINAL_WIDTH - 6))
+    coverage_source_width=$((coverage_budget / 2))
+    coverage_index_width=$((coverage_budget / 3))
+    coverage_cardinality_width=$((coverage_budget - coverage_source_width - coverage_index_width))
+
+    printf 'SUPPORTING INDEX COVERAGE\n'
+    repeat_table_character "$coverage_source_width" '-'
+    separator_line=$REPEATED_TABLE_CHARACTER
+    repeat_table_character "$coverage_index_width" '-'
+    separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
+    repeat_table_character "$coverage_cardinality_width" '-'
+    separator_line="$separator_line-+-$REPEATED_TABLE_CHARACTER"
+    printf '%s%-*s%s | %s%-*s%s | %s%-*s%s\n' \
+        "$COLOR_BOLD" "$coverage_source_width" SOURCE "$COLOR_RESET" \
+        "$COLOR_BOLD" "$coverage_index_width" 'SUPPORTING INDEX' "$COLOR_RESET" \
+        "$COLOR_BOLD" "$coverage_cardinality_width" 'INDEX CARDINALITY' "$COLOR_RESET"
+    printf '%s\n' "$separator_line"
+
+    while IFS="$coverage_field_separator" read -r source_value supporting_index cardinality; do
+        [[ -n "$source_value" ]] || continue
+        found=true
+        wrap_relation_fields "$source_value" "$supporting_index" "$cardinality" \
+            "$coverage_source_width" "$coverage_index_width" "$coverage_cardinality_width"
+        while IFS="$coverage_field_separator" read -r line_source line_index line_cardinality; do
+            printf '%-*s | %s%-*s%s | %-*s\n' \
+                "$coverage_source_width" "$line_source" \
+                "$COLOR_BLUE" "$coverage_index_width" "$line_index" "$COLOR_RESET" \
+                "$coverage_cardinality_width" "$line_cardinality"
+        done <<EOF
+$WRAPPED_RELATION_FIELDS
+EOF
+    done < <(LC_ALL=C awk -F '\t' -v OFS="$coverage_field_separator" '
+        FILENAME == ARGV[1] {
+            if ($10 == "") next
+            relation_key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5 SUBSEP \
+                $6 SUBSEP $7 SUBSEP $8 SUBSEP $9 SUBSEP $10
+            source[relation_key] = $3 "." $4 $5
+            source_schema[relation_key] = $3
+            source_table[relation_key] = $4
+            index_name[relation_key] = $10
+            next
+        }
+        FILENAME == ARGV[2] {
+            relation_key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5 SUBSEP \
+                $6 SUBSEP $7 SUBSEP $8 SUBSEP $9 SUBSEP $10
+            component_count[relation_key] = $11
+            next
+        }
+        {
+            cardinality[$1 SUBSEP $2 SUBSEP $3 SUBSEP $5] = $7
+        }
+        END {
+            for (key in source) {
+                value = "unavailable"
+                if (component_count[key] != "") {
+                    value = cardinality[source_schema[key] SUBSEP source_table[key] SUBSEP \
+                        index_name[key] SUBSEP component_count[key]]
+                    if (value == "") value = "unavailable"
+                }
+                print source[key], index_name[key], value
+            }
+        }
+    ' "$relations_file" "$component_file" "$indexes_file" | LC_ALL=C sort -t "$coverage_field_separator" -k1,1 -k2,2)
+    if [[ "$found" == false ]]; then
+        printf '%sNone%s\n' "$COLOR_DIM" "$COLOR_RESET"
+    fi
+    printf '\n'
+}
+
+render_relation_tables() {
+    local relations_file=$1
+
+    calculate_relation_widths
+    render_relation_section "$relations_file" 'PHYSICAL OUTBOUND' physical_outbound
+    render_relation_section "$relations_file" 'PHYSICAL INBOUND' physical_inbound
+    render_relation_section "$relations_file" 'COMPLETE VIRTUAL RELATIONSHIPS' complete_virtual
+    render_relation_section "$relations_file" 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' partial_ambiguous_virtual
+    render_index_coverage "$relations_file"
 }
 
 render_tree_tags() {
@@ -991,13 +1111,16 @@ acquire_exact_cardinality() {
 build_physical_relations() {
     local physical_file="$WORK_DIR/physical-components.tsv"
     local indexes_file="$WORK_DIR/indexes.tsv"
+    local component_file="$WORK_DIR/relation-component-counts.tsv"
+
+    : > "$component_file"
 
     if [[ "$PHYSICAL_AVAILABLE" == false ]]; then
         : > "$WORK_DIR/relations.tsv"
         return 0
     fi
 
-    awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" \
+    awk -F '\t' -v OFS='\t' -v physical_file="$physical_file" -v component_file="$component_file" \
         -v selected_schema="$SCHEMA_NAME" -v selected_table="$TABLE_NAME" '
         FILENAME == physical_file {
             if (!(($2 == selected_schema && $3 == selected_table) ||
@@ -1073,9 +1196,31 @@ build_physical_relations() {
                 print direction, "PHYSICAL_FK", source_schema[key], source_table[key], source_tuple,
                     target_schema[key], target_table[key], target_tuple, constraint_name[key],
                     supporting_index, status_tags, details
+                print direction, "PHYSICAL_FK", source_schema[key], source_table[key], source_tuple,
+                    target_schema[key], target_table[key], target_tuple, constraint_name[key],
+                    supporting_index, ordinal_max[key] > component_file
             }
         }
     ' "$physical_file" "$indexes_file" > "$WORK_DIR/relations.tsv"
+}
+
+sort_relations() {
+    local relations_file="$WORK_DIR/relations.tsv"
+    local sorted_file="$WORK_DIR/sorted-relations.tsv"
+
+    [[ -f "$relations_file" ]] || return 0
+    LC_ALL=C awk -F '\t' -v OFS='\t' '
+        {
+            direction_rank = ($1 == "OUTBOUND" ? 1 : 2)
+            if ($2 == "PHYSICAL_FK") classification_rank = 1
+            else if ($2 == "COMPLETE_VIRTUAL_FK") classification_rank = 2
+            else if ($2 == "PARTIAL_VIRTUAL_FK") classification_rank = 3
+            else classification_rank = 4
+            print direction_rank, classification_rank, $3, $4, $9, $0
+        }
+    ' "$relations_file" | LC_ALL=C sort -t $'\t' -k1,1n -k2,2n -k3,3 -k4,4 -k5,5 | \
+        LC_ALL=C cut -f6- > "$sorted_file"
+    mv "$sorted_file" "$relations_file"
 }
 
 build_virtual_relations() {
@@ -1083,16 +1228,25 @@ build_virtual_relations() {
     local pks_file="$WORK_DIR/pks.tsv"
     local indexes_file="$WORK_DIR/indexes.tsv"
     local relations_file="$WORK_DIR/relations.tsv"
+    local component_file="$WORK_DIR/relation-component-counts.tsv"
     local virtual_file="$WORK_DIR/virtual-relations.tsv"
+    local virtual_component_file="$WORK_DIR/virtual-relation-component-counts.tsv"
     local combined_file="$WORK_DIR/combined-relations.tsv"
+    local combined_component_file="$WORK_DIR/combined-relation-component-counts.tsv"
 
-    [[ "$PHYSICAL_ONLY" == false && "$VIRTUAL_METADATA_AVAILABLE" == true ]] || return 0
+    if [[ "$PHYSICAL_ONLY" == true || "$VIRTUAL_METADATA_AVAILABLE" == false ]]; then
+        sort_relations
+        return 0
+    fi
+
+    : > "$virtual_component_file"
 
     LC_ALL=C awk -F '\t' -v OFS='\t' \
         -v columns_file="$columns_file" \
         -v pks_file="$pks_file" \
         -v indexes_file="$indexes_file" \
         -v relations_file="$relations_file" \
+        -v component_file="$virtual_component_file" \
         -v selected_schema="$SCHEMA_NAME" \
         -v selected_table="$TABLE_NAME" '
         function sort_list(values, count, left, right, temporary) {
@@ -1319,6 +1473,9 @@ build_virtual_relations() {
             print direction, classification, source_parts[1], source_parts[2], source_tuple,
                 target_parts[1], target_parts[2], target_tuple, "", selected_supporting_index,
                 status_tags, ""
+            print direction, classification, source_parts[1], source_parts[2], source_tuple,
+                target_parts[1], target_parts[2], target_tuple, "", selected_supporting_index,
+                mapped_count > component_file
         }
         function emit_ambiguous(source_key, first_column, candidate_count,
                                 source_parts, candidate_number, descriptions,
@@ -1351,6 +1508,8 @@ build_virtual_relations() {
                 "OUTBOUND" : "INBOUND"
             print direction, "AMBIGUOUS_VIRTUAL_FK", source_parts[1], source_parts[2],
                 source_tuple, "", "", source_tuple, "", supporting_index, "", details
+            print direction, "AMBIGUOUS_VIRTUAL_FK", source_parts[1], source_parts[2],
+                source_tuple, "", "", source_tuple, "", supporting_index, 1 > component_file
         }
         FILENAME == columns_file {
             table_key = $1 SUBSEP $2
@@ -1460,8 +1619,11 @@ build_virtual_relations() {
         }
     ' "$columns_file" "$pks_file" "$indexes_file" "$relations_file" > "$virtual_file"
 
-    LC_ALL=C sort "$relations_file" "$virtual_file" > "$combined_file"
+    cat "$relations_file" "$virtual_file" > "$combined_file"
     mv "$combined_file" "$relations_file"
+    cat "$component_file" "$virtual_component_file" > "$combined_component_file"
+    mv "$combined_component_file" "$component_file"
+    sort_relations
 }
 
 render_ddl() {
@@ -1641,10 +1803,10 @@ main() {
     setup_colors
     render_ddl
     render_relation_tables "$WORK_DIR/relations.tsv"
+    render_cardinality
     if [[ "$SHOW_TREE" == true ]]; then
         render_tree "$WORK_DIR/relations.tsv"
     fi
-    render_cardinality
     publish_report
     return "$FINAL_STATUS"
 }

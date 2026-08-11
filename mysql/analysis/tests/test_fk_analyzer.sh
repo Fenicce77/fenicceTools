@@ -10,6 +10,8 @@ OUTPUT=""
 STATUS=0
 STRIPPED_OUTPUT=""
 FIXTURE_FILE="$TMP/presentation-relations.tsv"
+INDEX_FIXTURE_FILE="$TMP/presentation-indexes.tsv"
+COMPONENT_FIXTURE_FILE="$TMP/presentation-component-counts.tsv"
 FIXTURE_RUNNER="$TMP/run-fk-presentation-fixture.sh"
 
 test_cleanup() {
@@ -152,6 +154,20 @@ write_presentation_fixture() {
         > "$FIXTURE_FILE"
 
     printf '%s\n' \
+        $'sales\torders\tidx_orders_customer_archive_covering_tuple\t1\t1\ttenant_identifier_component\t100' \
+        $'sales\torders\tidx_orders_customer_archive_covering_tuple\t1\t2\textremely_long_order_identifier_component\t200' \
+        $'sales\torders\tidx_orders_customer_archive_covering_tuple\t1\t3\tregional_partition_identifier_component\t420' \
+        $'sales\taudit_orders\tidx_audit_orders_complete_virtual_tuple\t1\t1\torders_tenant_identifier\t77' \
+        $'sales\taudit_orders\tidx_audit_orders_complete_virtual_tuple\t1\t2\torders_order_identifier\t88' \
+        $'sales\taudit_orders\tidx_audit_orders_complete_virtual_tuple\t1\t3\torders_regional_partition_identifier\t99' \
+        > "$INDEX_FIXTURE_FILE"
+
+    printf '%s\n' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(tenant_identifier_component, extremely_long_order_identifier_component, regional_partition_identifier_component)\tsales\tcustomers_archive\t(tenant_identifier_component, customer_identifier_component, regional_partition_identifier_component)\tfk_orders_customer_archive_with_long_identifier\tidx_orders_customer_archive_covering_tuple\t3' \
+        $'OUTBOUND\tCOMPLETE_VIRTUAL_FK\tsales\taudit_orders\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_audit_orders_complete_virtual_tuple\t3' \
+        > "$COMPONENT_FIXTURE_FILE"
+
+    printf '%s\n' \
         '#!/usr/bin/env bash' \
         'set -euo pipefail' \
         'source "${FK_ANALYZER_SCRIPT:?}"' \
@@ -159,11 +175,10 @@ write_presentation_fixture() {
         'connection_preflight() { :; }' \
         'target_preflight() { TARGET_ENGINE=InnoDB; }' \
         'acquire_ddl() { printf "orders\\tCREATE TABLE orders (id bigint)\\n" > "$WORK_DIR/ddl.tsv"; }' \
-        'acquire_metadata() { :; }' \
-        'build_physical_relations() { cp "${FK_FIXTURE_FILE:?}" "$WORK_DIR/relations.tsv"; }' \
+        'acquire_metadata() { printf "40\\n" > "$WORK_DIR/stats.tsv"; }' \
+        'build_physical_relations() { cp "${FK_FIXTURE_FILE:?}" "$WORK_DIR/relations.tsv"; cp "${FK_INDEX_FIXTURE_FILE:?}" "$WORK_DIR/indexes.tsv"; cp "${FK_COMPONENT_FIXTURE_FILE:?}" "$WORK_DIR/relation-component-counts.tsv"; }' \
         'build_virtual_relations() { :; }' \
         'render_ddl() { :; }' \
-        'render_cardinality() { :; }' \
         'main "$@"' \
         > "$FIXTURE_RUNNER"
     chmod +x "$FIXTURE_RUNNER"
@@ -215,6 +230,8 @@ run_fixture_case() {
     : > "$FAKE_MYSQL_FK_LOG"
     set +e
     OUTPUT=$(FK_ANALYZER_SCRIPT="$SCRIPT" FK_FIXTURE_FILE="$FIXTURE_FILE" \
+        FK_INDEX_FIXTURE_FILE="$INDEX_FIXTURE_FILE" \
+        FK_COMPONENT_FIXTURE_FILE="$COMPONENT_FIXTURE_FILE" \
         /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
     STATUS=$?
     set -e
@@ -231,11 +248,15 @@ run_fixture_tty() {
         Darwin)
             OUTPUT=$(TERM=xterm script -q /dev/null env \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "FK_INDEX_FIXTURE_FILE=$INDEX_FIXTURE_FILE" \
+                "FK_COMPONENT_FIXTURE_FILE=$COMPONENT_FIXTURE_FILE" \
                 /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
             ;;
         Linux)
             printf -v runner_command '%q ' env TERM=xterm \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "FK_INDEX_FIXTURE_FILE=$INDEX_FIXTURE_FILE" \
+                "FK_COMPONENT_FIXTURE_FILE=$COMPONENT_FIXTURE_FILE" \
                 /bin/bash "$FIXTURE_RUNNER" "$@"
             OUTPUT=$(script -q -e -c "$runner_command" /dev/null 2>&1)
             ;;
@@ -262,12 +283,16 @@ run_fixture_tty_width() {
                 'stty cols "$1"; shift; unset COLUMNS; exec "$@"' \
                 width-runner "$width" env \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "FK_INDEX_FIXTURE_FILE=$INDEX_FIXTURE_FILE" \
+                "FK_COMPONENT_FIXTURE_FILE=$COMPONENT_FIXTURE_FILE" \
                 "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
             ;;
         Linux)
             printf -v runner_command '%q ' env TERM=xterm \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "FK_INDEX_FIXTURE_FILE=$INDEX_FIXTURE_FILE" \
+                "FK_COMPONENT_FIXTURE_FILE=$COMPONENT_FIXTURE_FILE" \
                 "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@"
             runner_command="stty cols $width; unset COLUMNS; exec $runner_command"
@@ -296,12 +321,15 @@ run_fixture_tty_width_with_redirected_stdin() {
                 'stty cols "$1"; shift; unset COLUMNS; exec "$@" </dev/null' \
                 width-runner "$width" env \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "FK_INDEX_FIXTURE_FILE=$INDEX_FIXTURE_FILE" \
+                "FK_COMPONENT_FIXTURE_FILE=$COMPONENT_FIXTURE_FILE" \
                 "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@" 2>&1)
             ;;
         Linux)
             printf -v runner_command '%q ' env TERM=xterm \
                 "FK_ANALYZER_SCRIPT=$SCRIPT" "FK_FIXTURE_FILE=$FIXTURE_FILE" \
+                "FK_INDEX_FIXTURE_FILE=$INDEX_FIXTURE_FILE" \
                 "PATH=${PROBE_TEST_PATH_PREFIX:-}$PATH" \
                 /bin/bash "$FIXTURE_RUNNER" "$@"
             runner_command="stty cols $width; unset COLUMNS; exec $runner_command </dev/null"
@@ -324,8 +352,8 @@ fixture_arguments() {
 
 extract_table() {
     TABLE_OUTPUT=$(printf '%s\n' "$1" | LC_ALL=C awk '
-        /^RELATION TOPOLOGY$/ { active = 1 }
-        active && /^DEPENDENCY TREE$/ { exit }
+        /^PHYSICAL OUTBOUND$/ { active = 1 }
+        /^PHYSICAL INBOUND$/ { active = 0 }
         active { print }
     ')
 }
@@ -333,6 +361,7 @@ extract_table() {
 extract_tree() {
     TREE_OUTPUT=$(printf '%s\n' "$1" | LC_ALL=C awk '
         /^DEPENDENCY TREE$/ { active = 1 }
+        /^CARDINALITY$/ { active = 0 }
         active { print }
     ')
 }
@@ -355,6 +384,26 @@ assert_table_geometry() {
         }
         END { exit(failed || !seen) }
     ' || fail "table geometry does not use exactly $expected_width visible columns"
+}
+
+assert_coverage_geometry() {
+    local output=$1 expected_width=$2
+
+    printf '%s\n' "$output" | LC_ALL=C awk -v width="$expected_width" '
+        /^SOURCE[ ]*[|][ ]*SUPPORTING INDEX[ ]*[|]/ { active = 1; seen = 1 }
+        active && NF == 0 { exit }
+        active {
+            separator_count = gsub(/[|]/, "|")
+            plus_count = gsub(/[+]/, "+")
+            if (separator_count == 2 || plus_count == 2) {
+                if (length($0) != width) {
+                    printf "line width %d, expected %d: [%s]\\n", length($0), width, $0 > "/dev/stderr"
+                    failed = 1
+                }
+            }
+        }
+        END { exit(failed || !seen) }
+    ' || fail "supporting-index coverage does not use exactly $expected_width visible columns"
 }
 
 assert_continuations_and_values() {
@@ -614,6 +663,47 @@ run_physical_tests() {
     printf 'PASS: fk_analyzer physical relations\n'
 }
 
+run_ordering_tests() {
+    local ordering_dir="$TMP/physical-ordering"
+    local ordered_relations unavailable_ordered_relations
+    local expected_order=$'OUTBOUND|orders|fk_outbound_a\nOUTBOUND|orders|fk_outbound_z\nINBOUND|alpha_children|fk_inbound_a\nINBOUND|zeta_children|fk_inbound_z'
+
+    mkdir "$ordering_dir"
+    # shellcheck source=/dev/null
+    source "$SCRIPT"
+    WORK_DIR=$ordering_dir
+    SCHEMA_NAME=sales
+    TABLE_NAME=orders
+    printf '%s\n' \
+        $'fk_inbound_z\tsales\tzeta_children\torder_id\tsales\torders\tid\t1\tRESTRICT\tCASCADE' \
+        $'fk_outbound_z\tsales\torders\tparent_z_id\tsales\tparents\tid\t1\tRESTRICT\tCASCADE' \
+        $'fk_inbound_a\tsales\talpha_children\torder_id\tsales\torders\tid\t1\tRESTRICT\tCASCADE' \
+        $'fk_outbound_a\tsales\torders\tparent_a_id\tsales\tparents\tid\t1\tRESTRICT\tCASCADE' \
+        > "$WORK_DIR/physical-components.tsv"
+    printf '%s\n' \
+        $'sales\tzeta_children\tidx_zeta_children_order\t1\t1\torder_id\t10' \
+        $'sales\talpha_children\tidx_alpha_children_order\t1\t1\torder_id\t20' \
+        $'sales\torders\tidx_orders_parent_z\t1\t1\tparent_z_id\t30' \
+        $'sales\torders\tidx_orders_parent_a\t1\t1\tparent_a_id\t40' \
+        > "$WORK_DIR/indexes.tsv"
+
+    PHYSICAL_ONLY=true
+    VIRTUAL_METADATA_AVAILABLE=true
+    build_physical_relations
+    build_virtual_relations
+    ordered_relations=$(LC_ALL=C awk -F '\t' '{ print $1 "|" $4 "|" $9 }' "$WORK_DIR/relations.tsv")
+    assert_equals "$ordered_relations" "$expected_order"
+
+    PHYSICAL_ONLY=false
+    VIRTUAL_METADATA_AVAILABLE=false
+    build_physical_relations
+    build_virtual_relations
+    unavailable_ordered_relations=$(LC_ALL=C awk -F '\t' '{ print $1 "|" $4 "|" $9 }' "$WORK_DIR/relations.tsv")
+    assert_equals "$unavailable_ordered_relations" "$expected_order"
+
+    printf 'PASS: fk_analyzer physical-only relation ordering\n'
+}
+
 load_virtual_fixture() {
     local mode=$1
     local fixture_dir=$2
@@ -859,7 +949,7 @@ run_degraded_tests() {
         assert_not_contains "$degraded_line" $'\033'
         assert_not_contains "$degraded_line" $'\n'
         assert_contains "$OUTPUT" 'TABLE DDL'
-        assert_contains "$OUTPUT" 'RELATION TOPOLOGY'
+        assert_contains "$OUTPUT" 'PHYSICAL OUTBOUND'
         case "$mode" in
             physical-failure)
                 expected_diagnostic='physical metadata access denied'
@@ -943,7 +1033,7 @@ run_export_tests() {
     ')
     report_order=$(LC_ALL=C awk -F '\t' 'NR > 1 { print $1 "|" $2 "|" $3 "." $4 $5 }' "$tsv_report")
     assert_equals "$terminal_order" "$report_order"
-    assert_equals "$report_order" $'INBOUND|COMPLETE_VIRTUAL_FK|sales.audit_orders(orders_id)\nINBOUND|PHYSICAL_FK|sales.shipment_items(order_id)\nOUTBOUND|PHYSICAL_FK|sales.orders(customer_id)'
+    assert_equals "$report_order" $'OUTBOUND|PHYSICAL_FK|sales.orders(customer_id)\nINBOUND|PHYSICAL_FK|sales.shipment_items(order_id)\nINBOUND|COMPLETE_VIRTUAL_FK|sales.audit_orders(orders_id)'
 
     run_case export_stable_repeat -l test -s sales -t orders --environment test \
         --mysql-bin "$FAKE_MYSQL" --output-file "$stable_report" --format tsv \
@@ -1089,11 +1179,18 @@ run_signal_tests() {
 }
 
 run_presentation_tests() {
-    local width width_case width_input width_expected
+    local width width_case width_input width_expected section_order
     local colored_table no_color_table fixture_snapshot
 
     write_presentation_fixture
     fixture_arguments
+
+    run_fixture_case presentation_sections "${FIXTURE_ARGUMENTS[@]}" --terminal-width 160 --no-color
+    assert_status 0
+    section_order=$(printf '%s\n' "$OUTPUT" | LC_ALL=C awk '
+        /^(PHYSICAL OUTBOUND|PHYSICAL INBOUND|COMPLETE VIRTUAL RELATIONSHIPS|PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS|SUPPORTING INDEX COVERAGE|CARDINALITY)$/ { print }
+    ')
+    assert_equals "$section_order" $'PHYSICAL OUTBOUND\nPHYSICAL INBOUND\nCOMPLETE VIRTUAL RELATIONSHIPS\nPARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS\nSUPPORTING INDEX COVERAGE\nCARDINALITY'
 
     for width in 120 160 220; do
         run_fixture_case "presentation_width_$width" "${FIXTURE_ARGUMENTS[@]}" \
@@ -1193,6 +1290,10 @@ run_presentation_tests() {
     (
         # shellcheck source=/dev/null
         source "$SCRIPT"
+        WORK_DIR="$TMP/presentation-render"
+        mkdir "$WORK_DIR"
+        cp "$INDEX_FIXTURE_FILE" "$WORK_DIR/indexes.tsv"
+        cp "$COMPONENT_FIXTURE_FILE" "$WORK_DIR/relation-component-counts.tsv"
         TERMINAL_WIDTH_OPTION=120
         TERMINAL_WIDTH_OPTION_SET=true
         NO_COLOR=true
@@ -1204,14 +1305,45 @@ run_presentation_tests() {
     printf 'PASS: fk_analyzer terminal presentation\n'
 }
 
+run_coverage_tests() {
+    write_presentation_fixture
+    printf '%s\n' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\tcomma_child\t(a,b)\tsales\torders\t(id)\tfk_comma\tidx_comma\t\tON UPDATE RESTRICT; ON DELETE CASCADE' \
+        >> "$FIXTURE_FILE"
+    printf '%s\n' \
+        $'sales\tcomma_child\tidx_comma\t1\t1\ta,b\t555' \
+        $'sales\tcomma_child\tidx_comma\t1\t2\textra\t999' \
+        >> "$INDEX_FIXTURE_FILE"
+    printf '%s\n' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\tcomma_child\t(a,b)\tsales\torders\t(id)\tfk_comma\tidx_comma\t1' \
+        >> "$COMPONENT_FIXTURE_FILE"
+    fixture_arguments
+
+    run_fixture_case coverage_cardinality "${FIXTURE_ARGUMENTS[@]}" --terminal-width 160 --no-color
+    assert_status 0
+    assert_contains "$OUTPUT" 'SUPPORTING INDEX COVERAGE'
+    assert_contains "$OUTPUT" 'idx_orders_customer_archive_covering_tuple'
+    assert_contains "$OUTPUT" '420'
+    assert_contains "$OUTPUT" '555'
+    assert_not_contains "$OUTPUT" '999'
+    strip_ansi "$OUTPUT"
+    assert_coverage_geometry "$STRIPPED_OUTPUT" 160
+
+    printf 'PASS: fk_analyzer supporting-index cardinality\n'
+}
+
 run_tree_tests() {
-    local colored_tree no_color_tree branch_order golden_tree
+    local colored_tree no_color_tree branch_order golden_tree terminal_section_order
 
     write_presentation_fixture
     fixture_arguments
 
     run_fixture_case tree_plain "${FIXTURE_ARGUMENTS[@]}" --tree --terminal-width 160 --no-color
     assert_status 0
+    terminal_section_order=$(printf '%s\n' "$OUTPUT" | LC_ALL=C awk '
+        /^(SUPPORTING INDEX COVERAGE|CARDINALITY|DEPENDENCY TREE)$/ { print }
+    ')
+    assert_equals "$terminal_section_order" $'SUPPORTING INDEX COVERAGE\nCARDINALITY\nDEPENDENCY TREE'
     extract_tree "$OUTPUT"
     no_color_tree=$TREE_OUTPUT
     branch_order=$(printf '%s\n' "$no_color_tree" | LC_ALL=C awk '
@@ -1259,8 +1391,10 @@ run_tree_tests() {
 if [[ $# -eq 0 ]]; then
     run_cli_tests
     run_physical_tests
+    run_ordering_tests
     run_virtual_tests
     run_presentation_tests
+    run_coverage_tests
     run_tree_tests
     run_cardinality_tests
     run_degraded_tests
@@ -1271,8 +1405,10 @@ else
         case "$test_group" in
             cli) run_cli_tests ;;
             physical) run_physical_tests ;;
+            ordering) run_ordering_tests ;;
             virtual) run_virtual_tests ;;
             presentation) run_presentation_tests ;;
+            coverage) run_coverage_tests ;;
             tree) run_tree_tests ;;
             cardinality) run_cardinality_tests ;;
             degraded) run_degraded_tests ;;

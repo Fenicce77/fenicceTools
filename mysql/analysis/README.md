@@ -88,6 +88,13 @@ both tables and the optional tree, target/root is bold yellow;
 constraint/index names blue; and connectors dim cyan. `--no-color` removes
 ANSI only, preserving identical visible geometry.
 
+The terminal report presents these sections in order: physical outbound,
+physical inbound, complete virtual relationships, partial and ambiguous virtual
+relationships, supporting-index coverage, and cardinality. The supporting-index
+coverage section reports the relevant `STATISTICS.CARDINALITY` estimate for the
+index prefix matching each relation tuple. It is metadata, not an exact
+distinct-value count; unavailable index metadata is shown explicitly.
+
 `metadata` reports the target `information_schema.TABLES.TABLE_ROWS` estimate
 and relevant `information_schema.STATISTICS.CARDINALITY`, without scanning
 application tables. `exact` adds one target-only `COUNT(*)` and compares it
