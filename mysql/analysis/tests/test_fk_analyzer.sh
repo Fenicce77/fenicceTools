@@ -45,6 +45,7 @@ runner_usage() {
     printf '\nTest groups:\n'
     printf '  tooling cli physical scoping ordering virtual scale presentation coverage tree\n'
     printf '  cardinality degraded failures export signals mysql-signals\n'
+    printf '  residual-metadata residual-virtual residual-render residual-export\n'
     printf '\nOptions:\n'
     printf '  -h, --help     Show this help\n'
     printf '      --no-color Disable ANSI colors in help output\n'
@@ -79,6 +80,14 @@ assert_equals() {
     local actual=$1
     local expected=$2
     [[ "$actual" == "$expected" ]] || fail "expected: $expected; got: $actual"
+}
+
+assert_length_at_most() {
+    local value=$1
+    local maximum=$2
+
+    [[ ${#value} -le "$maximum" ]] \
+        || fail "expected value length at most $maximum, got ${#value}: $value"
 }
 
 assert_file_content() {
@@ -1057,10 +1066,15 @@ write_stage_failure_wrappers() {
         '    case "$argument" in' \
         '        physical_file=*) stage=physical ;;' \
         '        component_file=*/virtual-relation-component-counts.tsv) stage=virtual ;;' \
+        '        source_width=*) stage=render-wrap ;;' \
         '    esac' \
         'done' \
         'if [[ -n "${FAKE_STAGE_AWK_FAILURE:-}" && "$stage" == "$FAKE_STAGE_AWK_FAILURE" ]]; then' \
-        '    printf "\033]0;unsafe reducer title\007\033[31msimulated %s reducer failure\033[0m\n" "$stage" >&2' \
+        '    if [[ "$stage" == render-wrap ]]; then' \
+        '        printf "\033]0;unsafe awk title\007\033[31msimulated relation wrapping failure\033[0m\nsecond simulated render line\n" >&2' \
+        '    else' \
+        '        printf "\033]0;unsafe awk title\007\033[31msimulated %s reducer failure\033[0m\n" "$stage" >&2' \
+        '    fi' \
         '    exit 71' \
         'fi' \
         'exec "${REAL_AWK:?}" "$@"' \
@@ -1068,10 +1082,39 @@ write_stage_failure_wrappers() {
     printf '%s\n' \
         '#!/usr/bin/env bash' \
         'set -euo pipefail' \
+        'stage=""' \
+        'for argument in "$@"; do' \
+        '    case "$argument" in' \
+        '        */virtual-relations.tsv) stage=virtual-relation-combination ;;' \
+        '        */virtual-relation-component-counts.tsv) stage=virtual-component-combination ;;' \
+        '    esac' \
+        'done' \
+        'if [[ -n "${FAKE_STAGE_CAT_FAILURE:-}" && "$stage" == "$FAKE_STAGE_CAT_FAILURE" ]]; then' \
+        '    printf "\033]0;unsafe cat title\007\033[31msimulated %s failure\033[0m\n" "$stage" >&2' \
+        '    exit 74' \
+        'fi' \
+        'exec "${REAL_CAT:?}" "$@"' \
+        > "$wrapper_dir/cat"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -euo pipefail' \
         'for argument in "$@"; do' \
         '    if [[ "${FAKE_STAGE_MV_FAILURE:-}" == relation-sort && "$argument" == */sorted-relations.tsv ]]; then' \
         '        printf "\033]0;unsafe move title\007\033[31msimulated relation publication failure\033[0m\n" >&2' \
         '        exit 72' \
+        '    fi' \
+        '    if [[ "${FAKE_STAGE_MV_FAILURE:-}" == virtual-component-publication && "$argument" == */combined-relation-component-counts.tsv ]]; then' \
+        '        printf "\033]0;unsafe move title\007\033[31msimulated virtual component publication failure\033[0m\n" >&2' \
+        '        exit 75' \
+        '    fi' \
+        '    if [[ "${FAKE_STAGE_MV_FAILURE:-}" == virtual-relation-publication && "$argument" == */combined-relations.tsv ]]; then' \
+        '        printf "\033]0;unsafe move title\007\033[31msimulated virtual relation publication failure\033[0m\n" >&2' \
+        '        exit 76' \
+        '    fi' \
+        '    if [[ "${FAKE_STAGE_MV_FAILURE:-}" == report-publication && "$argument" == */.fk-analyzer.* ]]; then' \
+        '        printf "\033]0;unsafe report title\007\033[31msimulated report publication failure\033[0m " >&2' \
+        '        printf "%0300d\nsecond injected line\n" 0 >&2' \
+        '        exit 77' \
         '    fi' \
         'done' \
         'exec "${REAL_MV:?}" "$@"' \
@@ -1087,18 +1130,25 @@ write_stage_failure_wrappers() {
         'done' \
         'exec "${REAL_CUT:?}" "$@"' \
         > "$wrapper_dir/cut"
-    chmod +x "$wrapper_dir/awk" "$wrapper_dir/mv" "$wrapper_dir/cut"
+    chmod +x "$wrapper_dir/awk" "$wrapper_dir/cat" "$wrapper_dir/mv" "$wrapper_dir/cut"
+}
+
+setup_stage_failure_wrappers() {
+    local wrapper_dir=$1
+
+    REAL_AWK=$(command -v awk)
+    REAL_CAT=$(command -v cat)
+    REAL_MV=$(command -v mv)
+    REAL_CUT=$(command -v cut)
+    export REAL_AWK REAL_CAT REAL_MV REAL_CUT
+    write_stage_failure_wrappers "$wrapper_dir"
 }
 
 run_pipeline_failure_tests() {
     local wrapper_dir="$TMP/stage-failure-bin"
     local original_path=$PATH
 
-    REAL_AWK=$(command -v awk)
-    REAL_MV=$(command -v mv)
-    REAL_CUT=$(command -v cut)
-    export REAL_AWK REAL_MV REAL_CUT
-    write_stage_failure_wrappers "$wrapper_dir"
+    setup_stage_failure_wrappers "$wrapper_dir"
     PATH="$wrapper_dir:$PATH"
     export PATH
     FAKE_MYSQL_FK_MODE=report
@@ -1142,9 +1192,153 @@ run_pipeline_failure_tests() {
 
     PATH=$original_path
     export PATH
-    unset FAKE_STAGE_CUT_FAILURE FAKE_MYSQL_FK_MODE REAL_AWK REAL_MV REAL_CUT
+    unset FAKE_STAGE_CUT_FAILURE FAKE_MYSQL_FK_MODE REAL_AWK REAL_CAT REAL_MV REAL_CUT
 
     printf 'PASS: fk_analyzer reducer and workspace failures\n'
+}
+
+run_residual_metadata_tests() {
+    local tree_unavailable_count
+
+    FAKE_MYSQL_FK_MODE=physical-failure-naming
+    export FAKE_MYSQL_FK_MODE
+    run_case residual_physical_inventory_unavailable -l test -s sales -t purchases \
+        --environment test --mysql-bin "$FAKE_MYSQL" --tree --no-color
+    unset FAKE_MYSQL_FK_MODE
+    assert_status 4
+    assert_contains "$OUTPUT" 'Unavailable: physical relation inventory unavailable.'
+    extract_tree "$OUTPUT"
+    assert_contains "$TREE_OUTPUT" 'OUTBOUND PHYSICAL'
+    assert_contains "$TREE_OUTPUT" 'OUTBOUND VIRTUAL'
+    assert_contains "$TREE_OUTPUT" 'INBOUND PHYSICAL'
+    assert_contains "$TREE_OUTPUT" 'INBOUND VIRTUAL'
+    tree_unavailable_count=$(printf '%s\n' "$TREE_OUTPUT" | LC_ALL=C grep -c 'Unavailable:' || true)
+    assert_equals "$tree_unavailable_count" 4
+    assert_not_contains "$TREE_OUTPUT" 'None'
+
+    printf 'PASS: fk_analyzer unavailable relation inventory rendering\n'
+}
+
+run_residual_virtual_tests() {
+    local wrapper_dir="$TMP/residual-virtual-failure-bin"
+    local original_path=$PATH
+    local failure_spec failure_case failure_kind failure_selector expected_diagnostic failure_rest
+    local virtual_table_unavailable_count
+
+    setup_stage_failure_wrappers "$wrapper_dir"
+    PATH="$wrapper_dir:$PATH"
+    export PATH
+    FAKE_MYSQL_FK_MODE=report
+    export FAKE_MYSQL_FK_MODE
+
+    for failure_spec in \
+        'virtual_reducer:awk:virtual:Virtual relation inference failed: simulated virtual reducer failure' \
+        'virtual_relation_combination:cat:virtual-relation-combination:Virtual relation combination failed: simulated virtual-relation-combination failure' \
+        'virtual_component_combination:cat:virtual-component-combination:Virtual component combination failed: simulated virtual-component-combination failure' \
+        'virtual_component_publication:mv:virtual-component-publication:Virtual component publication failed: simulated virtual component publication failure' \
+        'virtual_relation_publication:mv:virtual-relation-publication:Virtual relation publication failed: simulated virtual relation publication failure'; do
+        failure_case=${failure_spec%%:*}
+        failure_rest=${failure_spec#*:}
+        failure_kind=${failure_rest%%:*}
+        failure_rest=${failure_rest#*:}
+        failure_selector=${failure_rest%%:*}
+        expected_diagnostic=${failure_rest#*:}
+
+        case "$failure_kind" in
+            awk) FAKE_STAGE_AWK_FAILURE=$failure_selector; export FAKE_STAGE_AWK_FAILURE ;;
+            cat) FAKE_STAGE_CAT_FAILURE=$failure_selector; export FAKE_STAGE_CAT_FAILURE ;;
+            mv) FAKE_STAGE_MV_FAILURE=$failure_selector; export FAKE_STAGE_MV_FAILURE ;;
+        esac
+        run_case "residual_$failure_case" -l test -s sales -t orders --environment test \
+            --mysql-bin "$FAKE_MYSQL" --tree --no-color
+        unset FAKE_STAGE_AWK_FAILURE FAKE_STAGE_CAT_FAILURE FAKE_STAGE_MV_FAILURE
+        assert_status 4
+        assert_contains "$OUTPUT" "$expected_diagnostic"
+        assert_contains "$OUTPUT" 'PHYSICAL_FK'
+        assert_contains "$OUTPUT" 'COMPLETE VIRTUAL RELATIONSHIPS'
+        assert_contains "$OUTPUT" 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS'
+        assert_contains "$OUTPUT" 'Unavailable: virtual relation processing failed.'
+        virtual_table_unavailable_count=$(printf '%s\n' "$OUTPUT" | \
+            LC_ALL=C grep -c '^Unavailable: virtual relation processing failed\.$' || true)
+        assert_equals "$virtual_table_unavailable_count" 3
+        extract_tree "$OUTPUT"
+        assert_contains "$TREE_OUTPUT" 'OUTBOUND VIRTUAL'
+        assert_contains "$TREE_OUTPUT" 'INBOUND VIRTUAL'
+        assert_not_contains "$TREE_OUTPUT" 'None'
+    done
+
+    PATH=$original_path
+    export PATH
+    unset FAKE_MYSQL_FK_MODE REAL_AWK REAL_CAT REAL_MV REAL_CUT
+
+    printf 'PASS: fk_analyzer virtual failure availability propagation\n'
+}
+
+run_residual_render_tests() {
+    local wrapper_dir="$TMP/residual-render-failure-bin"
+    local original_path=$PATH
+    local error_line error_count injected_line_count
+
+    setup_stage_failure_wrappers "$wrapper_dir"
+    PATH="$wrapper_dir:$PATH"
+    export PATH
+    FAKE_MYSQL_FK_MODE=report
+    FAKE_STAGE_AWK_FAILURE=render-wrap
+    export FAKE_MYSQL_FK_MODE FAKE_STAGE_AWK_FAILURE
+    run_case residual_relation_wrap_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --no-color
+    PATH=$original_path
+    export PATH
+    unset FAKE_MYSQL_FK_MODE FAKE_STAGE_AWK_FAILURE REAL_AWK REAL_CAT REAL_MV REAL_CUT
+
+    assert_status 3
+    error_count=$(printf '%s\n' "$OUTPUT" | LC_ALL=C grep -c '^ERROR:' || true)
+    assert_equals "$error_count" 1
+    error_line=$(printf '%s\n' "$OUTPUT" | LC_ALL=C grep '^ERROR:' || true)
+    assert_contains "$error_line" 'Unable to wrap relation fields: simulated relation wrapping failure'
+    assert_not_contains "$error_line" $'\033'
+    assert_not_contains "$error_line" 'unsafe awk title'
+    assert_not_contains "$error_line" '[31m'
+    injected_line_count=$(printf '%s\n' "$OUTPUT" | \
+        LC_ALL=C grep -c '^second simulated render line$' || true)
+    assert_equals "$injected_line_count" 0
+
+    printf 'PASS: fk_analyzer terminal render failure contract\n'
+}
+
+run_residual_export_tests() {
+    local destination="$TMP/residual-publication.tsv"
+    local wrapper_dir="$TMP/residual-report-publication-bin"
+    local original_path=$PATH
+    local error_line error_count
+
+    printf 'ORIGINAL\n' > "$destination"
+    setup_stage_failure_wrappers "$wrapper_dir"
+    PATH="$wrapper_dir:$PATH"
+    export PATH
+    FAKE_MYSQL_FK_MODE=report
+    FAKE_STAGE_MV_FAILURE=report-publication
+    export FAKE_MYSQL_FK_MODE FAKE_STAGE_MV_FAILURE
+    run_case residual_report_publication_failure -l test -s sales -t orders --environment test \
+        --mysql-bin "$FAKE_MYSQL" --output-file "$destination" --format tsv --no-color
+    PATH=$original_path
+    export PATH
+    unset FAKE_MYSQL_FK_MODE FAKE_STAGE_MV_FAILURE REAL_AWK REAL_CAT REAL_MV REAL_CUT
+
+    assert_status 3
+    assert_file_content "$destination" 'ORIGINAL'
+    assert_no_report_temp "$TMP"
+    error_count=$(printf '%s\n' "$OUTPUT" | LC_ALL=C grep -c '^ERROR:' || true)
+    assert_equals "$error_count" 1
+    error_line=$(printf '%s\n' "$OUTPUT" | LC_ALL=C grep '^ERROR:' || true)
+    assert_contains "$error_line" 'Unable to publish the report: simulated report publication failure'
+    assert_not_contains "$error_line" $'\033'
+    assert_not_contains "$error_line" 'unsafe report title'
+    assert_not_contains "$error_line" '[31m'
+    assert_not_contains "$error_line" 'second injected line'
+    assert_length_at_most "$error_line" 280
+
+    printf 'PASS: fk_analyzer report publication diagnostic contract\n'
 }
 
 run_cardinality_tests() {
@@ -1816,6 +2010,10 @@ run_all_test_groups() {
     run_export_tests
     run_signal_tests
     run_mysql_signal_tests
+    run_residual_metadata_tests
+    run_residual_virtual_tests
+    run_residual_render_tests
+    run_residual_export_tests
 }
 
 run_selected_test_groups() {
@@ -1839,6 +2037,10 @@ run_selected_test_groups() {
             export) run_export_tests ;;
             signals) run_signal_tests ;;
             mysql-signals) run_mysql_signal_tests ;;
+            residual-metadata) run_residual_metadata_tests ;;
+            residual-virtual) run_residual_virtual_tests ;;
+            residual-render) run_residual_render_tests ;;
+            residual-export) run_residual_export_tests ;;
             *) fail "unknown test group: $test_group" ;;
         esac
     done

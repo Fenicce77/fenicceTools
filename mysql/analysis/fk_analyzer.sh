@@ -18,6 +18,7 @@ FINAL_STATUS=0
 REPORT_ELIGIBLE=true
 PHYSICAL_AVAILABLE=true
 VIRTUAL_METADATA_AVAILABLE=true
+VIRTUAL_AVAILABLE=true
 INDEX_METADATA_AVAILABLE=true
 STATS_AVAILABLE=true
 EXACT_AVAILABLE=false
@@ -423,8 +424,9 @@ wrap_relation_fields() {
     local source_width=$4
     local target_width=$5
     local details_width=$6
+    local stderr_file="$WORK_DIR/render-wrap.stderr"
 
-    WRAPPED_RELATION_FIELDS=$(printf '%s\t%s\t%s\n' \
+    if ! WRAPPED_RELATION_FIELDS=$(printf '%s\t%s\t%s\n' \
         "$source_value" "$target_value" "$details_value" | LC_ALL=C awk -F '\t' \
         -v source_width="$source_width" \
         -v target_width="$target_width" \
@@ -474,16 +476,23 @@ wrap_relation_fields() {
                     target_lines[line], 28, details_lines[line], 28, details_starts[line]
             }
         }
-    ')
+    ' 2> "$stderr_file"); then
+        render_stage_error 'Unable to wrap relation fields' "$stderr_file" \
+            'no diagnostic returned by the relation wrapping pipeline'
+    fi
 }
 
 repeat_table_character() {
     local count=$1
     local character=$2
+    local stderr_file="$WORK_DIR/render-repeat.stderr"
 
-    REPEATED_TABLE_CHARACTER=$(LC_ALL=C awk -v count="$count" -v character="$character" '
+    if ! REPEATED_TABLE_CHARACTER=$(LC_ALL=C awk -v count="$count" -v character="$character" '
         BEGIN { for (n = 0; n < count; n++) printf "%s", character }
-    ')
+    ' 2> "$stderr_file"); then
+        render_stage_error 'Unable to render table separators' "$stderr_file" \
+            'no diagnostic returned by the separator rendering pipeline'
+    fi
 }
 
 calculate_relation_widths() {
@@ -520,8 +529,9 @@ color_relation_detail_names() {
     local details_color=$6
     local status_tags=$7
     local tag_color=$8
+    local stderr_file="$WORK_DIR/render-detail-colors.stderr"
 
-    COLORED_RELATION_DETAILS=$(printf '%s\034%s\034%s\034%s\034%s\034%s\034%s\034%s\n' \
+    if ! COLORED_RELATION_DETAILS=$(printf '%s\034%s\034%s\034%s\034%s\034%s\034%s\034%s\n' \
         "$line_details" "$details" "$line_offset" "$constraint_name" "$supporting_index" \
         "$details_color" "$status_tags" "$tag_color" | \
         LC_ALL=C awk -F $'\034' \
@@ -594,7 +604,10 @@ color_relation_detail_names() {
             }
             printf "%s", substr(value, cursor - line_start + 1)
         }
-    ')
+    ' 2> "$stderr_file"); then
+        render_stage_error 'Unable to color relation details' "$stderr_file" \
+            'no diagnostic returned by the relation detail rendering pipeline'
+    fi
 }
 
 render_relation_line() {
@@ -659,9 +672,17 @@ render_relation_section() {
     local status_tags details source_value target_value line_source line_target line_details line_details_offset
     local relation_field_separator=$'\034'
     local separator_line
+    local filtered_file="$WORK_DIR/render-${section}.tsv"
+    local stderr_file="$WORK_DIR/render-${section}.stderr"
     local continuation
     local details_color
     local found=false
+
+    if ! filter_relation_section "$relations_file" "$section" \
+        > "$filtered_file" 2> "$stderr_file"; then
+        render_stage_error "Unable to filter ${section_title}" "$stderr_file" \
+            'no diagnostic returned by the relation filtering pipeline'
+    fi
 
     repeat_table_character "$DIRECTION_WIDTH" '-'
     separator_line=$REPEATED_TABLE_CHARACTER
@@ -725,7 +746,7 @@ render_relation_section() {
         done <<EOF
 $WRAPPED_RELATION_FIELDS
 EOF
-    done < <(filter_relation_section "$relations_file" "$section")
+    done < "$filtered_file"
     if [[ "$found" == false ]]; then
         printf '%sNone%s\n' "$COLOR_DIM" "$COLOR_RESET"
     fi
@@ -740,6 +761,47 @@ render_unavailable_relation_section() {
     printf '%sUnavailable:%s %s\n\n' "$COLOR_RED" "$COLOR_RESET" "$reason"
 }
 
+filter_index_coverage() {
+    local relations_file=$1
+    local component_file=$2
+    local indexes_file=$3
+    local coverage_field_separator=$4
+
+    LC_ALL=C awk -F '\t' -v OFS="$coverage_field_separator" '
+        FILENAME == ARGV[1] {
+            if ($10 == "") next
+            relation_key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5 SUBSEP \
+                $6 SUBSEP $7 SUBSEP $8 SUBSEP $9 SUBSEP $10
+            source[relation_key] = $3 "." $4 $5
+            source_schema[relation_key] = $3
+            source_table[relation_key] = $4
+            index_name[relation_key] = $10
+            next
+        }
+        FILENAME == ARGV[2] {
+            relation_key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5 SUBSEP \
+                $6 SUBSEP $7 SUBSEP $8 SUBSEP $9 SUBSEP $10
+            component_count[relation_key] = $11
+            next
+        }
+        {
+            cardinality[$1 SUBSEP $2 SUBSEP $3 SUBSEP $5] = ($7 == "\\N" ? "unavailable" : $7)
+        }
+        END {
+            for (key in source) {
+                value = "unavailable"
+                if (component_count[key] != "") {
+                    value = cardinality[source_schema[key] SUBSEP source_table[key] SUBSEP \
+                        index_name[key] SUBSEP component_count[key]]
+                    if (value == "") value = "unavailable"
+                }
+                print source[key], index_name[key], value
+            }
+        }
+    ' "$relations_file" "$component_file" "$indexes_file" | \
+        LC_ALL=C sort -t "$coverage_field_separator" -k1,1 -k2,2
+}
+
 render_index_coverage() {
     local relations_file=$1
     local component_file="$WORK_DIR/relation-component-counts.tsv"
@@ -747,13 +809,36 @@ render_index_coverage() {
     local coverage_field_separator=$'\034'
     local source_value supporting_index cardinality line_source line_index line_cardinality line_cardinality_offset
     local separator_line
+    local coverage_file="$WORK_DIR/render-index-coverage.tsv"
+    local stderr_file="$WORK_DIR/render-index-coverage.stderr"
     local found=false
     local coverage_budget coverage_source_width coverage_index_width coverage_cardinality_width
 
     printf 'SUPPORTING INDEX COVERAGE\n'
+    if [[ "$PHYSICAL_AVAILABLE" == false ]]; then
+        printf '%sUnavailable:%s physical relation inventory unavailable.\n\n' \
+            "$COLOR_RED" "$COLOR_RESET"
+        return 0
+    fi
+    if [[ "$PHYSICAL_ONLY" == false && "$VIRTUAL_METADATA_AVAILABLE" == false ]]; then
+        printf '%sUnavailable:%s virtual relation inventory unavailable.\n\n' \
+            "$COLOR_RED" "$COLOR_RESET"
+        return 0
+    fi
+    if [[ "$PHYSICAL_ONLY" == false && "$VIRTUAL_AVAILABLE" == false ]]; then
+        printf '%sUnavailable:%s virtual relation processing failed.\n\n' \
+            "$COLOR_RED" "$COLOR_RESET"
+        return 0
+    fi
     if [[ "$INDEX_METADATA_AVAILABLE" == false ]]; then
         printf '%sUnavailable:%s index metadata unavailable.\n\n' "$COLOR_RED" "$COLOR_RESET"
         return 0
+    fi
+
+    if ! filter_index_coverage "$relations_file" "$component_file" "$indexes_file" \
+        "$coverage_field_separator" > "$coverage_file" 2> "$stderr_file"; then
+        render_stage_error 'Unable to render supporting-index coverage' "$stderr_file" \
+            'no diagnostic returned by the supporting-index rendering pipeline'
     fi
 
     coverage_budget=$((TERMINAL_WIDTH - 6))
@@ -786,38 +871,7 @@ render_index_coverage() {
         done <<EOF
 $WRAPPED_RELATION_FIELDS
 EOF
-    done < <(LC_ALL=C awk -F '\t' -v OFS="$coverage_field_separator" '
-        FILENAME == ARGV[1] {
-            if ($10 == "") next
-            relation_key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5 SUBSEP \
-                $6 SUBSEP $7 SUBSEP $8 SUBSEP $9 SUBSEP $10
-            source[relation_key] = $3 "." $4 $5
-            source_schema[relation_key] = $3
-            source_table[relation_key] = $4
-            index_name[relation_key] = $10
-            next
-        }
-        FILENAME == ARGV[2] {
-            relation_key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5 SUBSEP \
-                $6 SUBSEP $7 SUBSEP $8 SUBSEP $9 SUBSEP $10
-            component_count[relation_key] = $11
-            next
-        }
-        {
-            cardinality[$1 SUBSEP $2 SUBSEP $3 SUBSEP $5] = ($7 == "\\N" ? "unavailable" : $7)
-        }
-        END {
-            for (key in source) {
-                value = "unavailable"
-                if (component_count[key] != "") {
-                    value = cardinality[source_schema[key] SUBSEP source_table[key] SUBSEP \
-                        index_name[key] SUBSEP component_count[key]]
-                    if (value == "") value = "unavailable"
-                }
-                print source[key], index_name[key], value
-            }
-        }
-    ' "$relations_file" "$component_file" "$indexes_file" | LC_ALL=C sort -t "$coverage_field_separator" -k1,1 -k2,2)
+    done < "$coverage_file"
     if [[ "$found" == false ]]; then
         printf '%sNone%s\n' "$COLOR_DIM" "$COLOR_RESET"
     fi
@@ -854,6 +908,11 @@ render_relation_tables() {
             'index metadata unavailable.'
         render_unavailable_relation_section 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' \
             'index metadata unavailable.'
+    elif [[ "$VIRTUAL_AVAILABLE" == false ]]; then
+        render_unavailable_relation_section 'COMPLETE VIRTUAL RELATIONSHIPS' \
+            'virtual relation processing failed.'
+        render_unavailable_relation_section 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' \
+            'virtual relation processing failed.'
     else
         render_relation_section "$relations_file" 'COMPLETE VIRTUAL RELATIONSHIPS' complete_virtual
         render_relation_section "$relations_file" 'PARTIAL AND AMBIGUOUS VIRTUAL RELATIONSHIPS' partial_ambiguous_virtual
@@ -913,6 +972,22 @@ render_tree_relation() {
     printf '\n'
 }
 
+filter_tree_branch() {
+    local relations_file=$1
+    local group_number=$2
+    local relation_field_separator=$3
+
+    LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" -v group="$group_number" '
+        {
+            if ($1 == "OUTBOUND") row_group = ($2 == "PHYSICAL_FK" ? 1 : 2)
+            else row_group = ($2 == "PHYSICAL_FK" ? 3 : 4)
+            if (row_group == group) {
+                print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+            }
+        }
+    ' "$relations_file"
+}
+
 render_tree_branch() {
     local relations_file=$1
     local group_number=$2
@@ -921,6 +996,8 @@ render_tree_branch() {
     local branch_is_last=$5
     local relation_field_separator=$'\034'
     local branch_connector child_indent child_connector
+    local branch_file="$WORK_DIR/render-tree-branch-${group_number}.tsv"
+    local stderr_file="$WORK_DIR/render-tree-branch-${group_number}.stderr"
     local current=0
     local direction classification source_schema source_table source_columns
     local target_schema target_table target_columns constraint_name supporting_index
@@ -932,6 +1009,13 @@ render_tree_branch() {
     else
         branch_connector='├──'
         child_indent='│   '
+    fi
+
+    if [[ "$group_count" -ne 0 ]] && \
+       ! filter_tree_branch "$relations_file" "$group_number" "$relation_field_separator" \
+           > "$branch_file" 2> "$stderr_file"; then
+        render_stage_error "Unable to render ${branch_label}" "$stderr_file" \
+            'no diagnostic returned by the dependency-tree filtering pipeline'
     fi
     printf '%s%s%s %s\n' "$COLOR_DIM_CYAN" "$branch_connector" "$COLOR_RESET" "$branch_label"
 
@@ -954,40 +1038,88 @@ render_tree_branch() {
             "$source_schema" "$source_table" "$source_columns" \
             "$target_schema" "$target_table" "$target_columns" \
             "$constraint_name" "$supporting_index" "$status_tags" "$details"
-    done < <(LC_ALL=C awk -F '\t' -v OFS="$relation_field_separator" -v group="$group_number" '
-        {
-            if ($1 == "OUTBOUND") row_group = ($2 == "PHYSICAL_FK" ? 1 : 2)
-            else row_group = ($2 == "PHYSICAL_FK" ? 3 : 4)
-            if (row_group == group) {
-                print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
-            }
-        }
-    ' "$relations_file")
+    done < "$branch_file"
+}
+
+render_tree_unavailable_branch() {
+    local branch_label=$1
+    local branch_is_last=$2
+    local reason=$3
+    local branch_connector child_indent
+
+    if [[ "$branch_is_last" == true ]]; then
+        branch_connector='└──'
+        child_indent='    '
+    else
+        branch_connector='├──'
+        child_indent='│   '
+    fi
+    printf '%s%s%s %s\n' "$COLOR_DIM_CYAN" "$branch_connector" "$COLOR_RESET" "$branch_label"
+    printf '%s%s└──%s %sUnavailable:%s %s\n' "$COLOR_DIM_CYAN" "$child_indent" \
+        "$COLOR_RESET" "$COLOR_RED" "$COLOR_RESET" "$reason"
 }
 
 render_tree() {
     local relations_file=$1
     local counts
     local outbound_physical outbound_virtual inbound_physical inbound_virtual
+    local stderr_file="$WORK_DIR/render-tree-counts.stderr"
 
-    counts=$(LC_ALL=C awk -F '\t' '
+    if ! counts=$(LC_ALL=C awk -F '\t' '
         {
             if ($1 == "OUTBOUND") group = ($2 == "PHYSICAL_FK" ? 1 : 2)
             else group = ($2 == "PHYSICAL_FK" ? 3 : 4)
             count[group]++
         }
         END { printf "%d %d %d %d", count[1], count[2], count[3], count[4] }
-    ' "$relations_file")
+    ' "$relations_file" 2> "$stderr_file"); then
+        render_stage_error 'Unable to count dependency-tree relations' "$stderr_file" \
+            'no diagnostic returned by the dependency-tree counting pipeline'
+    fi
     read -r outbound_physical outbound_virtual inbound_physical inbound_virtual <<EOF
 $counts
 EOF
 
     printf 'DEPENDENCY TREE\n'
     printf '%s%s.%s%s\n' "$COLOR_BOLD_YELLOW" "$SCHEMA_NAME" "$TABLE_NAME" "$COLOR_RESET"
-    render_tree_branch "$relations_file" 1 'OUTBOUND PHYSICAL' "$outbound_physical" false
-    render_tree_branch "$relations_file" 2 'OUTBOUND VIRTUAL' "$outbound_virtual" false
-    render_tree_branch "$relations_file" 3 'INBOUND PHYSICAL' "$inbound_physical" false
-    render_tree_branch "$relations_file" 4 'INBOUND VIRTUAL' "$inbound_virtual" true
+    if [[ "$PHYSICAL_AVAILABLE" == true ]]; then
+        render_tree_branch "$relations_file" 1 'OUTBOUND PHYSICAL' "$outbound_physical" false
+    else
+        render_tree_unavailable_branch 'OUTBOUND PHYSICAL' false 'physical metadata unavailable.'
+    fi
+    if [[ "$PHYSICAL_ONLY" == true ]]; then
+        render_tree_branch "$relations_file" 2 'OUTBOUND VIRTUAL' "$outbound_virtual" false
+    elif [[ "$PHYSICAL_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'OUTBOUND VIRTUAL' false \
+            'virtual inference requires physical metadata.'
+    elif [[ "$VIRTUAL_METADATA_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'OUTBOUND VIRTUAL' false 'virtual metadata unavailable.'
+    elif [[ "$INDEX_METADATA_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'OUTBOUND VIRTUAL' false 'index metadata unavailable.'
+    elif [[ "$VIRTUAL_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'OUTBOUND VIRTUAL' false 'virtual relation processing failed.'
+    else
+        render_tree_branch "$relations_file" 2 'OUTBOUND VIRTUAL' "$outbound_virtual" false
+    fi
+    if [[ "$PHYSICAL_AVAILABLE" == true ]]; then
+        render_tree_branch "$relations_file" 3 'INBOUND PHYSICAL' "$inbound_physical" false
+    else
+        render_tree_unavailable_branch 'INBOUND PHYSICAL' false 'physical metadata unavailable.'
+    fi
+    if [[ "$PHYSICAL_ONLY" == true ]]; then
+        render_tree_branch "$relations_file" 4 'INBOUND VIRTUAL' "$inbound_virtual" true
+    elif [[ "$PHYSICAL_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'INBOUND VIRTUAL' true \
+            'virtual inference requires physical metadata.'
+    elif [[ "$VIRTUAL_METADATA_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'INBOUND VIRTUAL' true 'virtual metadata unavailable.'
+    elif [[ "$INDEX_METADATA_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'INBOUND VIRTUAL' true 'index metadata unavailable.'
+    elif [[ "$VIRTUAL_AVAILABLE" == false ]]; then
+        render_tree_unavailable_branch 'INBOUND VIRTUAL' true 'virtual relation processing failed.'
+    else
+        render_tree_branch "$relations_file" 4 'INBOUND VIRTUAL' "$inbound_virtual" true
+    fi
     printf '\n'
 }
 
@@ -1129,6 +1261,17 @@ sanitize_stderr() {
     printf '%s' "$message"
 }
 
+render_stage_error() {
+    local message=$1
+    local stderr_file=$2
+    local fallback=$3
+    local diagnostic
+
+    diagnostic=$(sanitize_stderr "$stderr_file")
+    [[ -n "$diagnostic" ]] || diagnostic=$fallback
+    runtime_error 3 "$message: $diagnostic"
+}
+
 connection_preflight() {
     local stderr_file="$WORK_DIR/connection.stderr"
     local output_file="$WORK_DIR/connection.tsv"
@@ -1185,6 +1328,17 @@ mark_degraded() {
         FINAL_STATUS=4
     fi
     REPORT_ELIGIBLE=false
+}
+
+mark_virtual_unavailable() {
+    local message=$1
+
+    VIRTUAL_AVAILABLE=false
+    if [[ "$PHYSICAL_AVAILABLE" == true ]]; then
+        mark_degraded "$message"
+    else
+        runtime_error 3 "$message"
+    fi
 }
 
 run_optional_query() {
@@ -1855,7 +2009,7 @@ build_virtual_relations() {
     ' "$columns_file" "$pks_file" "$indexes_file" "$relations_file" > "$virtual_file" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the reducer'
-        mark_degraded "Virtual relation inference failed: $diagnostic"
+        mark_virtual_unavailable "Virtual relation inference failed: $diagnostic"
         sort_relations
         return 0
     fi
@@ -1863,28 +2017,28 @@ build_virtual_relations() {
     if ! cat "$relations_file" "$virtual_file" > "$combined_file" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the combination utility'
-        mark_degraded "Virtual relation combination failed: $diagnostic"
+        mark_virtual_unavailable "Virtual relation combination failed: $diagnostic"
         sort_relations
         return 0
     fi
     if ! cat "$component_file" "$virtual_component_file" > "$combined_component_file" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the combination utility'
-        mark_degraded "Virtual component combination failed: $diagnostic"
+        mark_virtual_unavailable "Virtual component combination failed: $diagnostic"
         sort_relations
         return 0
     fi
     if ! mv "$combined_component_file" "$component_file" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the move utility'
-        mark_degraded "Virtual component publication failed: $diagnostic"
+        mark_virtual_unavailable "Virtual component publication failed: $diagnostic"
         sort_relations
         return 0
     fi
     if ! mv "$combined_file" "$relations_file" 2> "$stderr_file"; then
         diagnostic=$(sanitize_stderr "$stderr_file")
         [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the move utility'
-        mark_degraded "Virtual relation publication failed: $diagnostic"
+        mark_virtual_unavailable "Virtual relation publication failed: $diagnostic"
         sort_relations
         return 0
     fi
@@ -1924,6 +2078,7 @@ render_cardinality() {
     local comparison
     local absolute_difference
     local percentage_drift
+    local stderr_file="$WORK_DIR/render-cardinality.stderr"
 
     printf 'CARDINALITY\n'
     if [[ "$STATS_AVAILABLE" == true ]] && \
@@ -1946,7 +2101,7 @@ render_cardinality() {
         fi
 
         if [[ -n "$estimated" && -n "$exact" ]]; then
-            comparison=$(LC_ALL=C awk -v estimated="$estimated" -v exact="$exact" '
+            if ! comparison=$(LC_ALL=C awk -v estimated="$estimated" -v exact="$exact" '
                 BEGIN {
                     difference = exact - estimated
                     if (difference < 0) difference = -difference
@@ -1957,7 +2112,10 @@ render_cardinality() {
                     }
                     printf "%.0f\t%.2f", difference, percentage
                 }
-            ')
+            ' 2> "$stderr_file"); then
+                render_stage_error 'Unable to render cardinality comparison' "$stderr_file" \
+                    'no diagnostic returned by the cardinality rendering pipeline'
+            fi
             IFS=$'\t' read -r absolute_difference percentage_drift <<EOF
 $comparison
 EOF
@@ -1994,6 +2152,8 @@ wait_for_active_child() {
 
 publish_report() {
     local output_directory
+    local stderr_file="$WORK_DIR/report-publication.stderr"
+    local diagnostic
 
     [[ -n "$OUTPUT_FILE" && "$REPORT_ELIGIBLE" == true ]] || return 0
     resolve_output_format
@@ -2041,8 +2201,10 @@ publish_report() {
             ;;
     esac
 
-    if ! mv -f -- "$EXPORT_TEMP" "$OUTPUT_FILE"; then
-        runtime_error 3 'Unable to publish the report.'
+    if ! mv -f -- "$EXPORT_TEMP" "$OUTPUT_FILE" 2> "$stderr_file"; then
+        diagnostic=$(sanitize_stderr "$stderr_file")
+        [[ -n "$diagnostic" ]] || diagnostic='no diagnostic returned by the move utility'
+        runtime_error 3 "Unable to publish the report: $diagnostic"
     fi
     EXPORT_TEMP=""
 }
@@ -2062,6 +2224,7 @@ main() {
     REPORT_ELIGIBLE=true
     PHYSICAL_AVAILABLE=true
     VIRTUAL_METADATA_AVAILABLE=true
+    VIRTUAL_AVAILABLE=true
     INDEX_METADATA_AVAILABLE=true
     STATS_AVAILABLE=true
     EXACT_AVAILABLE=false
