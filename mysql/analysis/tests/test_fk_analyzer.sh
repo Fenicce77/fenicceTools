@@ -150,6 +150,7 @@ write_presentation_fixture() {
         $'OUTBOUND\tPARTIAL_VIRTUAL_FK\tsales\ttyped_orders\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_typed_orders_wrong_order\tMISSING_COMPONENTS,TYPE_MISMATCH,UNINDEXED,INDEX_ORDER_MISMATCH\tPartial composite relationship with all diagnostic tags visible' \
         $'OUTBOUND\tAMBIGUOUS_VIRTUAL_FK\tsales\tledger_entries\t(country_code_identifier_component)\t\t\t()\t\tidx_ledger_country_code\t\tCandidate targets: sales.countries(code), sales.currencies(code)' \
         $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(short_id)\tsales\tshort_parent\t(id)\tfk_short\tidx_short\t\tShort detail' \
+        $'OUTBOUND\tPHYSICAL_FK\tsales\torders\t(backslash_id)\tsales\tbackslash_parent\t(id)\tfk\\nname_long_identifier_segment\tidx\\nname_long_identifier_segment\t\tLiteral backslash detail' \
         $'INBOUND\tPHYSICAL_FK\tsales\tshipment_items_archive\t(tenant_identifier_component, order_identifier_component, regional_partition_identifier_component)\tsales\torders\t(tenant_identifier_component, order_identifier_component, regional_partition_identifier_component)\tfk_shipment_items_archive_orders\tidx_shipment_items_archive_orders_tuple\tUNINDEXED\tON UPDATE CASCADE; ON DELETE RESTRICT' \
         $'INBOUND\tCOMPLETE_VIRTUAL_FK\tsales\torder_events_archive\t(orders_tenant_identifier, orders_order_identifier, orders_regional_partition_identifier)\tsales\torders\t(tenant_identifier, order_identifier, regional_partition_identifier)\t\tidx_order_events_archive_tuple\t\tComplete inbound virtual composite relationship' \
         > "$FIXTURE_FILE"
@@ -1281,9 +1282,13 @@ run_presentation_tests() {
     assert_contains "$OUTPUT" $'index=\033[0;34midx_short\033[0m;'
     assert_contains "$OUTPUT" $'constraint=\033[0;34mfk_orders_customer_\033[0m'
     assert_contains "$OUTPUT" $'index=\033[0;34midx_orders_customer_archive_\033[0m'
+    assert_contains "$OUTPUT" $'constraint=\033[0;34mfk\\nname_long_identifier_\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;34msegment\033[0m; index=\033[0;34midx\\nname_long_\033[0m'
+    assert_contains "$OUTPUT" $'\033[0;34midentifier_segment\033[0m; Literal'
     assert_contains "$OUTPUT" 'Short detail'
     assert_not_contains "$OUTPUT" $'\033[0;34mconstraint='
     assert_not_contains "$OUTPUT" $'\033[0;34m; Short detail'
+    assert_not_contains "$OUTPUT" $'\033[0;34mLiteral backslash detail'
     assert_contains "$OUTPUT" $'\033[0;36mPHYSICAL_FK'
     assert_contains "$OUTPUT" $'\033[0;32mCOMPLETE_VIRTUAL_FK'
     assert_contains "$OUTPUT" $'\033[0;33mPARTIAL_VIRTUAL_FK'

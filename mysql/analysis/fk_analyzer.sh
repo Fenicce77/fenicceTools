@@ -517,14 +517,11 @@ color_relation_detail_names() {
     local supporting_index=$5
     local details_color=$6
 
-    COLORED_RELATION_DETAILS=$(printf '%s' "$line_details" | LC_ALL=C awk \
-        -v details="$details" \
-        -v line_offset="$line_offset" \
-        -v constraint_name="$constraint_name" \
-        -v supporting_index="$supporting_index" \
+    COLORED_RELATION_DETAILS=$(printf '%s\034%s\034%s\034%s\034%s\034%s\n' \
+        "$line_details" "$details" "$line_offset" "$constraint_name" "$supporting_index" "$details_color" | \
+        LC_ALL=C awk -F $'\034' \
         -v blue="$COLOR_BLUE" \
-        -v reset="$COLOR_RESET" \
-        -v resume="$details_color" '
+        -v reset="$COLOR_RESET" '
         function segment_start(marker, name, position) {
             if (name == "") return 0
             position = index(details, marker name)
@@ -540,8 +537,12 @@ color_relation_detail_names() {
             return overlap_end + 1
         }
         {
-            value = $0
-            line_start = line_offset + 0
+            value = $1
+            details = $2
+            line_start = $3 + 0
+            constraint_name = $4
+            supporting_index = $5
+            resume = $6
             line_end = line_start + length(value) - 1
             constraint_start = segment_start("constraint=", constraint_name)
             index_start = segment_start("index=", supporting_index)
