@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="$ROOT/check_opened_sessions_interactive.sh"
+FAKE="$ROOT/tests/fake_mysql_open_sessions.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/open-sessions-cli-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
@@ -71,5 +72,15 @@ run_case required_login_path --mysql-bin /bin/true
 assert_status 2
 assert_contains "$TMP/required_login_path.err" 'ERROR: --login-path is required.'
 assert_contains "$TMP/required_login_path.err" 'Usage:'
+
+# Legacy getopts accepted attached values for every retained value-taking short option.
+run_case attached_short_options -lreporting -t10 -uapp -dbilling -hhost -o --mysql-bin /bin/true
+assert_status 0
+
+# The fake must record the SQL bound to -e even when later client options follow it.
+FAKE_MYSQL_SQL_LOG="$TMP/fake.sql" FAKE_MYSQL_OUTPUT=$'ROW\tapp\tbilling\thost\t3' \
+    "$FAKE" --login-path reporting -e 'SELECT 1' --batch >"$TMP/fake.out"
+assert_contains "$TMP/fake.sql" 'SELECT 1'
+assert_contains "$TMP/fake.out" $'ROW\tapp\tbilling\thost\t3'
 
 printf 'PASS: check_opened_sessions_interactive CLI contract\n'

@@ -94,6 +94,11 @@ parse_arguments() {
                 LOGIN_PATH=$2
                 shift 2
                 ;;
+            -l?*)
+                require_value -l "${1#-l}"
+                LOGIN_PATH=${1#-l}
+                shift
+                ;;
             --login-path=*)
                 require_value --login-path "${1#*=}"
                 LOGIN_PATH=${1#*=}
@@ -103,6 +108,11 @@ parse_arguments() {
                 require_value "$1" "${2-}"
                 REFRESH_TIME=$2
                 shift 2
+                ;;
+            -t?*)
+                require_value -t "${1#-t}"
+                REFRESH_TIME=${1#-t}
+                shift
                 ;;
             --refresh-time=*)
                 require_value --refresh-time "${1#*=}"
@@ -114,6 +124,11 @@ parse_arguments() {
                 FILTER_USER=$2
                 shift 2
                 ;;
+            -u?*)
+                require_value -u "${1#-u}"
+                FILTER_USER=${1#-u}
+                shift
+                ;;
             --user=*)
                 require_value --user "${1#*=}"
                 FILTER_USER=${1#*=}
@@ -124,6 +139,11 @@ parse_arguments() {
                 FILTER_DATABASE=$2
                 shift 2
                 ;;
+            -d?*)
+                require_value -d "${1#-d}"
+                FILTER_DATABASE=${1#-d}
+                shift
+                ;;
             --database=*)
                 require_value --database "${1#*=}"
                 FILTER_DATABASE=${1#*=}
@@ -133,6 +153,11 @@ parse_arguments() {
                 require_value "$1" "${2-}"
                 FILTER_HOST=$2
                 shift 2
+                ;;
+            -h?*)
+                require_value -h "${1#-h}"
+                FILTER_HOST=${1#-h}
+                shift
                 ;;
             --host=*)
                 require_value --host "${1#*=}"
