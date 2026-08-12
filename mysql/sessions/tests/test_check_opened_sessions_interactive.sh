@@ -51,6 +51,12 @@ assert_occurrences() {
     [[ "$actual" -eq "$count" ]] || fail "expected $count occurrences of '$expected' in $file, got $actual"
 }
 
+assert_at_least_occurrences() {
+    local file=$1 expected=$2 minimum=$3 actual
+    actual=$(grep -F -c -- "$expected" "$file" || true)
+    [[ "$actual" -ge "$minimum" ]] || fail "expected at least $minimum occurrences of '$expected' in $file, got $actual"
+}
+
 run_case() {
     local name=$1
     shift
@@ -61,15 +67,16 @@ run_case() {
     set -e
 }
 
-run_pseudo_tty() {
+run_pseudo_tty_program() {
     local output_file=$1
     local input_command=$2
-    shift 2
+    local program=$3
+    shift 3
     local command=''
     local argument
 
     if [[ "$(uname -s)" == Darwin ]]; then
-        for argument in "$SCRIPT" "$@"; do
+        for argument in "$program" "$@"; do
             printf -v command '%s%q ' "$command" "$argument"
         done
         printf -v command 'cd %q && %s' "$TMP" "$command"
@@ -81,7 +88,7 @@ run_pseudo_tty() {
         return
     fi
 
-    for argument in "$SCRIPT" "$@"; do
+    for argument in "$program" "$@"; do
         printf -v command '%s%q ' "$command" "$argument"
     done
     printf -v command 'cd %q && %s' "$TMP" "$command"
@@ -92,6 +99,14 @@ run_pseudo_tty() {
     set -e
 }
 
+run_pseudo_tty() {
+    local output_file=$1
+    local input_command=$2
+    shift 2
+
+    run_pseudo_tty_program "$output_file" "$input_command" "$SCRIPT" "$@"
+}
+
 run_tty_case() {
     local name=$1
     shift
@@ -100,12 +115,21 @@ run_tty_case() {
 }
 
 strip_frame_ansi() {
-    LC_ALL=C sed $'s/\033\\[[0-9;]*m//g' "$1" | tr -d '\r' | \
+    LC_ALL=C sed $'s/\033\\[[0-9;]*m//g; s/\033\\[?25[hl]//g; s/\004\010\010//g' "$1" | tr -d '\r' | \
         sed 's/^Timestamp: .*/Timestamp: <normalized>/'
 }
 
 strip_refresh_sequence() {
     LC_ALL=C sed $'s/\033\\[H\033\\[2J//g' "$1"
+}
+
+assert_final_cursor_action_show() {
+    local file=$1
+    local final_action
+
+    final_action=$(LC_ALL=C sed $'s/\033\\[?25h/|h|/g; s/\033\\[?25l/|l|/g' "$file" | \
+        tr '|' '\n' | sed -n '/^[hl]$/p' | tail -n 1)
+    [[ "$final_action" == h ]] || fail "final cursor action is not show in $file"
 }
 
 # A monitor without connection credentials must stop before terminal setup.
@@ -225,6 +249,7 @@ assert_contains "$TMP/tty_color.out" 'Interactive options:'
 assert_contains "$TMP/tty_color.out" $'\033[0;33m[q]\033[0m'
 assert_contains "$TMP/tty_color.out" $'\033[?25l'
 assert_contains "$TMP/tty_color.out" $'\033[?25h'
+assert_final_cursor_action_show "$TMP/tty_color.out"
 
 run_tty_case tty_no_color --login-path reporting --mysql-bin "$FAKE" --no-color
 assert_status 0
@@ -279,8 +304,14 @@ run_pseudo_tty "$TMP/runtime_invalid_filter.out" \
 assert_status 0
 assert_contains "$TMP/runtime_invalid_filter.out" 'ERROR: --user must not contain empty components. Filters unchanged.'
 assert_contains "$TMP/runtime_invalid_filter.out" 'Filters: user=app database=billing host=api'
-assert_not_contains "$TMP/sql.log" 'CONVERT(0x616c6963652c2c626f62 USING utf8mb4)'
+assert_not_contains "$TMP/sql.log" 'CONVERT(0x616c696365 USING utf8mb4)'
+assert_not_contains "$TMP/sql.log" 'CONVERT(0x626f62 USING utf8mb4)'
 assert_not_contains "$TMP/sql.log" 'CONVERT(0x6368616e6765645f6462 USING utf8mb4)'
+assert_not_contains "$TMP/sql.log" 'CONVERT(0x256368616e6765645c5f686f737425 USING utf8mb4)'
+assert_at_least_occurrences "$TMP/runtime_invalid_filter.out" 'Filters: user=app database=billing host=api' 2
+assert_at_least_occurrences "$TMP/sql.log" 'USER IN (CONVERT(0x617070 USING utf8mb4))' 2
+assert_at_least_occurrences "$TMP/sql.log" 'DB = CONVERT(0x62696c6c696e67 USING utf8mb4)' 2
+assert_at_least_occurrences "$TMP/sql.log" 'HOST LIKE CONVERT(0x2561706925 USING utf8mb4)' 2
 
 # Delta values must use the immediately prior sample and the full row key.
 DYNAMIC_FAKE="$TMP/dynamic_mysql.sh"
@@ -292,9 +323,9 @@ printf '%s\n' \
     'call=$((call + 1))' \
     'printf "%s\\n" "$call" > "$DYNAMIC_MYSQL_STATE"' \
     'if [[ "$call" -eq 1 ]]; then' \
-    "    output=\$'ROW\\tapp\\tbilling\\tapi\\t3\\nROW\\tapp\\tbilling\\tworker\\t4\\nTOTAL\\t\\t\\t\\t7'" \
+    "    output=\$'ROW\\tapp\\tbilling\\tshared\\t3\\nROW\\treport\\tanalytics\\tshared\\t7\\nTOTAL\\t\\t\\t\\t10'" \
     'else' \
-    "    output=\$'ROW\\tapp\\tbilling\\tapi\\t5\\nROW\\tapp\\tbilling\\tworker\\t4\\nROW\\tapp\\tbilling\\tnew\\t1\\nTOTAL\\t\\t\\t\\t10'" \
+    "    output=\$'ROW\\tapp\\tbilling\\tshared\\t5\\nROW\\treport\\tanalytics\\tshared\\t6\\nROW\\tnewuser\\tnewdb\\tshared\\t1\\nTOTAL\\t\\t\\t\\t12'" \
     'fi' \
     'FAKE_MYSQL_OUTPUT="$output" exec "$DYNAMIC_MYSQL_BASE" "$@"' > "$DYNAMIC_FAKE"
 chmod +x "$DYNAMIC_FAKE"
@@ -305,9 +336,10 @@ run_pseudo_tty "$TMP/runtime_diff.out" \
     --login-path reporting --refresh-time 1 --mysql-bin "$DYNAMIC_FAKE"
 assert_status 0
 assert_contains "$TMP/runtime_diff.out" 'Delta'
-assert_contains "$TMP/runtime_diff.out" '+2'
-assert_contains "$TMP/runtime_diff.out" '+1'
-assert_contains "$TMP/runtime_diff.out" '+0'
+strip_frame_ansi "$TMP/runtime_diff.out" > "$TMP/runtime_diff.plain"
+assert_contains "$TMP/runtime_diff.plain" 'app      billing    shared         5     +2'
+assert_contains "$TMP/runtime_diff.plain" 'report   analytics  shared         6     -1'
+assert_contains "$TMP/runtime_diff.plain" 'newuser  newdb      shared         1     +1'
 unset DYNAMIC_MYSQL_STATE DYNAMIC_MYSQL_BASE
 
 # Runtime timestamp collisions are rejected atomically without replacing content.
@@ -335,6 +367,53 @@ assert_contains "$TMP/runtime_log_collision.out" 'ERROR: Log file already exists
 assert_contains "$TMP/runtime_log_collision.out" 'Logging: OFF'
 assert_contains "$TMP/open_sessions_20260812_120000.log" 'preserve runtime log'
 assert_occurrences "$TMP/open_sessions_20260812_120000.log" 'preserve runtime log' 1
+
+# Logging failures and signals must restore the cursor based on immutable terminal
+# ownership, even while log rendering has temporarily disabled screen refresh.
+FAILURE_HARNESS="$TMP/runtime_failure_harness.sh"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'source <(sed '\''/^setup_colors$/,$d'\'' "$MONITOR_SCRIPT")' \
+    'setup_colors' \
+    'TERMINAL_OWNED=true' \
+    'CURSOR_HIDDEN=true' \
+    'SCREEN_REFRESH_ENABLED=true' \
+    'LOGGING_ENABLED=true' \
+    'LOG_FILE=forced-failure.log' \
+    "SAMPLE_ROWS=(\$'app\\tbilling\\tapi\\t3')" \
+    'SAMPLE_TOTAL=3' \
+    'render_frame() { return 73; }' \
+    'exec 3>"$LOG_FILE"' \
+    'trap restore_terminal EXIT' \
+    "printf '\\033[?25l'" \
+    'append_log' \
+    "printf 'UNEXPECTED: continued after log render failure\\n'" > "$FAILURE_HARNESS"
+chmod +x "$FAILURE_HARNESS"
+export MONITOR_SCRIPT="$SCRIPT"
+run_pseudo_tty_program "$TMP/runtime_log_failure.out" ':' "$FAILURE_HARNESS"
+assert_not_contains "$TMP/runtime_log_failure.out" 'UNEXPECTED:'
+assert_final_cursor_action_show "$TMP/runtime_log_failure.out"
+
+SIGNAL_HARNESS="$TMP/runtime_signal_harness.sh"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'source <(sed '\''/^setup_colors$/,$d'\'' "$MONITOR_SCRIPT")' \
+    'TERMINAL_OWNED=true' \
+    'CURSOR_HIDDEN=true' \
+    'SCREEN_REFRESH_ENABLED=false' \
+    'LOGGING_ENABLED=true' \
+    'LOG_FILE=signal.log' \
+    'exec 3>"$LOG_FILE"' \
+    'trap restore_terminal EXIT' \
+    "trap 'exit 130' HUP INT TERM" \
+    "printf '\\033[?25l'" \
+    'kill -TERM "$$"' > "$SIGNAL_HARNESS"
+chmod +x "$SIGNAL_HARNESS"
+run_pseudo_tty_program "$TMP/runtime_signal.out" ':' "$SIGNAL_HARNESS"
+assert_final_cursor_action_show "$TMP/runtime_signal.out"
+unset MONITOR_SCRIPT
 
 # Snapshot logs are plain text and their requested destination is created once.
 run_case new_log --login-path reporting --logging --log-file "$TMP/new-snapshot.log" --mysql-bin "$FAKE"

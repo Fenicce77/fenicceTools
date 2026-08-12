@@ -13,6 +13,8 @@ LOG_FILE=''
 MYSQL_BIN=mysql
 COLOR_ENABLED=true
 SCREEN_REFRESH_ENABLED=false
+TERMINAL_OWNED=false
+CURSOR_HIDDEN=false
 SAMPLE_ROWS=()
 SAMPLE_TOTAL=0
 PREVIOUS_ROWS=()
@@ -46,6 +48,20 @@ refresh_screen() {
     if [[ "$SCREEN_REFRESH_ENABLED" == true ]]; then
         printf '\033[H\033[2J'
     fi
+}
+
+hide_cursor() {
+    [[ "$TERMINAL_OWNED" == true && "$CURSOR_HIDDEN" == false ]] || return 0
+
+    CURSOR_HIDDEN=true
+    printf '\033[?25l'
+}
+
+show_cursor() {
+    [[ "$TERMINAL_OWNED" == true && "$CURSOR_HIDDEN" == true ]] || return 0
+
+    printf '\033[?25h'
+    CURSOR_HIDDEN=false
 }
 
 show_help() {
@@ -474,6 +490,8 @@ append_log() {
     local saved_color_yellow=$COLOR_YELLOW
     local saved_color_cyan=$COLOR_CYAN
     local saved_color_reset=$COLOR_RESET
+    local errexit_enabled=false
+    local log_status=0
 
     [[ "$LOGGING_ENABLED" == true && -n "$LOG_FILE" ]] || return 0
 
@@ -483,8 +501,15 @@ append_log() {
     COLOR_YELLOW=''
     COLOR_CYAN=''
     COLOR_RESET=''
+
+    [[ $- == *e* ]] && errexit_enabled=true
+    set +e
     render_frame >&3
-    printf '\n' >&3
+    log_status=$?
+    if [[ "$log_status" -eq 0 ]]; then
+        printf '\n' >&3
+        log_status=$?
+    fi
 
     COLOR_ENABLED=$saved_color_enabled
     SCREEN_REFRESH_ENABLED=$saved_screen_refresh_enabled
@@ -492,6 +517,9 @@ append_log() {
     COLOR_YELLOW=$saved_color_yellow
     COLOR_CYAN=$saved_color_cyan
     COLOR_RESET=$saved_color_reset
+
+    [[ "$errexit_enabled" == true ]] && set -e
+    return "$log_status"
 }
 
 toggle_diff() {
@@ -526,7 +554,7 @@ toggle_logging() {
 prompt_filters() {
     local candidate_user candidate_database candidate_host
 
-    printf '\033[?25h'
+    show_cursor
     printf '\nModify filters (blank keeps current value)\n'
     printf 'User [%s]: ' "$(filter_label "$FILTER_USER" '<all>')"
     IFS= read -r candidate_user || candidate_user=''
@@ -534,7 +562,7 @@ prompt_filters() {
     IFS= read -r candidate_database || candidate_database=''
     printf 'Host [%s]: ' "$(filter_label "$FILTER_HOST" '<all>')"
     IFS= read -r candidate_host || candidate_host=''
-    printf '\033[?25l'
+    hide_cursor
 
     [[ -n "$candidate_user" ]] || candidate_user=$FILTER_USER
     [[ -n "$candidate_database" ]] || candidate_database=$FILTER_DATABASE
@@ -561,12 +589,14 @@ handle_key() {
 }
 
 restore_terminal() {
-    if [[ "$SCREEN_REFRESH_ENABLED" == true ]]; then
-        printf '\033[?25h'
-    fi
+    local exit_status=$?
+
+    set +e
     if [[ -n "$LOG_FILE" ]]; then
-        exec 3>&- || true
+        exec 3>&-
     fi
+    show_cursor
+    return "$exit_status"
 }
 
 run_interactive() {
@@ -575,7 +605,8 @@ run_interactive() {
 
     trap restore_terminal EXIT
     trap 'exit 130' HUP INT TERM
-    printf '\033[?25l'
+    TERMINAL_OWNED=true
+    hide_cursor
 
     while true; do
         collect_sample
