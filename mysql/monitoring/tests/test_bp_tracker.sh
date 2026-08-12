@@ -50,12 +50,12 @@ run_pseudo_tty() {
 
     case "$(uname -s)" in
         Darwin)
-            { sleep 0.2; printf q; } | TERM="$term" script -q /dev/null "$@" >"$output_file" 2>&1
+            { sleep 1; printf q; } | TERM="$term" script -q /dev/null "$@" >"$output_file" 2>&1
             ;;
         Linux)
             local runner_command
             printf -v runner_command '%q ' env "TERM=$term" "$@"
-            { sleep 0.2; printf q; } | script -q -e -c "$runner_command" /dev/null >"$output_file" 2>&1
+            { sleep 1; printf q; } | script -q -e -c "$runner_command" /dev/null >"$output_file" 2>&1
             ;;
         *) fail "unsupported pseudo-terminal platform: $(uname -s)" ;;
     esac
@@ -63,7 +63,10 @@ run_pseudo_tty() {
 
 FAKE_MYSQL_BP_LOG="$TMP/tty.sql" run_pseudo_tty xterm "$TMP/tty.out" \
     env "MYSQL_BIN=$FAKE" "$SCRIPT" --login-path monitor --interval 1
-assert_contains "$TMP/tty.out" 'Interactive options: [q] Quit' 'TTY frame is missing the reduced interactive legend'
+sed $'s/\033\\[[0-9;]*[[:alpha:]]//g; s/\033([[:alpha:]]//g' "$TMP/tty.out" >"$TMP/tty-plain.out"
+assert_contains "$TMP/tty-plain.out" 'Interactive options: [q] Quit' 'TTY frame is missing the reduced interactive legend'
+assert_contains "$TMP/tty.out" $'\033[32mq' 'TTY legend does not color the quit key'
+assert_contains "$TMP/tty.out" $'\033[31mQuit' 'TTY legend does not color the quit action'
 
 FAKE_MYSQL_BP_LOG="$TMP/tty-no-color.sql" run_pseudo_tty xterm "$TMP/tty-no-color.out" \
     env "MYSQL_BIN=$FAKE" "$SCRIPT" --login-path monitor --interval 1 --no-color

@@ -66,11 +66,16 @@ top() { [[ "$TOP_OBJECTS_COUNT" -gt 0 ]] || return 0; local w='1=1'; if [[ -n "$
 sessions() { [[ "$ACTIVE_SESSIONS_COUNT" -gt 0 ]] || return 0; local w='1=1'; if [[ -n "$USER_FILTER" ]]; then w="user LIKE CONCAT('%', $(like "$USER_FILTER"), '%') ESCAPE '\\\\'"; fi; SESSIONS_ROW=$(query "/* bp-tracker:active-sessions */ SELECT user, time, state, LEFT(current_statement, 64) FROM sys.session WHERE user NOT IN ('mysql.session', 'mysql.sys') AND current_statement IS NOT NULL AND $w ORDER BY time DESC LIMIT $ACTIVE_SESSIONS_COUNT;" 2>&1) || SESSIONS_ROW="ACTIVE USER SESSIONS UNAVAILABLE: $SESSIONS_ROW"; return 0; }
 rate() { [[ -n "$2" && "$3" -gt 0 && "$1" -ge "$2" ]] || { printf N/A; return; }; awk -v a="$1" -v b="$2" -v s="$3" 'BEGIN {printf "%.2f", (a-b)/s}'; }
 log() { if [[ -n "$OUTPUT_FILE" ]]; then printf '%s | %s\n' "$(date '+%F %T')" "$1" >> "$OUTPUT_FILE"; fi; return 0; }
+render_interactive_legend() {
+  [[ "$SCREEN_REFRESH_ENABLED" == true ]] || return 0
+  printf '\n%b\n' "${C_BOLD}Interactive options:${C_RESET} [${C_GREEN}q${C_RESET}] ${C_RED}Quit${C_RESET}"
+}
 render() {
   local p f d dirty pct io y n elapsed=0 yr nr color=''; IFS=$'\t' read -r p f d dirty pct io y n <<< "$GLOBAL"; [[ -n "$PREV_TIME" ]] && elapsed=$((NOW-PREV_TIME)); yr=$(rate "$y" "$PREV_YOUNG" "$elapsed"); nr=$(rate "$n" "$PREV_NOT_YOUNG" "$elapsed"); [[ "$io" -gt 5000 ]] && color=$C_RED || { [[ "$io" -gt 0 ]] && color=$C_YELLOW || true; }
   clear_screen; printf '%b\n' "${C_CYAN}${C_BOLD}================ BUFFER POOL ACTIVITY ================${C_RESET}"; printf '%s\n' "Pool pages: $p | Free pages: $f | Data pages: $d | Dirty pages: $dirty (${pct}%)"; printf '%b\n' "Read I/O: ${color}$io pages/s${C_RESET} | Young promotions/s: $yr | Old-list stays/s: $nr"; log "BUFFER POOL ACTIVITY | pool=$p free=$f data=$d dirty=$dirty dirty_pct=$pct read_io=$io young_promotions_s=$yr old_list_stays_s=$nr"
   [[ "$TOP_OBJECTS_COUNT" -gt 0 ]] && { printf '%b\n%s\n' "${C_CYAN}TOP OBJECTS${C_RESET}" "$TOP_OBJECTS_ROW"; log "TOP OBJECTS | $TOP_OBJECTS_ROW"; }
   [[ "$ACTIVE_SESSIONS_COUNT" -gt 0 ]] && { printf '%b\n%s\n' "${C_GREEN}ACTIVE USER SESSIONS${C_RESET}" "$SESSIONS_ROW"; log 'ACTIVE USER SESSIONS | metadata sampled'; }
+  render_interactive_legend
   PREV_YOUNG=$y; PREV_NOT_YOUNG=$n; PREV_TIME=$NOW
 }
 run_once() { global; top; sessions; render; }
