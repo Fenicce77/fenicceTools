@@ -98,14 +98,14 @@ assert_status 0
 
 # Query filters must be escaped as SQL literals and collected in one client call.
 : > "$TMP/sql.log"
-run_case escaped_filters --login-path reporting --user "alice,o'connor" \
-    --database "billing'archive" --host 'api%_west\\node' --mysql-bin "$FAKE"
+run_case escaped_filters --login-path reporting --user "alice,o\\'connor" \
+    --database "billing\\'archive" --host 'api%_west\\node' --mysql-bin "$FAKE"
 assert_status 0
-assert_contains "$TMP/sql.log" "USER IN ('alice', 'o''connor')"
-assert_contains "$TMP/sql.log" "DB = 'billing''archive'"
+assert_contains "$TMP/sql.log" "USER IN (CONVERT(0x616c696365 USING utf8mb4), CONVERT(0x6f5c27636f6e6e6f72 USING utf8mb4))"
+assert_contains "$TMP/sql.log" "DB = CONVERT(0x62696c6c696e675c2761726368697665 USING utf8mb4)"
 assert_not_contains "$TMP/sql.log" "o\\'connor"
 assert_not_contains "$TMP/sql.log" "billing\\'archive"
-assert_contains "$TMP/sql.log" "HOST LIKE '%api\\\\%\\\\_west\\\\\\\\\\\\\\\\node%' ESCAPE '\\\\'"
+assert_contains "$TMP/sql.log" "HOST LIKE CONVERT(0x256170695c255c5f776573745c5c5c5c6e6f646525 USING utf8mb4) ESCAPE CONVERT(0x5c USING utf8mb4)"
 assert_contains "$TMP/sql.log" 'UNION ALL'
 assert_occurrences "$TMP/sql.log" 'UNION ALL' 1
 

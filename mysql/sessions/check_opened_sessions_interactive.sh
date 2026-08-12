@@ -221,10 +221,11 @@ parse_arguments() {
     fi
 }
 
-sql_quote() {
+sql_hex_literal() {
     local value=$1
-    value=${value//\'/\'\'}
-    printf "'%s'" "$value"
+    local hex
+    hex=$(LC_ALL=C printf '%s' "$value" | od -An -tx1 | tr -d ' \n')
+    printf 'CONVERT(0x%s USING utf8mb4)' "$hex"
 }
 
 like_literal() {
@@ -235,11 +236,10 @@ like_literal() {
     printf '%s' "$value"
 }
 
-like_pattern_literal() {
+like_pattern_expression() {
     local value
     value=$(like_literal "$1")
-    value=${value//\\/\\\\}
-    printf "'%%%s%%'" "$value"
+    sql_hex_literal "%${value}%"
 }
 
 build_filter_clause() {
@@ -254,17 +254,17 @@ build_filter_clause() {
             if [[ -n "$quoted_users" ]]; then
                 quoted_users+=', '
             fi
-            quoted_users+=$(sql_quote "$user")
+            quoted_users+=$(sql_hex_literal "$user")
         done
         filters+=" AND USER IN (${quoted_users})"
     fi
 
     if [[ -n "$FILTER_DATABASE" ]]; then
-        filters+=" AND DB = $(sql_quote "$FILTER_DATABASE")"
+        filters+=" AND DB = $(sql_hex_literal "$FILTER_DATABASE")"
     fi
 
     if [[ -n "$FILTER_HOST" ]]; then
-        filters+=" AND HOST LIKE $(like_pattern_literal "$FILTER_HOST") ESCAPE '\\\\'"
+        filters+=" AND HOST LIKE $(like_pattern_expression "$FILTER_HOST") ESCAPE $(sql_hex_literal $'\\')"
     fi
 
     printf '%s' "$filters"
