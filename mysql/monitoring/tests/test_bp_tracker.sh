@@ -41,6 +41,38 @@ assert_not_contains "$TMP/sql.log" 'innodb_buffer_stats_by_table' 'default execu
 assert_not_contains "$TMP/sql.log" 'FROM sys.session' 'default executed session query'
 assert_no_ansi "$TMP/default.out" 'no-color default output contains ANSI'
 assert_no_ansi "$TMP/output.log" 'output log contains ANSI'
+assert_not_contains "$TMP/default.out" 'Interactive options:' 'redirected output contains interactive legend'
+assert_not_contains "$TMP/output.log" 'Interactive options:' 'output log contains interactive legend'
+
+run_pseudo_tty() {
+    local term=$1 output_file=$2
+    shift 2
+
+    case "$(uname -s)" in
+        Darwin)
+            { sleep 0.2; printf q; } | TERM="$term" script -q /dev/null "$@" >"$output_file" 2>&1
+            ;;
+        Linux)
+            local runner_command
+            printf -v runner_command '%q ' env "TERM=$term" "$@"
+            { sleep 0.2; printf q; } | script -q -e -c "$runner_command" /dev/null >"$output_file" 2>&1
+            ;;
+        *) fail "unsupported pseudo-terminal platform: $(uname -s)" ;;
+    esac
+}
+
+FAKE_MYSQL_BP_LOG="$TMP/tty.sql" run_pseudo_tty xterm "$TMP/tty.out" \
+    env "MYSQL_BIN=$FAKE" "$SCRIPT" --login-path monitor --interval 1
+assert_contains "$TMP/tty.out" 'Interactive options: [q] Quit' 'TTY frame is missing the reduced interactive legend'
+
+FAKE_MYSQL_BP_LOG="$TMP/tty-no-color.sql" run_pseudo_tty xterm "$TMP/tty-no-color.out" \
+    env "MYSQL_BIN=$FAKE" "$SCRIPT" --login-path monitor --interval 1 --no-color
+assert_contains "$TMP/tty-no-color.out" 'Interactive options: [q] Quit' 'no-color TTY frame is missing the reduced interactive legend'
+tty_no_color_output=$(< "$TMP/tty-no-color.out")
+tty_no_color_without_refresh=${tty_no_color_output//$'\033[H\033[2J'/}
+case "$tty_no_color_without_refresh" in
+    *$'\033'*) fail 'no-color interactive legend emitted ANSI styles' ;;
+esac
 
 : > "$TMP/optional.sql"
 FAKE_MYSQL_BP_LOG="$TMP/optional.sql" MYSQL_BIN="$FAKE" "$SCRIPT" --login-path monitor --no-color --top-objects 7 --object-filter 'a%_\\b' --active-sessions 3 --user-filter 'u%_\\v' --output-file "$TMP/optional.log" >"$TMP/optional.out"
