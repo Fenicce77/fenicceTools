@@ -20,6 +20,54 @@ assert_eq() {
         fail "$message: expected [$expected], got [$actual]"
 }
 
+assert_no_ansi() {
+    local output=$1
+    local message=$2
+
+    TEST_COUNT=$((TEST_COUNT + 1))
+    case "$output" in
+        *$'\033'*) fail "$message" ;;
+    esac
+}
+
+assert_ansi_count_at_least() {
+    local output=$1
+    local sequence=$2
+    local minimum=$3
+    local message=$4
+    local remainder=$output
+    local count=0
+
+    while [[ "$remainder" == *"$sequence"* ]]; do
+        remainder=${remainder#*"$sequence"}
+        count=$((count + 1))
+    done
+
+    TEST_COUNT=$((TEST_COUNT + 1))
+    [[ "$count" -ge "$minimum" ]] ||
+        fail "$message: expected at least $minimum occurrences, got $count"
+}
+
+run_pseudo_tty_monitor() {
+    local term=$1
+    local output_file=$2
+    shift 2
+
+    case "$(uname -s)" in
+        Darwin)
+            { sleep 0.15; printf 'q'; } | TERM="$term" script -q /dev/null "$@" >"$output_file" 2>&1
+            ;;
+        Linux)
+            local runner_command
+            printf -v runner_command '%q ' env "TERM=$term" "$@"
+            { sleep 0.15; printf 'q'; } | script -q -e -c "$runner_command" /dev/null >"$output_file" 2>&1
+            ;;
+        *)
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+}
+
 assert_line_color() {
     local output=$1
     local token=$2
@@ -300,6 +348,57 @@ case "$help_output" in
     *"--login-path=NAME"*"-r, --refresh-time=N"*"su - rmateos"*) : ;;
     *) fail "help text lost required options or example" ;;
 esac
+
+redirected_help=$("$SCRIPT_PATH" --help)
+assert_no_ansi "$redirected_help" "redirected help contains ANSI escape sequences"
+case "$redirected_help" in
+    *"--no-color"*) : ;;
+    *) fail "help text does not document --no-color" ;;
+esac
+
+(
+    initialize_defaults
+    parse_arguments --login-path=proxysql_admin --no-color
+    assert_eq "true" "$NO_COLOR" "no-color parsing"
+)
+
+(
+    initialize_defaults
+    NO_COLOR=true
+    initialize_terminal_capabilities
+    initialize_colors
+    TERM_WIDTH=130
+    TERM_GEOMETRY_DIRTY=false
+    SEP_LINE="=================================================================================================================================="
+    SEP_THIN="----------------------------------------------------------------------------------------------------------------------------------"
+    TIMESTAMP="2026-07-28 12:00:00"
+    PROXY_HOSTNAME="proxysql-test"
+    VIEW_MODE="QUERY"
+    FORMATTED_OUTPUT="No test rows"
+    LAST_SAMPLE_STALE=false
+    no_color_screen=$(render_screen)
+    assert_no_ansi "$no_color_screen" "no-color screen contains ANSI escape sequences"
+)
+
+tty_normal_state_dir="$TRANSPORT_TEST_DIR/tty-normal-state"
+tty_no_color_state_dir="$TRANSPORT_TEST_DIR/tty-no-color-state"
+mkdir "$tty_normal_state_dir" "$tty_no_color_state_dir"
+
+FAKE_MYSQL_STATE_DIR="$tty_normal_state_dir" run_pseudo_tty_monitor xterm "$TRANSPORT_TEST_DIR/tty-normal.out" \
+    env "MYSQL_BIN=$TEST_DIR/fake_mysql.sh" "$SCRIPT_PATH" --login-path=proxysql_admin --refresh-time=0.05
+tty_normal_output=$(< "$TRANSPORT_TEST_DIR/tty-normal.out")
+assert_ansi_count_at_least "$tty_normal_output" $'\033[H\033[2J' 2 "interactive monitor did not refresh two frames"
+case "$tty_normal_output" in
+    *$'\033['*) : ;;
+    *) fail "interactive monitor lost ANSI styles" ;;
+esac
+
+FAKE_MYSQL_STATE_DIR="$tty_no_color_state_dir" run_pseudo_tty_monitor xterm "$TRANSPORT_TEST_DIR/tty-no-color.out" \
+    env "MYSQL_BIN=$TEST_DIR/fake_mysql.sh" "$SCRIPT_PATH" --login-path=proxysql_admin --refresh-time=0.05 --no-color
+tty_no_color_output=$(< "$TRANSPORT_TEST_DIR/tty-no-color.out")
+assert_ansi_count_at_least "$tty_no_color_output" $'\033[H\033[2J' 2 "no-color interactive monitor did not refresh two frames"
+no_color_without_refresh=${tty_no_color_output//$'\033[H\033[2J'/}
+assert_no_ansi "$no_color_without_refresh" "no-color interactive monitor emitted styles"
 
 FULL_RUN_STATE_DIR="$TRANSPORT_TEST_DIR/full-run-state"
 mkdir "$FULL_RUN_STATE_DIR"
