@@ -198,4 +198,25 @@ if kill -0 "$eof_pid" 2>/dev/null; then
 fi
 wait "$eof_pid"
 
+new_sql_log "$TMP/interactive-refresh.sql"
+case "$(uname -s)" in
+    Darwin)
+        { sleep 2; printf 'q'; } | TERM=xterm script -q /dev/null \
+            "$SCRIPT" --login-path x --view transactions --refresh-time 1 --mysql-bin "$FAKE" --no-color \
+            >"$TMP/interactive-refresh.out" 2>&1
+        ;;
+    Linux)
+        refresh_command='TERM=xterm "$1" --login-path x --view transactions --refresh-time 1 --mysql-bin "$2" --no-color'
+        { sleep 2; printf 'q'; } | script -q -e -c "/bin/bash -c '$refresh_command' -- '$SCRIPT' '$FAKE'" /dev/null \
+            >"$TMP/interactive-refresh.out" 2>&1
+        ;;
+    *)
+        fail "unsupported pseudo-terminal platform: $(uname -s)"
+        ;;
+esac
+refresh_sequence=$(printf '\033[H\033[2J')
+refresh_count=$(LC_ALL=C grep -Foc "$refresh_sequence" "$TMP/interactive-refresh.out" || true)
+[[ "$refresh_count" -ge 2 ]] || fail 'interactive refresh did not clear the screen before each frame'
+assert_not_contains "$TMP/interactive-refresh.out" $'\033[0;' 'no-color interactive refresh emitted color sequences'
+
 printf 'PASS: mysql_trx_monitor\n'

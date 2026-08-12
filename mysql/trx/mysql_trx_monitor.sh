@@ -425,6 +425,17 @@ render_and_publish() {
     append_snapshot "$snapshot"
 }
 
+refresh_interactive_screen() {
+    if [[ -t 1 && "${TERM:-dumb}" != dumb ]]; then
+        printf '\033[H\033[2J'
+    fi
+}
+
+render_interactive_frame() {
+    refresh_interactive_screen
+    render_and_publish
+}
+
 cycle_view() {
     case "$VIEW" in
         all) VIEW=transactions ;;
@@ -521,7 +532,7 @@ WHERE ID = $connection_id;"
 
 interactive_loop() {
     local key read_status
-    render_and_publish
+    render_interactive_frame
     while true; do
         if [[ "$PAUSED" == true ]]; then
             printf '\n[PAUSED] [v]iew [p]resume [f]ilters [l]og [k]ill [q]uit: '
@@ -533,7 +544,7 @@ interactive_loop() {
             if [[ "$read_status" -ne 0 ]]; then
                 printf '\n'
                 if [[ "$read_status" -gt 128 ]]; then
-                    render_and_publish
+                    render_interactive_frame
                     continue
                 fi
                 return 0
@@ -542,13 +553,13 @@ interactive_loop() {
         printf '\n'
         case "$key" in
             q) return 0 ;;
-            v) cycle_view; render_and_publish ;;
+            v) cycle_view; render_interactive_frame ;;
             p)
                 if [[ "$PAUSED" == true ]]; then PAUSED=false; else PAUSED=true; fi
                 ;;
-            f) edit_filters; render_and_publish ;;
+            f) edit_filters; render_interactive_frame ;;
             l) toggle_logging ;;
-            k) kill_connection; render_and_publish ;;
+            k) kill_connection; render_interactive_frame ;;
             *) printf 'Unknown command: %s\n' "$key" ;;
         esac
     done
