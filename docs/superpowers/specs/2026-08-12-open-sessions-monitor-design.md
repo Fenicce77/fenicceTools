@@ -36,7 +36,14 @@ ANSI sequences.
 The header shows timestamp, refresh interval, current filters, total matching
 connections, diff mode, and logging state. Connection rows aggregate by MySQL
 user, schema, and normalized host, remain aligned, and use color only for the
-terminal presentation.
+terminal presentation. Host normalization removes the client-port suffix from
+`INFORMATION_SCHEMA.PROCESSLIST.HOST`: IPv4 and hostnames retain the legacy
+`SUBSTRING_INDEX(SUBSTRING_INDEX(HOST, ':', 1), '.', 4)` behavior, while IPv6
+removes only the final port component and surrounding brackets when present.
+The host filter still matches the raw `HOST` value, including its client port.
+Because Bash string length is not terminal display width, wide and combining
+Unicode characters can misalign columns; no nonstandard width dependency is
+introduced.
 
 The persistent reduced legend is:
 

@@ -20,6 +20,7 @@ SAMPLE_TOTAL=0
 PREVIOUS_ROWS=()
 PREVIOUS_SAMPLE_AVAILABLE=false
 RUNTIME_MESSAGE=''
+EXCLUDED_USERS="'root','gsancliment','pmm_monitor','proxysql-monitor','coms_rpl_gh_primary','cloudsqlreplica','devel-migration-job','event_scheduler'"
 
 is_interactive_terminal() {
     [[ -t 1 && -t 0 && -n "${TERM-}" && "$TERM" != dumb ]]
@@ -87,6 +88,9 @@ show_help() {
     printf '%bExamples:%b\n' "$COLOR_CYAN" "$COLOR_RESET"
     printf '  %s --login-path reporting\n' "$SCRIPT_NAME"
     printf '  %s -l reporting -t 10 -u app -d billing -h api\n' "$SCRIPT_NAME"
+    printf '\n'
+    printf '%bDisplay limitation:%b column widths assume one terminal cell per shell character; wide or combining Unicode may misalign.\n' \
+        "$COLOR_CYAN" "$COLOR_RESET"
 }
 
 cli_error() {
@@ -254,8 +258,15 @@ parse_arguments() {
         cli_error '--user must not contain empty components.'
     fi
 
-    if [[ ! -x "$MYSQL_BIN" ]] && ! command -v "$MYSQL_BIN" >/dev/null 2>&1; then
+    local resolved_mysql_bin
+    resolved_mysql_bin=$(command -v "$MYSQL_BIN" 2>/dev/null || true)
+    if [[ ! -f "$resolved_mysql_bin" || ! -x "$resolved_mysql_bin" ]]; then
         cli_error '--mysql-bin must reference an executable file.'
+    fi
+    MYSQL_BIN=$resolved_mysql_bin
+
+    if [[ "$LOGGING_ENABLED" == true && -z "$LOG_FILE" ]]; then
+        LOG_FILE="open_sessions_$(date '+%Y%m%d_%H%M%S').log"
     fi
 
     if [[ -n "$LOG_FILE" ]]; then
@@ -287,7 +298,7 @@ like_pattern_expression() {
 }
 
 build_filter_clause() {
-    local filters=''
+    local filters=" AND USER NOT IN (${EXCLUDED_USERS})"
     local user
     local quoted_users=''
     local users=()
@@ -316,19 +327,35 @@ build_filter_clause() {
 
 collect_sample() {
     local filters
+    local normalized_host
     local query
     local output
     local line record_type user database host sessions row_data
 
     filters=$(build_filter_clause)
-    query="SELECT 'ROW' AS record_type, USER, DB, HOST, COUNT(*) AS sessions
+    # PROCESSLIST.HOST appends the client port. Preserve the legacy IPv4/hostname
+    # normalization and remove only that final component for IPv6. MySQL may
+    # expose IPv6 either bracketed or unbracketed, so grouping cannot split on
+    # the first colon. The raw HOST value remains the host-filter target.
+    normalized_host="CASE
+        WHEN HOST IS NULL THEN NULL
+        WHEN LEFT(HOST, 1) = '[' AND LOCATE(']:', HOST) > 0
+            THEN SUBSTRING(HOST, 2, LOCATE(']:', HOST) - 2)
+        WHEN LEFT(HOST, 1) = '[' AND RIGHT(HOST, 1) = ']'
+            THEN SUBSTRING(HOST, 2, LENGTH(HOST) - 2)
+        WHEN LENGTH(HOST) - LENGTH(REPLACE(HOST, ':', '')) > 1
+            THEN LEFT(HOST, LENGTH(HOST) - LENGTH(SUBSTRING_INDEX(HOST, ':', -1)) - 1)
+        ELSE SUBSTRING_INDEX(SUBSTRING_INDEX(HOST, ':', 1), '.', 4)
+    END"
+    query="SELECT 'ROW' AS record_type, USER, DB, ${normalized_host} AS normalized_host, COUNT(*) AS sessions
 FROM information_schema.PROCESSLIST
 WHERE 1 = 1${filters}
-GROUP BY USER, DB, HOST
+GROUP BY USER, DB, normalized_host
 UNION ALL
 SELECT 'TOTAL' AS record_type, NULL AS USER, NULL AS DB, NULL AS HOST, COUNT(*) AS sessions
 FROM information_schema.PROCESSLIST
-WHERE 1 = 1${filters};"
+WHERE 1 = 1${filters}
+ORDER BY record_type, USER, DB, normalized_host;"
     output=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names -e "$query")
 
     SAMPLE_ROWS=()

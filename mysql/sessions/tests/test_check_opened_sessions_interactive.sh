@@ -174,7 +174,8 @@ assert_contains "$TMP/required_login_path.err" 'ERROR: --login-path is required.
 assert_contains "$TMP/required_login_path.err" 'Usage:'
 
 # Legacy getopts accepted attached values for every retained value-taking short option.
-run_case attached_short_options -lreporting -t10 -uapp -dbilling -hhost -o --mysql-bin "$FAKE"
+run_case attached_short_options -lreporting -t10 -uapp -dbilling -hhost -o \
+    --log-file "$TMP/attached.log" --mysql-bin "$FAKE"
 assert_status 0
 
 run_case equals_options --login-path=reporting --refresh-time=10 --user=app \
@@ -194,6 +195,37 @@ assert_not_contains "$TMP/sql.log" "billing\\'archive"
 assert_contains "$TMP/sql.log" "HOST LIKE CONVERT(0x256170695c255c5f776573745c5c5c5c6e6f646525 USING utf8mb4) ESCAPE CONVERT(0x5c USING utf8mb4)"
 assert_contains "$TMP/sql.log" 'UNION ALL'
 assert_occurrences "$TMP/sql.log" 'UNION ALL' 1
+
+# Grouping removes only the PROCESSLIST client port. IPv4/hostnames retain the
+# legacy normalization, while bracketed and unbracketed IPv6 remain intact.
+: > "$TMP/sql.log"
+export FAKE_MYSQL_EMULATE_HOST_NORMALIZATION=true
+run_case normalized_hosts --login-path reporting --mysql-bin "$FAKE"
+assert_status 0
+assert_occurrences "$TMP/normalized_hosts.out" '10.0.0.5' 1
+assert_occurrences "$TMP/normalized_hosts.out" '2001:db8::1' 1
+assert_contains "$TMP/normalized_hosts.out" 'Total matching connections: 4'
+assert_not_contains "$TMP/normalized_hosts.out" '10.0.0.5:41001'
+assert_not_contains "$TMP/normalized_hosts.out" '[2001:db8::1]:41003'
+assert_contains "$TMP/sql.log" "SUBSTRING_INDEX(SUBSTRING_INDEX(HOST, ':', 1), '.', 4)"
+assert_contains "$TMP/sql.log" "LOCATE(']:', HOST)"
+assert_contains "$TMP/sql.log" "LEFT(HOST, LENGTH(HOST) - LENGTH(SUBSTRING_INDEX(HOST, ':', -1)) - 1)"
+assert_contains "$TMP/sql.log" 'ORDER BY record_type, USER, DB, normalized_host'
+unset FAKE_MYSQL_EMULATE_HOST_NORMALIZATION
+
+# Grouped rows and the total independently apply the canonical system/monitoring
+# exclusion set, so excluded sessions affect neither the table nor its total.
+: > "$TMP/sql.log"
+EXCLUSION_PREDICATE="USER NOT IN ('root','gsancliment','pmm_monitor','proxysql-monitor','coms_rpl_gh_primary','cloudsqlreplica','devel-migration-job','event_scheduler')"
+export FAKE_MYSQL_REQUIRED_EXCLUSION_PREDICATE=$EXCLUSION_PREDICATE
+run_case excluded_users --login-path reporting --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/excluded_users.out" 'app'
+assert_not_contains "$TMP/excluded_users.out" 'root'
+assert_not_contains "$TMP/excluded_users.out" 'pmm_monitor'
+assert_contains "$TMP/excluded_users.out" 'Total matching connections: 3'
+assert_occurrences "$TMP/sql.log" "$EXCLUSION_PREDICATE" 2
+unset FAKE_MYSQL_REQUIRED_EXCLUSION_PREDICATE
 
 : > "$TMP/sql.log"
 run_case repeated_user --login-path reporting --user 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' --mysql-bin "$FAKE"
@@ -216,6 +248,11 @@ run_case invalid_mysql_bin --login-path reporting --mysql-bin "$TMP/missing-mysq
 assert_status 2
 assert_contains "$TMP/invalid_mysql_bin.err" 'ERROR: --mysql-bin must reference an executable file.'
 assert_contains "$TMP/invalid_mysql_bin.err" 'Usage:'
+
+run_case mysql_bin_directory --login-path reporting --mysql-bin "$TMP"
+assert_status 2
+assert_contains "$TMP/mysql_bin_directory.err" 'ERROR: --mysql-bin must reference an executable file.'
+assert_contains "$TMP/mysql_bin_directory.err" 'Usage:'
 
 touch "$TMP/existing-validation.log"
 run_case existing_log_validation --login-path reporting --log-file "$TMP/existing-validation.log" --mysql-bin "$FAKE"
@@ -425,6 +462,60 @@ assert_status 0
 assert_contains "$TMP/new-snapshot.log" 'Open MySQL Sessions'
 assert_contains "$TMP/new-snapshot.log" 'Total matching connections: 3'
 assert_not_contains "$TMP/new-snapshot.log" $'\033['
+
+# Retained -o/--logging reserves a timestamped default before sampling and
+# writes the first plain snapshot when no explicit --log-file is supplied.
+START_LOG_BIN="$TMP/start-log-bin"
+START_LOG_DIR="$TMP/start-log-dir"
+mkdir "$START_LOG_BIN" "$START_LOG_DIR"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'if [[ "${1-}" == +%Y%m%d_%H%M%S ]]; then' \
+    "    printf '%s\\n' '20260812_121314'" \
+    'else' \
+    '    /bin/date "$@"' \
+    'fi' > "$START_LOG_BIN/date"
+chmod +x "$START_LOG_BIN/date"
+saved_path=$PATH
+PATH="$START_LOG_BIN:$PATH"
+export PATH
+set +e
+(
+    cd "$START_LOG_DIR"
+    "$SCRIPT" --login-path reporting -o --mysql-bin "$FAKE"
+) >"$TMP/default_log.out" 2>"$TMP/default_log.err"
+STATUS=$?
+set -e
+PATH=$saved_path
+export PATH
+assert_status 0
+DEFAULT_LOG="$START_LOG_DIR/open_sessions_20260812_121314.log"
+[[ -f "$DEFAULT_LOG" ]] || fail 'startup logging did not reserve the timestamped default log'
+assert_contains "$DEFAULT_LOG" 'Open MySQL Sessions'
+assert_contains "$DEFAULT_LOG" 'Total matching connections: 3'
+assert_not_contains "$DEFAULT_LOG" $'\033'
+
+printf 'preserve default log\n' > "$START_LOG_DIR/open_sessions_20260812_121315.log"
+sed 's/20260812_121314/20260812_121315/' "$START_LOG_BIN/date" > "$START_LOG_BIN/date.next"
+mv "$START_LOG_BIN/date.next" "$START_LOG_BIN/date"
+chmod +x "$START_LOG_BIN/date"
+PATH="$START_LOG_BIN:$PATH"
+export PATH
+set +e
+(
+    cd "$START_LOG_DIR"
+    "$SCRIPT" --login-path reporting --logging --mysql-bin "$FAKE"
+) >"$TMP/default_log_collision.out" 2>"$TMP/default_log_collision.err"
+STATUS=$?
+set -e
+PATH=$saved_path
+export PATH
+assert_status 2
+assert_contains "$TMP/default_log_collision.err" 'ERROR: --log-file must not already exist.'
+assert_contains "$TMP/default_log_collision.err" 'Usage:'
+assert_contains "$START_LOG_DIR/open_sessions_20260812_121315.log" 'preserve default log'
+assert_occurrences "$START_LOG_DIR/open_sessions_20260812_121315.log" 'preserve default log' 1
 
 # Existing destinations must be rejected and never overwritten.
 printf 'preserve me\n' > "$TMP/existing.log"
