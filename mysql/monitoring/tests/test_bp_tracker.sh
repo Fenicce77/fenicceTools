@@ -16,8 +16,11 @@ run_failure() { if "$@" >"$TMP/failure.out" 2>&1; then fail "command unexpectedl
 
 run_failure "$SCRIPT"
 assert_contains "$TMP/failure.out" 'login-path is required' 'missing login path was not rejected'
+assert_contains "$TMP/failure.out" 'Usage:' 'no-argument invocation did not show help'
+assert_contains "$TMP/failure.out" 'Examples:' 'no-argument help did not show examples'
 run_failure "$SCRIPT" --login-path x --interval 0
 assert_contains "$TMP/failure.out" 'interval must be a positive integer' 'zero interval was accepted'
+assert_contains "$TMP/failure.out" 'Usage:' 'invalid invocation did not show help'
 run_failure "$SCRIPT" --login-path x --top-objects 101
 assert_contains "$TMP/failure.out" 'count must be between 1 and 100' 'large top object count was accepted'
 

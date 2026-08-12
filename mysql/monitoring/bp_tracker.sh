@@ -56,5 +56,25 @@ render() {
   PREV_YOUNG=$y; PREV_NOT_YOUNG=$n; PREV_TIME=$NOW
 }
 run_once() { global; top; sessions; render; }
-main() { preparse_no_color "$@"; terminal_setup; parse "$@"; terminal_setup; validate; [[ -n "$OUTPUT_FILE" ]] && : > "$OUTPUT_FILE"; if [[ "$SCREEN_REFRESH_ENABLED" != true ]]; then run_once; return; fi; while true; do run_once; if read -r -t "$POLL_INTERVAL" -n 1 -s key; then [[ "$key" == q || "$key" == Q ]] && return; fi; done; }
+main() {
+  preparse_no_color "$@"
+  terminal_setup
+  if ! parse "$@"; then
+    help
+    return 1
+  fi
+  terminal_setup
+  if ! validate; then
+    help
+    return 1
+  fi
+  [[ -n "$OUTPUT_FILE" ]] && : > "$OUTPUT_FILE"
+  if [[ "$SCREEN_REFRESH_ENABLED" != true ]]; then run_once; return; fi
+  while true; do
+    run_once
+    if read -r -t "$POLL_INTERVAL" -n 1 -s key; then
+      [[ "$key" == q || "$key" == Q ]] && return
+    fi
+  done
+}
 [[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"
