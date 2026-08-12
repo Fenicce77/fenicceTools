@@ -23,6 +23,13 @@ assert_contains() {
     grep -F -- "$expected" "$file" >/dev/null || fail "missing '$expected' in $file"
 }
 
+assert_not_contains() {
+    local file=$1 unexpected=$2
+    if grep -F -- "$unexpected" "$file" >/dev/null; then
+        fail "unexpected '$unexpected' in $file"
+    fi
+}
+
 assert_occurrences() {
     local file=$1 expected=$2 count=$3 actual
     actual=$(grep -F -c -- "$expected" "$file" || true)
@@ -92,11 +99,13 @@ assert_status 0
 # Query filters must be escaped as SQL literals and collected in one client call.
 : > "$TMP/sql.log"
 run_case escaped_filters --login-path reporting --user "alice,o'connor" \
-    --database "billing'archive" --host 'api%_west\node' --mysql-bin "$FAKE"
+    --database "billing'archive" --host 'api%_west\\node' --mysql-bin "$FAKE"
 assert_status 0
-assert_contains "$TMP/sql.log" "USER IN ('alice', 'o\\'connor')"
-assert_contains "$TMP/sql.log" "DB = 'billing\\'archive'"
-assert_contains "$TMP/sql.log" "HOST LIKE '%api\\%\\_west\\\\node%' ESCAPE '\\\\'"
+assert_contains "$TMP/sql.log" "USER IN ('alice', 'o''connor')"
+assert_contains "$TMP/sql.log" "DB = 'billing''archive'"
+assert_not_contains "$TMP/sql.log" "o\\'connor"
+assert_not_contains "$TMP/sql.log" "billing\\'archive"
+assert_contains "$TMP/sql.log" "HOST LIKE '%api\\\\%\\\\_west\\\\\\\\\\\\\\\\node%' ESCAPE '\\\\'"
 assert_contains "$TMP/sql.log" 'UNION ALL'
 assert_occurrences "$TMP/sql.log" 'UNION ALL' 1
 

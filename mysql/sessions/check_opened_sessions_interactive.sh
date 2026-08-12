@@ -222,8 +222,8 @@ parse_arguments() {
 }
 
 sql_quote() {
-    local value=${1//\\/\\\\}
-    value=${value//\'/\\\'}
+    local value=$1
+    value=${value//\'/\'\'}
     printf "'%s'" "$value"
 }
 
@@ -233,6 +233,13 @@ like_literal() {
     value=${value//%/\\%}
     value=${value//_/\\_}
     printf '%s' "$value"
+}
+
+like_pattern_literal() {
+    local value
+    value=$(like_literal "$1")
+    value=${value//\\/\\\\}
+    printf "'%%%s%%'" "$value"
 }
 
 build_filter_clause() {
@@ -257,7 +264,7 @@ build_filter_clause() {
     fi
 
     if [[ -n "$FILTER_HOST" ]]; then
-        filters+=" AND HOST LIKE '%$(like_literal "$FILTER_HOST")%' ESCAPE '\\\\'"
+        filters+=" AND HOST LIKE $(like_pattern_literal "$FILTER_HOST") ESCAPE '\\\\'"
     fi
 
     printf '%s' "$filters"
