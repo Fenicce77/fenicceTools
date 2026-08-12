@@ -209,6 +209,10 @@ parse_arguments() {
 
     [[ "$REFRESH_TIME" =~ ^[1-9][0-9]*$ ]] || cli_error '--refresh-time must be a positive integer.'
 
+    if [[ -n "$FILTER_USER" ]] && { [[ "$FILTER_USER" == ,* ]] || [[ "$FILTER_USER" == *, ]] || [[ "$FILTER_USER" == *,,* ]]; }; then
+        cli_error '--user must not contain empty components.'
+    fi
+
     if [[ ! -x "$MYSQL_BIN" ]] && ! command -v "$MYSQL_BIN" >/dev/null 2>&1; then
         cli_error '--mysql-bin must reference an executable file.'
     fi
@@ -224,7 +228,7 @@ parse_arguments() {
 sql_hex_literal() {
     local value=$1
     local hex
-    hex=$(LC_ALL=C printf '%s' "$value" | od -An -tx1 | tr -d ' \n')
+    hex=$(LC_ALL=C printf '%s' "$value" | od -An -tx1 -v | tr -d ' \n')
     printf 'CONVERT(0x%s USING utf8mb4)' "$hex"
 }
 

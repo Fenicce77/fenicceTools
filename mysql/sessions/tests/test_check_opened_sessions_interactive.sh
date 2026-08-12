@@ -109,6 +109,18 @@ assert_contains "$TMP/sql.log" "HOST LIKE CONVERT(0x256170695c255c5f776573745c5c
 assert_contains "$TMP/sql.log" 'UNION ALL'
 assert_occurrences "$TMP/sql.log" 'UNION ALL' 1
 
+: > "$TMP/sql.log"
+run_case repeated_user --login-path reporting --user 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/sql.log" 'USER IN (CONVERT(0x787878787878787878787878787878787878787878787878787878787878787878 USING utf8mb4))'
+
+for invalid_user in ',alice' 'alice,' 'alice,,bob'; do
+    run_case "empty_user_component_${invalid_user//,/x}" --login-path reporting --user "$invalid_user" --mysql-bin "$FAKE"
+    assert_status 2
+    assert_contains "$TMP/empty_user_component_${invalid_user//,/x}.err" 'ERROR: --user must not contain empty components.'
+    assert_contains "$TMP/empty_user_component_${invalid_user//,/x}.err" 'Usage:'
+done
+
 run_case invalid_refresh --login-path reporting --refresh-time 0 --mysql-bin "$FAKE"
 assert_status 2
 assert_contains "$TMP/invalid_refresh.err" 'ERROR: --refresh-time must be a positive integer.'
