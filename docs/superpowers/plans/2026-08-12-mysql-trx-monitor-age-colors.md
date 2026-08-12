@@ -24,6 +24,7 @@
 **Files:**
 
 - Modify: `mysql/trx/mysql_trx_monitor.sh:25-45,395-411`
+- Modify: `mysql/trx/tests/fake_mysql_trx.sh:31-79`
 - Modify: `mysql/trx/tests/test_mysql_trx_monitor.sh:189-221`
 - Test: `mysql/trx/tests/test_mysql_trx_monitor.sh`
 
@@ -54,4 +55,4 @@ Expected: `PASS: mysql_trx_monitor`, no syntax errors, and no whitespace errors.
 
 - [ ] **Step 4: Review scope and commit**
 
-Confirm `git diff --name-only` lists only the monitor and its shell test. Commit with `feat(mysql): color transaction monitor rows by age`.
+Confirm `git diff --name-only` lists only the monitor, fake client, and shell test. Commit with `feat(mysql): color transaction monitor rows by age`.

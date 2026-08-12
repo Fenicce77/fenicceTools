@@ -32,6 +32,7 @@ initialize_colors() {
     COLOR_WARNING=""
     COLOR_ERROR=""
     COLOR_SUCCESS=""
+    COLOR_AGE_ORANGE=""
     COLOR_RESET=""
     if [[ "$NO_COLOR" == false && -t 1 && "${TERM:-dumb}" != dumb ]]; then
         COLOR_TITLE=$(printf '\033[1;36m')
@@ -41,6 +42,10 @@ initialize_colors() {
         COLOR_WARNING=$(printf '\033[0;33m')
         COLOR_ERROR=$(printf '\033[0;31m')
         COLOR_SUCCESS=$(printf '\033[0;32m')
+        COLOR_AGE_ORANGE=$COLOR_WARNING
+        if [[ "${TERM:-dumb}" == *256color* || "${COLORTERM:-}" == *truecolor* ]]; then
+            COLOR_AGE_ORANGE=$(printf '\033[38;5;208m')
+        fi
         COLOR_RESET=$(printf '\033[0m')
     fi
 }
@@ -392,8 +397,36 @@ render_snapshot() {
     esac
 }
 
+display_data_row() {
+    local section=$1 line=$2 age color=""
+    local fields=()
+
+    IFS=$'\t' read -r -a fields <<< "$line"
+    case "$section" in
+        TRANSACTIONS) age=${fields[4]-} ;;
+        'LOCK WAITS') age=${fields[5]-} ;;
+        *) printf '%s\n' "$line"; return ;;
+    esac
+    if [[ ! "$age" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$line"
+        return
+    fi
+    if (( age >= 300 )); then
+        color=$COLOR_ERROR
+    elif (( age >= 120 )); then
+        color=$COLOR_AGE_ORANGE
+    elif (( age >= 60 )); then
+        color=$COLOR_WARNING
+    fi
+    if [[ -n "$color" ]]; then
+        printf '%s%s%s\n' "$color" "$line" "$COLOR_RESET"
+    else
+        printf '%s\n' "$line"
+    fi
+}
+
 display_snapshot() {
-    local snapshot=$1 line
+    local snapshot=$1 line section=""
     if [[ -z "$COLOR_RESET" ]]; then
         printf '%s\n' "$snapshot"
         return
@@ -401,9 +434,12 @@ display_snapshot() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         case "$line" in
             Snapshot:*) printf '%s%s%s\n' "$COLOR_TITLE" "$line" "$COLOR_RESET" ;;
-            TRANSACTIONS|LOCK\ WAITS) printf '%s%s%s\n' "$COLOR_SECTION" "$line" "$COLOR_RESET" ;;
+            TRANSACTIONS|LOCK\ WAITS)
+                section=$line
+                printf '%s%s%s\n' "$COLOR_SECTION" "$line" "$COLOR_RESET"
+                ;;
             *UNAVAILABLE:*) printf '%s%s%s\n' "$COLOR_ERROR" "$line" "$COLOR_RESET" ;;
-            *) printf '%s\n' "$line" ;;
+            *) display_data_row "$section" "$line" ;;
         esac
     done <<EOF
 $snapshot

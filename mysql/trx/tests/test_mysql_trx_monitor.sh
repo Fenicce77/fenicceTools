@@ -32,6 +32,24 @@ run_expect_failure() {
     fi
 }
 
+run_pseudo_tty() {
+    local term=$1 output_file=$2
+    shift 2
+    case "$(uname -s)" in
+        Darwin)
+            TERM="$term" script -q /dev/null "$@" >"$output_file" 2>&1
+            ;;
+        Linux)
+            local runner_command
+            printf -v runner_command '%q ' env "TERM=$term" "$@"
+            script -q -e -c "$runner_command" /dev/null >"$output_file" 2>&1
+            ;;
+        *)
+            fail "unsupported pseudo-terminal platform: $(uname -s)"
+            ;;
+    esac
+}
+
 new_sql_log() {
     FAKE_MYSQL_TRX_LOG=$1
     export FAKE_MYSQL_TRX_LOG
@@ -197,6 +215,31 @@ if kill -0 "$eof_pid" 2>/dev/null; then
     fail 'closed stdin caused an unthrottled monitor loop'
 fi
 wait "$eof_pid"
+
+new_sql_log "$TMP/age-colors.sql"
+FAKE_MYSQL_TRX_MODE=age-colors run_pseudo_tty xterm-256color "$TMP/age-colors-256.out" \
+    "$SCRIPT" --login-path x --view all --smoke-test --mysql-bin "$FAKE"
+assert_contains "$TMP/age-colors-256.out" $'101\tapp\thost1:3306\tsales\t59\tRunning\tSELECT age_59' '59-second transaction row missing'
+assert_not_contains "$TMP/age-colors-256.out" $'\033[0;33m101\tapp\thost1:3306\tsales\t59\tRunning\tSELECT age_59\033[0m' '59-second transaction row was colored'
+assert_not_contains "$TMP/age-colors-256.out" $'\033[38;5;208m101\tapp\thost1:3306\tsales\t59\tRunning\tSELECT age_59\033[0m' '59-second transaction row was colored'
+assert_not_contains "$TMP/age-colors-256.out" $'\033[0;31m101\tapp\thost1:3306\tsales\t59\tRunning\tSELECT age_59\033[0m' '59-second transaction row was colored'
+assert_contains "$TMP/age-colors-256.out" $'\033[0;33m102\tapp\thost1:3306\tsales\t60\tRunning\tSELECT age_60\033[0m' '60-second transaction row is not yellow'
+assert_contains "$TMP/age-colors-256.out" $'\033[38;5;208m103\tapp\thost1:3306\tsales\t120\tRunning\tSELECT age_120\033[0m' '120-second transaction row is not orange'
+assert_contains "$TMP/age-colors-256.out" $'\033[0;31m104\tapp\thost1:3306\tsales\t300\tRunning\tSELECT age_300\033[0m' '300-second transaction row is not red'
+assert_contains "$TMP/age-colors-256.out" $'\033[0;33m202\tapp@host1\t302\treport@host2\tsales.orders\t60\tUPDATE age_60\tINSERT age_60\033[0m' '60-second lock wait row is not yellow'
+assert_contains "$TMP/age-colors-256.out" $'\033[38;5;208m203\tapp@host1\t303\treport@host2\tsales.orders\t120\tUPDATE age_120\tINSERT age_120\033[0m' '120-second lock wait row is not orange'
+assert_contains "$TMP/age-colors-256.out" $'\033[0;31m204\tapp@host1\t304\treport@host2\tsales.orders\t300\tUPDATE age_300\tINSERT age_300\033[0m' '300-second lock wait row is not red'
+
+FAKE_MYSQL_TRX_MODE=age-colors run_pseudo_tty xterm "$TMP/age-colors-fallback.out" \
+    "$SCRIPT" --login-path x --view all --smoke-test --mysql-bin "$FAKE"
+assert_contains "$TMP/age-colors-fallback.out" $'\033[0;33m103\tapp\thost1:3306\tsales\t120\tRunning\tSELECT age_120\033[0m' 'orange fallback transaction row is not yellow'
+assert_contains "$TMP/age-colors-fallback.out" $'\033[0;33m203\tapp@host1\t303\treport@host2\tsales.orders\t120\tUPDATE age_120\tINSERT age_120\033[0m' 'orange fallback lock wait row is not yellow'
+
+age_snapshot_log="$TMP/age-colors.log"
+FAKE_MYSQL_TRX_MODE=age-colors "$SCRIPT" --login-path x --view all --smoke-test --mysql-bin "$FAKE" \
+    --no-color --output-file "$age_snapshot_log" >"$TMP/age-colors-no-color.out"
+assert_not_contains "$TMP/age-colors-no-color.out" $'\033' 'no-color age output contains ANSI bytes'
+assert_not_contains "$age_snapshot_log" $'\033' 'age snapshot log contains ANSI bytes'
 
 new_sql_log "$TMP/interactive-refresh.sql"
 case "$(uname -s)" in

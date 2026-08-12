@@ -54,6 +54,14 @@ case "$sql" in
             esac
             exit 0
         fi
+        if [[ "$mode" == age-colors ]]; then
+            printf '%s\n' \
+                $'101\tapp\thost1:3306\tsales\t59\tRunning\tSELECT age_59' \
+                $'102\tapp\thost1:3306\tsales\t60\tRunning\tSELECT age_60' \
+                $'103\tapp\thost1:3306\tsales\t120\tRunning\tSELECT age_120' \
+                $'104\tapp\thost1:3306\tsales\t300\tRunning\tSELECT age_300'
+            exit 0
+        fi
         printf '12\tapp\thost1:3306\tsales\t30\tRunning\tSELECT 1\n'
         ;;
     *'/* trx-monitor:transactions-fallback */'*)
@@ -78,6 +86,14 @@ case "$sql" in
             *'w.locked_table_schema'*'w.locked_table_name'*'performance_schema.threads AS blocking_thread'*'performance_schema.threads AS waiting_thread'*) : ;;
             *) printf 'incomplete lock-wait query\n' >&2; exit 1 ;;
         esac
+        if [[ "$mode" == age-colors ]]; then
+            printf '%s\n' \
+                $'201\tapp@host1\t301\treport@host2\tsales.orders\t59\tUPDATE age_59\tINSERT age_59' \
+                $'202\tapp@host1\t302\treport@host2\tsales.orders\t60\tUPDATE age_60\tINSERT age_60' \
+                $'203\tapp@host1\t303\treport@host2\tsales.orders\t120\tUPDATE age_120\tINSERT age_120' \
+                $'204\tapp@host1\t304\treport@host2\tsales.orders\t300\tUPDATE age_300\tINSERT age_300'
+            exit 0
+        fi
         printf '12\tapp@host1\t34\treport@host2\tsales.orders\t15\tUPDATE orders\tINSERT orders\n'
         ;;
     KILL\ CONNECTION\ *)
