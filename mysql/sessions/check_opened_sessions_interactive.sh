@@ -12,20 +12,36 @@ DIFF_ENABLED=false
 LOG_FILE=''
 MYSQL_BIN=mysql
 COLOR_ENABLED=true
+SCREEN_REFRESH_ENABLED=false
 SAMPLE_ROWS=()
 SAMPLE_TOTAL=0
 
+is_interactive_terminal() {
+    [[ -t 1 && -t 0 && -n "${TERM-}" && "$TERM" != dumb ]]
+}
+
 setup_colors() {
-    if [[ "$COLOR_ENABLED" == true ]]; then
+    COLOR_RED=''
+    COLOR_YELLOW=''
+    COLOR_CYAN=''
+    COLOR_RESET=''
+    SCREEN_REFRESH_ENABLED=false
+
+    if is_interactive_terminal; then
+        SCREEN_REFRESH_ENABLED=true
+    fi
+
+    if [[ "$COLOR_ENABLED" == true && "$SCREEN_REFRESH_ENABLED" == true ]]; then
         COLOR_RED=$'\033[0;31m'
         COLOR_YELLOW=$'\033[0;33m'
         COLOR_CYAN=$'\033[0;36m'
         COLOR_RESET=$'\033[0m'
-    else
-        COLOR_RED=''
-        COLOR_YELLOW=''
-        COLOR_CYAN=''
-        COLOR_RESET=''
+    fi
+}
+
+refresh_screen() {
+    if [[ "$SCREEN_REFRESH_ENABLED" == true ]]; then
+        printf '\033[H\033[2J'
     fi
 }
 
@@ -220,7 +236,6 @@ parse_arguments() {
     if [[ -n "$LOG_FILE" ]]; then
         local log_directory
         log_directory=$(dirname "$LOG_FILE")
-        [[ ! -e "$LOG_FILE" ]] || cli_error '--log-file must not already exist.'
         [[ -d "$log_directory" && -w "$log_directory" ]] || cli_error '--log-file parent directory must be writable.'
     fi
 }
@@ -278,7 +293,7 @@ collect_sample() {
     local filters
     local query
     local output
-    local record_type user database host sessions
+    local line record_type user database host sessions row_data
 
     filters=$(build_filter_clause)
     query="SELECT 'ROW' AS record_type, USER, DB, HOST, COUNT(*) AS sessions
@@ -293,16 +308,116 @@ WHERE 1 = 1${filters};"
 
     SAMPLE_ROWS=()
     SAMPLE_TOTAL=0
-    while IFS=$'\t' read -r record_type user database host sessions; do
+    while IFS= read -r line; do
+        record_type=${line%%$'\t'*}
         [[ -n "$record_type" ]] || continue
         if [[ "$record_type" == TOTAL ]]; then
-            SAMPLE_TOTAL=$sessions
+            SAMPLE_TOTAL=${line##*$'\t'}
         elif [[ "$record_type" == ROW ]]; then
+            row_data=${line#*$'\t'}
+            IFS=$'\t' read -r user database host sessions <<< "$row_data"
             SAMPLE_ROWS+=("$user"$'\t'"$database"$'\t'"$host"$'\t'"$sessions")
         fi
     done <<< "$output"
 }
 
+claim_log_file() {
+    [[ -n "$LOG_FILE" ]] || return 0
+
+    set -C
+    if ! exec 3>"$LOG_FILE"; then
+        set +C
+        cli_error '--log-file must not already exist.'
+    fi
+    set +C
+}
+
+filter_label() {
+    local value=$1
+    local fallback=$2
+
+    if [[ -n "$value" ]]; then
+        printf '%s' "$value"
+    else
+        printf '%s' "$fallback"
+    fi
+}
+
+render_frame() {
+    local user_width=4
+    local database_width=8
+    local host_width=4
+    local sessions_width=8
+    local row user database host sessions
+    local timestamp
+
+    for row in "${SAMPLE_ROWS[@]}"; do
+        IFS=$'\t' read -r user database host sessions <<< "$row"
+        (( ${#user} > user_width )) && user_width=${#user}
+        (( ${#database} > database_width )) && database_width=${#database}
+        (( ${#host} > host_width )) && host_width=${#host}
+        (( ${#sessions} > sessions_width )) && sessions_width=${#sessions}
+    done
+
+    timestamp=$(date '+%F %T')
+    printf '%bOpen MySQL Sessions%b\n' "$COLOR_CYAN" "$COLOR_RESET"
+    printf 'Timestamp: %s | Refresh interval: %ss | Diff: %s | Logging: %s\n' \
+        "$timestamp" "$REFRESH_TIME" "$DIFF_ENABLED" "$LOGGING_ENABLED"
+    printf 'Filters: user=%s database=%s host=%s\n' \
+        "$(filter_label "$FILTER_USER" '<all>')" \
+        "$(filter_label "$FILTER_DATABASE" '<all>')" \
+        "$(filter_label "$FILTER_HOST" '<all>')"
+    printf 'Total matching connections: %s\n\n' "$SAMPLE_TOTAL"
+    printf '%-*s  %-*s  %-*s  %*s\n' \
+        "$user_width" 'User' "$database_width" 'Database' "$host_width" 'Host' "$sessions_width" 'Sessions'
+    printf '%-*s  %-*s  %-*s  %*s\n' \
+        "$user_width" "$(printf '%*s' "$user_width" '' | tr ' ' '-')" \
+        "$database_width" "$(printf '%*s' "$database_width" '' | tr ' ' '-')" \
+        "$host_width" "$(printf '%*s' "$host_width" '' | tr ' ' '-')" \
+        "$sessions_width" "$(printf '%*s' "$sessions_width" '' | tr ' ' '-')"
+
+    for row in "${SAMPLE_ROWS[@]}"; do
+        IFS=$'\t' read -r user database host sessions <<< "$row"
+        printf '%b%-*s%b  %b%-*s%b  %b%-*s%b  %b%*s%b\n' \
+            "$COLOR_CYAN" "$user_width" "$user" "$COLOR_RESET" \
+            "$COLOR_CYAN" "$database_width" "$database" "$COLOR_RESET" \
+            "$COLOR_CYAN" "$host_width" "$host" "$COLOR_RESET" \
+            "$COLOR_YELLOW" "$sessions_width" "$sessions" "$COLOR_RESET"
+    done
+}
+
+append_log() {
+    local saved_color_enabled=$COLOR_ENABLED
+    local saved_screen_refresh_enabled=$SCREEN_REFRESH_ENABLED
+    local saved_color_red=$COLOR_RED
+    local saved_color_yellow=$COLOR_YELLOW
+    local saved_color_cyan=$COLOR_CYAN
+    local saved_color_reset=$COLOR_RESET
+
+    [[ "$LOGGING_ENABLED" == true && -n "$LOG_FILE" ]] || return 0
+
+    COLOR_ENABLED=false
+    SCREEN_REFRESH_ENABLED=false
+    COLOR_RED=''
+    COLOR_YELLOW=''
+    COLOR_CYAN=''
+    COLOR_RESET=''
+    render_frame >&3
+    printf '\n' >&3
+
+    COLOR_ENABLED=$saved_color_enabled
+    SCREEN_REFRESH_ENABLED=$saved_screen_refresh_enabled
+    COLOR_RED=$saved_color_red
+    COLOR_YELLOW=$saved_color_yellow
+    COLOR_CYAN=$saved_color_cyan
+    COLOR_RESET=$saved_color_reset
+}
+
 setup_colors
 parse_arguments "$@"
+setup_colors
+claim_log_file
 collect_sample
+refresh_screen
+render_frame
+append_log

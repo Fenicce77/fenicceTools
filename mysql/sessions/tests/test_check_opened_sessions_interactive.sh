@@ -51,7 +51,7 @@ run_case no_args
 assert_status 2
 assert_contains "$TMP/no_args.err" 'ERROR: --login-path is required.'
 assert_contains "$TMP/no_args.err" 'Usage:'
-assert_contains "$TMP/no_args.err" $'\033['
+assert_not_contains "$TMP/no_args.err" $'\033['
 
 # Help must be available without a connection and document the interactive key contract.
 run_case help --help
@@ -136,6 +136,33 @@ run_case existing_log_validation --login-path reporting --log-file "$TMP/existin
 assert_status 2
 assert_contains "$TMP/existing_log_validation.err" 'ERROR: --log-file must not already exist.'
 assert_contains "$TMP/existing_log_validation.err" 'Usage:'
+
+# Redirected execution is one ANSI-free sample and must omit interactive-only UI.
+export FAKE_MYSQL_OUTPUT=$'ROW\tapp\tbilling\tapi\t3\nTOTAL\t\t\t\t3'
+run_case redirected --login-path reporting --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/redirected.out" 'Open MySQL Sessions'
+assert_contains "$TMP/redirected.out" 'Total matching connections: 3'
+assert_not_contains "$TMP/redirected.out" $'\033['
+assert_not_contains "$TMP/redirected.out" $'\033[H\033[2J'
+assert_not_contains "$TMP/redirected.out" 'Interactive options:'
+
+# Snapshot logs are plain text and their requested destination is created once.
+run_case new_log --login-path reporting --logging --log-file "$TMP/new-snapshot.log" --mysql-bin "$FAKE"
+assert_status 0
+[[ -f "$TMP/new-snapshot.log" ]] || fail 'logging did not create the requested log file'
+assert_contains "$TMP/new-snapshot.log" 'Open MySQL Sessions'
+assert_contains "$TMP/new-snapshot.log" 'Total matching connections: 3'
+assert_not_contains "$TMP/new-snapshot.log" $'\033['
+
+# Existing destinations must be rejected and never overwritten.
+printf 'preserve me\n' > "$TMP/existing.log"
+run_case existing_log --login-path reporting --log-file "$TMP/existing.log" --mysql-bin "$FAKE"
+assert_status 2
+assert_contains "$TMP/existing_log.err" 'ERROR:'
+assert_contains "$TMP/existing_log.err" 'Usage:'
+assert_contains "$TMP/existing.log" 'preserve me'
+unset FAKE_MYSQL_OUTPUT
 
 # The fake must record the SQL bound to -e even when later client options follow it.
 FAKE_MYSQL_SQL_LOG="$TMP/fake.sql" FAKE_MYSQL_OUTPUT=$'ROW\tapp\tbilling\thost\t3' \
