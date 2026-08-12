@@ -6,6 +6,7 @@ SCRIPT="$ROOT/check_opened_sessions_interactive.sh"
 FAKE="$ROOT/tests/fake_mysql_open_sessions.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/open-sessions-cli-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
+export FAKE_MYSQL_SQL_LOG="$TMP/sql.log"
 
 fail() {
     printf 'FAIL: %s\n' "$1" >&2
@@ -20,6 +21,12 @@ assert_status() {
 assert_contains() {
     local file=$1 expected=$2
     grep -F -- "$expected" "$file" >/dev/null || fail "missing '$expected' in $file"
+}
+
+assert_occurrences() {
+    local file=$1 expected=$2 count=$3 actual
+    actual=$(grep -F -c -- "$expected" "$file" || true)
+    [[ "$actual" -eq "$count" ]] || fail "expected $count occurrences of '$expected' in $file, got $actual"
 }
 
 run_case() {
@@ -68,14 +75,46 @@ assert_status 2
 assert_contains "$TMP/missing_short_value.err" 'ERROR: Option -l requires a value.'
 assert_contains "$TMP/missing_short_value.err" 'Usage:'
 
-run_case required_login_path --mysql-bin /bin/true
+run_case required_login_path --mysql-bin "$FAKE"
 assert_status 2
 assert_contains "$TMP/required_login_path.err" 'ERROR: --login-path is required.'
 assert_contains "$TMP/required_login_path.err" 'Usage:'
 
 # Legacy getopts accepted attached values for every retained value-taking short option.
-run_case attached_short_options -lreporting -t10 -uapp -dbilling -hhost -o --mysql-bin /bin/true
+run_case attached_short_options -lreporting -t10 -uapp -dbilling -hhost -o --mysql-bin "$FAKE"
 assert_status 0
+
+run_case equals_options --login-path=reporting --refresh-time=10 --user=app \
+    --database=billing --host=api --logging --diff --log-file="$TMP/new.log" \
+    --mysql-bin="$FAKE" --no-color
+assert_status 0
+
+# Query filters must be escaped as SQL literals and collected in one client call.
+: > "$TMP/sql.log"
+run_case escaped_filters --login-path reporting --user "alice,o'connor" \
+    --database "billing'archive" --host 'api%_west\node' --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/sql.log" "USER IN ('alice', 'o\\'connor')"
+assert_contains "$TMP/sql.log" "DB = 'billing\\'archive'"
+assert_contains "$TMP/sql.log" "HOST LIKE '%api\\%\\_west\\\\node%' ESCAPE '\\\\'"
+assert_contains "$TMP/sql.log" 'UNION ALL'
+assert_occurrences "$TMP/sql.log" 'UNION ALL' 1
+
+run_case invalid_refresh --login-path reporting --refresh-time 0 --mysql-bin "$FAKE"
+assert_status 2
+assert_contains "$TMP/invalid_refresh.err" 'ERROR: --refresh-time must be a positive integer.'
+assert_contains "$TMP/invalid_refresh.err" 'Usage:'
+
+run_case invalid_mysql_bin --login-path reporting --mysql-bin "$TMP/missing-mysql"
+assert_status 2
+assert_contains "$TMP/invalid_mysql_bin.err" 'ERROR: --mysql-bin must reference an executable file.'
+assert_contains "$TMP/invalid_mysql_bin.err" 'Usage:'
+
+touch "$TMP/existing-validation.log"
+run_case existing_log_validation --login-path reporting --log-file "$TMP/existing-validation.log" --mysql-bin "$FAKE"
+assert_status 2
+assert_contains "$TMP/existing_log_validation.err" 'ERROR: --log-file must not already exist.'
+assert_contains "$TMP/existing_log_validation.err" 'Usage:'
 
 # The fake must record the SQL bound to -e even when later client options follow it.
 FAKE_MYSQL_SQL_LOG="$TMP/fake.sql" FAKE_MYSQL_OUTPUT=$'ROW\tapp\tbilling\thost\t3' \

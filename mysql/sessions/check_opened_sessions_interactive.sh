@@ -12,6 +12,8 @@ DIFF_ENABLED=false
 LOG_FILE=''
 MYSQL_BIN=mysql
 COLOR_ENABLED=true
+SAMPLE_ROWS=()
+SAMPLE_TOTAL=0
 
 setup_colors() {
     if [[ "$COLOR_ENABLED" == true ]]; then
@@ -204,7 +206,92 @@ parse_arguments() {
     done
 
     [[ -n "$LOGIN_PATH" ]] || cli_error '--login-path is required.'
+
+    [[ "$REFRESH_TIME" =~ ^[1-9][0-9]*$ ]] || cli_error '--refresh-time must be a positive integer.'
+
+    if [[ ! -x "$MYSQL_BIN" ]] && ! command -v "$MYSQL_BIN" >/dev/null 2>&1; then
+        cli_error '--mysql-bin must reference an executable file.'
+    fi
+
+    if [[ -n "$LOG_FILE" ]]; then
+        local log_directory
+        log_directory=$(dirname "$LOG_FILE")
+        [[ ! -e "$LOG_FILE" ]] || cli_error '--log-file must not already exist.'
+        [[ -d "$log_directory" && -w "$log_directory" ]] || cli_error '--log-file parent directory must be writable.'
+    fi
+}
+
+sql_quote() {
+    local value=${1//\\/\\\\}
+    value=${value//\'/\\\'}
+    printf "'%s'" "$value"
+}
+
+like_literal() {
+    local value=$1
+    value=${value//\\/\\\\}
+    value=${value//%/\\%}
+    value=${value//_/\\_}
+    printf '%s' "$value"
+}
+
+build_filter_clause() {
+    local filters=''
+    local user
+    local quoted_users=''
+    local users=()
+
+    if [[ -n "$FILTER_USER" ]]; then
+        IFS=',' read -r -a users <<< "$FILTER_USER"
+        for user in "${users[@]}"; do
+            if [[ -n "$quoted_users" ]]; then
+                quoted_users+=', '
+            fi
+            quoted_users+=$(sql_quote "$user")
+        done
+        filters+=" AND USER IN (${quoted_users})"
+    fi
+
+    if [[ -n "$FILTER_DATABASE" ]]; then
+        filters+=" AND DB = $(sql_quote "$FILTER_DATABASE")"
+    fi
+
+    if [[ -n "$FILTER_HOST" ]]; then
+        filters+=" AND HOST LIKE '%$(like_literal "$FILTER_HOST")%' ESCAPE '\\\\'"
+    fi
+
+    printf '%s' "$filters"
+}
+
+collect_sample() {
+    local filters
+    local query
+    local output
+    local record_type user database host sessions
+
+    filters=$(build_filter_clause)
+    query="SELECT 'ROW' AS record_type, USER, DB, HOST, COUNT(*) AS sessions
+FROM information_schema.PROCESSLIST
+WHERE 1 = 1${filters}
+GROUP BY USER, DB, HOST
+UNION ALL
+SELECT 'TOTAL' AS record_type, NULL AS USER, NULL AS DB, NULL AS HOST, COUNT(*) AS sessions
+FROM information_schema.PROCESSLIST
+WHERE 1 = 1${filters};"
+    output=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --skip-column-names -e "$query")
+
+    SAMPLE_ROWS=()
+    SAMPLE_TOTAL=0
+    while IFS=$'\t' read -r record_type user database host sessions; do
+        [[ -n "$record_type" ]] || continue
+        if [[ "$record_type" == TOTAL ]]; then
+            SAMPLE_TOTAL=$sessions
+        elif [[ "$record_type" == ROW ]]; then
+            SAMPLE_ROWS+=("$user"$'\t'"$database"$'\t'"$host"$'\t'"$sessions")
+        fi
+    done <<< "$output"
 }
 
 setup_colors
 parse_arguments "$@"
+collect_sample
