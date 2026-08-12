@@ -29,5 +29,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -n "${FAKE_MYSQL_READY_FILE:-}" ]]; then
+    : > "$FAKE_MYSQL_READY_FILE"
+    while [[ ! -e "${FAKE_MYSQL_RELEASE_FILE:?}" ]]; do
+        sleep 0.05
+    done
+fi
+
 printf '%s\n' "$SQL" >> "${FAKE_MYSQL_SQL_LOG:?}"
 printf '%s\n' "${FAKE_MYSQL_OUTPUT:-}"

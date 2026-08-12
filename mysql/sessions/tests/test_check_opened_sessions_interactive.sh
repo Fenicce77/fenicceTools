@@ -46,6 +46,36 @@ run_case() {
     set -e
 }
 
+run_tty_case() {
+    local name=$1
+    shift
+    local command=''
+    local argument
+
+    if [[ "$(uname -s)" == Darwin ]]; then
+        set +e
+        TERM=xterm script -q "$TMP/$name.out" "$SCRIPT" "$@" \
+            >"$TMP/$name.console" 2>"$TMP/$name.err"
+        STATUS=$?
+        set -e
+        return
+    fi
+
+    for argument in "$SCRIPT" "$@"; do
+        printf -v command '%s%q ' "$command" "$argument"
+    done
+    set +e
+    TERM=xterm script -q -c "$command" "$TMP/$name.out" \
+        >"$TMP/$name.console" 2>"$TMP/$name.err"
+    STATUS=$?
+    set -e
+}
+
+strip_frame_ansi() {
+    LC_ALL=C sed $'s/\033\\[[0-9;]*m//g' "$1" | tr -d '\r' | \
+        sed 's/^Timestamp: .*/Timestamp: <normalized>/'
+}
+
 # A monitor without connection credentials must stop before terminal setup.
 run_case no_args
 assert_status 2
@@ -147,6 +177,24 @@ assert_not_contains "$TMP/redirected.out" $'\033['
 assert_not_contains "$TMP/redirected.out" $'\033[H\033[2J'
 assert_not_contains "$TMP/redirected.out" 'Interactive options:'
 
+# A usable pseudo-TTY clears the frame. --no-color keeps refresh but removes styling.
+run_tty_case tty_color --login-path reporting --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/tty_color.out" $'\033[H\033[2J'
+assert_contains "$TMP/tty_color.out" $'\033[0;36m'
+
+run_tty_case tty_no_color --login-path reporting --mysql-bin "$FAKE" --no-color
+assert_status 0
+assert_contains "$TMP/tty_no_color.out" $'\033[H\033[2J'
+assert_not_contains "$TMP/tty_no_color.out" $'\033[0;31m'
+assert_not_contains "$TMP/tty_no_color.out" $'\033[0;33m'
+assert_not_contains "$TMP/tty_no_color.out" $'\033[0;36m'
+
+# Removing style bytes from a colored frame must preserve every table column position.
+strip_frame_ansi "$TMP/tty_color.out" > "$TMP/tty_color.plain"
+strip_frame_ansi "$TMP/tty_no_color.out" > "$TMP/tty_no_color.plain"
+cmp -s "$TMP/tty_color.plain" "$TMP/tty_no_color.plain" || fail 'colored and no-color frame layouts differ'
+
 # Snapshot logs are plain text and their requested destination is created once.
 run_case new_log --login-path reporting --logging --log-file "$TMP/new-snapshot.log" --mysql-bin "$FAKE"
 assert_status 0
@@ -162,6 +210,33 @@ assert_status 2
 assert_contains "$TMP/existing_log.err" 'ERROR:'
 assert_contains "$TMP/existing_log.err" 'Usage:'
 assert_contains "$TMP/existing.log" 'preserve me'
+
+# The process reserves the requested destination before sampling; a second exclusive
+# creator cannot claim or overwrite it while the monitor still holds descriptor 3.
+export FAKE_MYSQL_READY_FILE="$TMP/claim.ready"
+export FAKE_MYSQL_RELEASE_FILE="$TMP/claim.release"
+"$SCRIPT" --login-path reporting --log-file "$TMP/claimed.log" --mysql-bin "$FAKE" \
+    >"$TMP/claimed.out" 2>"$TMP/claimed.err" &
+CLAIM_PID=$!
+for _ in $(seq 1 100); do
+    [[ -e "$FAKE_MYSQL_READY_FILE" ]] && break
+    sleep 0.05
+done
+[[ -e "$FAKE_MYSQL_READY_FILE" ]] || fail 'monitor did not reach the blocked sampler'
+set +e
+(
+    set -C
+    printf 'competing writer\n' > "$TMP/claimed.log"
+) 2>"$TMP/claimed_competitor.err"
+COMPETITOR_STATUS=$?
+set -e
+[[ "$COMPETITOR_STATUS" -ne 0 ]] || fail 'competing exclusive creator overwrote claimed log path'
+touch "$FAKE_MYSQL_RELEASE_FILE"
+wait "$CLAIM_PID"
+STATUS=$?
+assert_status 0
+[[ ! -s "$TMP/claimed.log" ]] || fail 'competing creator modified the claimed log path'
+unset FAKE_MYSQL_READY_FILE FAKE_MYSQL_RELEASE_FILE
 unset FAKE_MYSQL_OUTPUT
 
 # The fake must record the SQL bound to -e even when later client options follow it.
