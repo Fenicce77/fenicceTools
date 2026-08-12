@@ -1,223 +1,60 @@
 #!/usr/bin/env bash
-#
-# bp_tracker.sh v4.0
-# Live Dashboard DBRE tool. Continuously monitors by default.
-
 set -euo pipefail
 
-# --- ANSI Color Definitions (Forced native expansion) ---
-readonly C_RESET=$'\e[0m'
-readonly C_BOLD=$'\e[1m'
-readonly C_RED=$'\e[0;31m'
-readonly C_GREEN=$'\e[0;32m'
-readonly C_YELLOW=$'\e[0;33m'
-readonly C_BLUE=$'\e[0;34m'
-readonly C_MAGENTA=$'\e[0;35m'
-readonly C_CYAN=$'\e[0;36m'
+LOGIN_PATH=""; POLL_INTERVAL=10; OUTPUT_FILE=""; NO_COLOR=false
+TOP_OBJECTS_COUNT=0; ACTIVE_SESSIONS_COUNT=0; OBJECT_FILTER=""; USER_FILTER=""
+MYSQL_BIN=${MYSQL_BIN:-mysql}; COLOR_ENABLED=false; SCREEN_REFRESH_ENABLED=false
+C_RESET=""; C_BOLD=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_CYAN=""
+PREV_YOUNG=""; PREV_NOT_YOUNG=""; PREV_TIME=""; TOP_OBJECTS_ROW=""; SESSIONS_ROW=""
 
-# --- Configuration & Defaults ---
-LOGIN_PATH="default"
-OUTPUT_FILE="bp_activity_$(date +%Y%m%d_%H%M%S).log"
-POLL_INTERVAL=10
-OBJECT_FILTER=""
-USER_FILTER=""
-
-# --- Help Function ---
-show_help() {
-    printf "\n${C_CYAN}${C_BOLD}======================================================${C_RESET}\n"
-    printf "${C_CYAN}${C_BOLD}   InnoDB Buffer Pool Live Dashboard (v4.0)           ${C_RESET}\n"
-    printf "${C_CYAN}${C_BOLD}======================================================${C_RESET}\n"
-    printf "Starts a continuous monitoring loop immediately.\n"
-    printf "Press 'm' during execution to open the settings menu.\n\n"
-    
-    printf "${C_YELLOW}${C_BOLD}OPTIONS:${C_RESET}\n"
-    printf "  ${C_GREEN}-l${C_RESET} <login-path>   MySQL login path (Default: default)\n"
-    printf "  ${C_GREEN}-o${C_RESET} <file>         Output log file (Default: auto-generated)\n"
-    printf "  ${C_GREEN}-i${C_RESET} <seconds>      Refresh interval in seconds (Default: 10)\n"
-    printf "  ${C_GREEN}-h${C_RESET}                Show this colored help menu\n\n"
+preparse_no_color() { local x; for x in "$@"; do [[ "$x" == --no-color ]] && NO_COLOR=true; done; return 0; }
+terminal_setup() {
+  COLOR_ENABLED=false; SCREEN_REFRESH_ENABLED=false
+  if [[ -t 1 && -n "${TERM:-}" && "${TERM:-}" != dumb ]]; then SCREEN_REFRESH_ENABLED=true; [[ "$NO_COLOR" == false ]] && COLOR_ENABLED=true || true; fi
+  if [[ "$COLOR_ENABLED" == true ]]; then
+    C_RESET=$(tput sgr0 2>/dev/null || true); C_BOLD=$(tput bold 2>/dev/null || true)
+    C_RED="${C_BOLD}$(tput setaf 1 2>/dev/null || true)"; C_GREEN="${C_BOLD}$(tput setaf 2 2>/dev/null || true)"
+    C_YELLOW="${C_BOLD}$(tput setaf 3 2>/dev/null || true)"; C_CYAN="${C_BOLD}$(tput setaf 6 2>/dev/null || true)"
+  fi
 }
-
-# --- Parameter Validation ---
-if [[ $# -eq 0 ]]; then
-    printf "${C_RED}Error: No parameters provided. At least the login path is required.${C_RESET}\n" >&2
-    show_help
-    exit 1
-fi
-
-while getopts ":l:o:i:h" opt; do
-    case "${opt}" in
-        l) LOGIN_PATH="${OPTARG}" ;;
-        o) OUTPUT_FILE="${OPTARG}" ;;
-        i) POLL_INTERVAL="${OPTARG}" ;;
-        h) show_help; exit 0 ;;
-        \?) printf "${C_RED}${C_BOLD}[!] Invalid option: -%s${C_RESET}\n" "${OPTARG}" >&2; show_help; exit 1 ;;
-        :) printf "${C_RED}${C_BOLD}[!] Option -%s requires an argument.${C_RESET}\n" "${OPTARG}" >&2; show_help; exit 1 ;;
-    esac
-done
-
-# --- Helper Functions ---
-log_and_print() {
-    local color="$1"
-    local msg="$2"
-    # Print with color to stdout
-    printf "%s%s%s\n" "${color}" "${msg}" "${C_RESET}"
-    # Print without color to log file
-    printf "%s | %s\n" "$(date +'%Y-%m-%d %H:%M:%S')" "${msg}" >> "${OUTPUT_FILE}"
+clear_screen() { [[ "$SCREEN_REFRESH_ENABLED" == true ]] && printf '\033[H\033[2J' || true; }
+error() { printf '%b\n' "${C_RED}Error: $1${C_RESET}" >&2; }
+help() {
+  printf '%b\n' "${C_CYAN}${C_BOLD}InnoDB Buffer Pool Tracker${C_RESET}"
+  printf '%s\n' 'Usage: bp_tracker.sh --login-path NAME [OPTIONS]' 'Required:' '  -l, --login-path NAME' 'Options:'
+  printf '%s\n' '  -i, --interval SECONDS' '  -o, --output-file FILE' '      --top-objects [COUNT]' '      --object-filter TEXT'
+  printf '%s\n' '      --active-sessions [COUNT]' '      --user-filter TEXT' '      --no-color' '  -h, --help'
+  printf '%s\n' 'Examples:' '  bp_tracker.sh -l production' '  bp_tracker.sh -l production --top-objects 10 --active-sessions 5'
 }
-
-print_header() {
-    local title="$1"
-    log_and_print "${C_MAGENTA}" "================================================================="
-    log_and_print "${C_BOLD}${C_MAGENTA}" " ${title} | Object: [${OBJECT_FILTER:-ALL}] | User: [${USER_FILTER:-ALL}]"
-    log_and_print "${C_MAGENTA}" "================================================================="
+need_value() { [[ -n "${2:-}" && "${2:-}" != -* ]] || { error "Option $1 requires a value."; return 1; }; }
+valid_count() { [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 && "$2" -le 100 ]] || { error "$1 count must be between 1 and 100."; return 1; }; }
+parse() {
+  while [[ $# -gt 0 ]]; do case "$1" in
+    -l|--login-path) need_value "$1" "${2:-}"; LOGIN_PATH=$2; shift 2;; --login-path=*) LOGIN_PATH=${1#*=}; shift;;
+    -i|--interval) need_value "$1" "${2:-}"; POLL_INTERVAL=$2; shift 2;; --interval=*) POLL_INTERVAL=${1#*=}; shift;;
+    -o|--output-file) need_value "$1" "${2:-}"; OUTPUT_FILE=$2; shift 2;; --output-file=*) OUTPUT_FILE=${1#*=}; shift;;
+    --top-objects) if [[ -n "${2:-}" && "${2:-}" != -* ]]; then TOP_OBJECTS_COUNT=$2; shift 2; else TOP_OBJECTS_COUNT=10; shift; fi;; --top-objects=*) TOP_OBJECTS_COUNT=${1#*=}; shift;;
+    --active-sessions) if [[ -n "${2:-}" && "${2:-}" != -* ]]; then ACTIVE_SESSIONS_COUNT=$2; shift 2; else ACTIVE_SESSIONS_COUNT=5; shift; fi;; --active-sessions=*) ACTIVE_SESSIONS_COUNT=${1#*=}; shift;;
+    --object-filter) need_value "$1" "${2:-}"; OBJECT_FILTER=$2; shift 2;; --object-filter=*) OBJECT_FILTER=${1#*=}; shift;;
+    --user-filter) need_value "$1" "${2:-}"; USER_FILTER=$2; shift 2;; --user-filter=*) USER_FILTER=${1#*=}; shift;;
+    --no-color) NO_COLOR=true; shift;; -h|--help) help; exit 0;; *) error "Unknown option: $1"; return 1;; esac; done
 }
-
-execute_sql() {
-    mysql --login-path="${LOGIN_PATH}" -N -B -s -e "$1"
+validate() { [[ -n "$LOGIN_PATH" ]] || { error 'login-path is required.'; return 1; }; [[ "$POLL_INTERVAL" =~ ^[0-9]+$ && "$POLL_INTERVAL" -ge 1 ]] || { error 'interval must be a positive integer.'; return 1; }; [[ "$TOP_OBJECTS_COUNT" == 0 ]] || valid_count top-objects "$TOP_OBJECTS_COUNT"; [[ "$ACTIVE_SESSIONS_COUNT" == 0 ]] || valid_count active-sessions "$ACTIVE_SESSIONS_COUNT"; }
+query() { printf '%s\n' "$1" | "$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --raw --skip-column-names; }
+hex() { printf '%s' "$1" | od -An -tx1 | tr -d ' \n'; }
+like() { local h; h=$(hex "$1"); printf "REPLACE(REPLACE(REPLACE(CONVERT(X'%s' USING utf8mb4), '\\\\', '\\\\\\\\'), '%%', '\\\\%%'), '_', '\\\\_')" "$h"; }
+global() { GLOBAL=$(query $'/* bp-tracker:global */\nSELECT SUM(POOL_SIZE), SUM(FREE_BUFFERS), SUM(DATABASE_PAGES), SUM(MODIFIED_DATABASE_PAGES), ROUND(100 * SUM(MODIFIED_DATABASE_PAGES) / NULLIF(SUM(DATABASE_PAGES), 0), 2), SUM(PAGES_READ_RATE), SUM(PAGES_MADE_YOUNG), SUM(PAGES_NOT_MADE_YOUNG) FROM INFORMATION_SCHEMA.INNODB_BUFFER_POOL_STATS;'); NOW=$(date +%s); }
+top() { [[ "$TOP_OBJECTS_COUNT" -gt 0 ]] || return 0; local w='1=1'; if [[ -n "$OBJECT_FILTER" ]]; then w="CONCAT(object_schema, '.', object_name) LIKE CONCAT('%', $(like "$OBJECT_FILTER"), '%') ESCAPE '\\\\'"; fi; TOP_OBJECTS_ROW=$(query "/* bp-tracker:top-objects */ SELECT CONCAT(object_schema, '.', object_name), pages, allocated, data, pages_old, pages_hashed, rows_cached FROM sys.innodb_buffer_stats_by_table WHERE $w ORDER BY allocated DESC LIMIT $TOP_OBJECTS_COUNT;" 2>&1) || TOP_OBJECTS_ROW="TOP OBJECTS UNAVAILABLE: $TOP_OBJECTS_ROW"; return 0; }
+sessions() { [[ "$ACTIVE_SESSIONS_COUNT" -gt 0 ]] || return 0; local w='1=1'; if [[ -n "$USER_FILTER" ]]; then w="user LIKE CONCAT('%', $(like "$USER_FILTER"), '%') ESCAPE '\\\\'"; fi; SESSIONS_ROW=$(query "/* bp-tracker:active-sessions */ SELECT user, time, state, LEFT(current_statement, 64) FROM sys.session WHERE user NOT IN ('mysql.session', 'mysql.sys') AND current_statement IS NOT NULL AND $w ORDER BY time DESC LIMIT $ACTIVE_SESSIONS_COUNT;" 2>&1) || SESSIONS_ROW="ACTIVE USER SESSIONS UNAVAILABLE: $SESSIONS_ROW"; return 0; }
+rate() { [[ -n "$2" && "$3" -gt 0 && "$1" -ge "$2" ]] || { printf N/A; return; }; awk -v a="$1" -v b="$2" -v s="$3" 'BEGIN {printf "%.2f", (a-b)/s}'; }
+log() { if [[ -n "$OUTPUT_FILE" ]]; then printf '%s | %s\n' "$(date '+%F %T')" "$1" >> "$OUTPUT_FILE"; fi; return 0; }
+render() {
+  local p f d dirty pct io y n elapsed=0 yr nr color=''; IFS=$'\t' read -r p f d dirty pct io y n <<< "$GLOBAL"; [[ -n "$PREV_TIME" ]] && elapsed=$((NOW-PREV_TIME)); yr=$(rate "$y" "$PREV_YOUNG" "$elapsed"); nr=$(rate "$n" "$PREV_NOT_YOUNG" "$elapsed"); [[ "$io" -gt 5000 ]] && color=$C_RED || { [[ "$io" -gt 0 ]] && color=$C_YELLOW || true; }
+  clear_screen; printf '%b\n' "${C_CYAN}${C_BOLD}================ BUFFER POOL ACTIVITY ================${C_RESET}"; printf '%s\n' "Pool pages: $p | Free pages: $f | Data pages: $d | Dirty pages: $dirty (${pct}%)"; printf '%b\n' "Read I/O: ${color}$io pages/s${C_RESET} | Young promotions/s: $yr | Old-list stays/s: $nr"; log "BUFFER POOL ACTIVITY | pool=$p free=$f data=$d dirty=$dirty dirty_pct=$pct read_io=$io young_promotions_s=$yr old_list_stays_s=$nr"
+  [[ "$TOP_OBJECTS_COUNT" -gt 0 ]] && { printf '%b\n%s\n' "${C_CYAN}TOP OBJECTS${C_RESET}" "$TOP_OBJECTS_ROW"; log "TOP OBJECTS | $TOP_OBJECTS_ROW"; }
+  [[ "$ACTIVE_SESSIONS_COUNT" -gt 0 ]] && { printf '%b\n%s\n' "${C_GREEN}ACTIVE USER SESSIONS${C_RESET}" "$SESSIONS_ROW"; log 'ACTIVE USER SESSIONS | metadata sampled'; }
+  PREV_YOUNG=$y; PREV_NOT_YOUNG=$n; PREV_TIME=$NOW
 }
-
-get_top_objects() {
-    local query="
-    SELECT 
-        CONCAT(object_schema, '.', object_name) AS object,
-        pages AS total_pages,
-        ROUND(allocated / 1024 / 1024, 2) AS allocated_mb,
-        ROUND(pages_old / pages * 100, 1) AS old_pct
-    FROM sys.innodb_buffer_stats_by_table
-    WHERE object_schema NOT IN ('mysql', 'sys', 'information_schema', 'performance_schema')
-      AND CONCAT(object_schema, '.', object_name) LIKE '%${OBJECT_FILTER}%'
-      AND pages > 0
-    ORDER BY pages DESC
-    LIMIT 10;"
-    
-    local tmp_sql
-    tmp_sql=$(mktemp)
-    printf "%s" "$query" > "$tmp_sql"
-    mysql --login-path="${LOGIN_PATH}" -t < "$tmp_sql"
-    rm "$tmp_sql"
-}
-
-get_user_activity() {
-    local query="
-    SELECT user, time AS sec_running, state, LEFT(current_statement, 60) AS query_snippet
-    FROM sys.session
-    WHERE user NOT IN ('mysql.session', 'mysql.sys')
-      AND user LIKE '%${USER_FILTER}%'
-      AND current_statement IS NOT NULL
-    ORDER BY time DESC LIMIT 5;"
-
-    local tmp_sql
-    tmp_sql=$(mktemp)
-    printf "%s" "$query" > "$tmp_sql"
-    mysql --login-path="${LOGIN_PATH}" -t < "$tmp_sql"
-    rm "$tmp_sql"
-}
-
-get_churn_metrics() {
-    execute_sql "SELECT PAGES_MADE_YOUNG, PAGES_NOT_MADE_YOUNG, PAGES_READ_RATE FROM information_schema.INNODB_BUFFER_POOL_STATS;"
-}
-
-take_snapshot() {
-    printf "\033c" # Clears the terminal screen for a clean dashboard view
-    print_header "LIVE DASHBOARD SNAPSHOT"
-    
-    log_and_print "${C_CYAN}" "Top Memory Objects:"
-    local top_objs
-    top_objs=$(get_top_objects)
-    printf "%s%s%s\n" "${C_CYAN}" "${top_objs}" "${C_RESET}"
-    printf "%s\n" "${top_objs}" >> "${OUTPUT_FILE}"
-    
-    log_and_print "${C_GREEN}" "Active User Queries:"
-    local user_act
-    user_act=$(get_user_activity)
-    printf "%s%s%s\n" "${C_GREEN}" "${user_act}" "${C_RESET}"
-    printf "%s\n" "${user_act}" >> "${OUTPUT_FILE}"
-    
-    read -r P_YOUNG P_NOT_YOUNG P_READ_RATE <<< "$(get_churn_metrics)"
-    local churn_msg="Churn -> Made Young: ${P_YOUNG} | Evicted: ${P_NOT_YOUNG} | Read Rate: ${P_READ_RATE}/s"
-    
-    if [[ "${P_READ_RATE}" -gt 5000 ]]; then
-         log_and_print "${C_RED}${C_BOLD}" "[!] HIGH CHURN: ${churn_msg}"
-    else
-         log_and_print "${C_YELLOW}" "${churn_msg}"
-    fi
-    printf "\n"
-}
-
-interactive_menu() {
-    printf "\033c"
-    while true; do
-        printf "\n${C_BLUE}${C_BOLD}========== TRACKER SETTINGS ==========${C_RESET}\n"
-        printf " Filters -> Object: [${C_CYAN}%s${C_RESET}] | User: [${C_GREEN}%s${C_RESET}] | Interval: [${C_MAGENTA}%ss${C_RESET}]\n" "${OBJECT_FILTER:-ALL}" "${USER_FILTER:-ALL}" "${POLL_INTERVAL}"
-        printf "${C_BLUE}--------------------------------------${C_RESET}\n"
-        printf " [${C_CYAN}1${C_RESET}] Return to Live Dashboard (Resume)\n"
-        printf " [${C_CYAN}2${C_RESET}] Set Object Filter (Table/Schema)\n"
-        printf " [${C_CYAN}3${C_RESET}] Set User Filter\n"
-        printf " [${C_CYAN}4${C_RESET}] Set Refresh Interval\n"
-        printf " [${C_RED}Q${C_RESET}] Quit Completely\n"
-        printf "${C_BLUE}======================================${C_RESET}\n"
-        printf "${C_BOLD}Select an option:${C_RESET} "
-        read -r choice
-        printf "\n"
-
-        case "${choice}" in
-            1) break ;; # Break loop to return to main dashboard
-            2) 
-                printf "Enter object keyword (or leave blank for ALL): "
-                read -r OBJECT_FILTER
-                ;;
-            3) 
-                printf "Enter username keyword (or leave blank for ALL): "
-                read -r USER_FILTER
-                ;;
-            4)
-                printf "Enter new interval in seconds (current: %s): " "${POLL_INTERVAL}"
-                read -r new_int
-                if [[ "${new_int}" =~ ^[0-9]+$ ]]; then
-                    POLL_INTERVAL="${new_int}"
-                else
-                    printf "${C_RED}Invalid number.${C_RESET}\n"
-                fi
-                ;;
-            [qQ]) 
-                log_and_print "${C_GREEN}${C_BOLD}" "Exiting tracker. Complete session saved to ${OUTPUT_FILE}."
-                exit 0 
-                ;;
-            *) printf "${C_RED}Invalid selection.${C_RESET}\n" ;;
-        esac
-    done
-}
-
-# --- Main Initialization ---
-> "${OUTPUT_FILE}"
-printf "\033c"
-log_and_print "${C_GREEN}${C_BOLD}" "Initializing Tracker..."
-log_and_print "${C_RESET}" "Target: ${C_CYAN}${LOGIN_PATH}${C_RESET} | Log: ${C_CYAN}${OUTPUT_FILE}${C_RESET}"
-
-DB_VERSION=$(execute_sql "SELECT VERSION();")
-log_and_print "${C_RESET}" "Target Version: ${C_YELLOW}${DB_VERSION}${C_RESET}"
-
-if [[ "${DB_VERSION}" == 8.4* ]]; then
-    log_and_print "${C_RED}" "Note: MySQL 8.4 LTS detected. AHI metrics excluded."
-fi
-
-sleep 2 # Brief pause to read init messages
-
-# --- The Live Dashboard Loop ---
-while true; do
-    take_snapshot
-    
-    printf "${C_BOLD}Waiting %ss for next refresh...${C_RESET}\n" "${POLL_INTERVAL}"
-    printf "${C_YELLOW}Press [m] to open Menu | Press [q] to Quit${C_RESET}\n"
-    
-    # -n 1 reads a single character immediately (no need to press Enter)
-    if read -t "${POLL_INTERVAL}" -n 1 -r input; then
-        if [[ "${input}" == "q" || "${input}" == "Q" ]]; then
-            printf "\n"
-            log_and_print "${C_GREEN}${C_BOLD}" "Exiting tracker. Session saved to ${OUTPUT_FILE}."
-            exit 0
-        elif [[ "${input}" == "m" || "${input}" == "M" ]]; then
-            interactive_menu
-        fi
-    fi
-done
+run_once() { global; top; sessions; render; }
+main() { preparse_no_color "$@"; terminal_setup; parse "$@"; terminal_setup; validate; [[ -n "$OUTPUT_FILE" ]] && : > "$OUTPUT_FILE"; if [[ "$SCREEN_REFRESH_ENABLED" != true ]]; then run_once; return; fi; while true; do run_once; if read -r -t "$POLL_INTERVAL" -n 1 -s key; then [[ "$key" == q || "$key" == Q ]] && return; fi; done; }
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"

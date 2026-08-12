@@ -46,4 +46,12 @@ assert_contains "$TMP/optional.sql" 'LIMIT 3' 'session limit missing'
 assert_contains "$TMP/optional.out" 'SELECT confidential_statement' 'session statement missing on screen'
 assert_not_contains "$TMP/optional.log" 'confidential_statement' 'session statement leaked to log'
 
+FAKE_MYSQL_BP_MODE=top-failure FAKE_MYSQL_BP_LOG="$TMP/top-failure.sql" MYSQL_BIN="$FAKE" "$SCRIPT" --login-path monitor --no-color --top-objects >"$TMP/top-failure.out"
+assert_contains "$TMP/top-failure.out" 'TOP OBJECTS UNAVAILABLE' 'top objects failure was not degraded'
+assert_contains "$TMP/top-failure.out" 'BUFFER POOL ACTIVITY' 'top objects failure stopped global metrics'
+
+FAKE_MYSQL_BP_MODE=sessions-failure FAKE_MYSQL_BP_LOG="$TMP/sessions-failure.sql" MYSQL_BIN="$FAKE" "$SCRIPT" --login-path monitor --no-color --active-sessions >"$TMP/sessions-failure.out"
+assert_contains "$TMP/sessions-failure.out" 'ACTIVE USER SESSIONS UNAVAILABLE' 'sessions failure was not degraded'
+assert_contains "$TMP/sessions-failure.out" 'BUFFER POOL ACTIVITY' 'sessions failure stopped global metrics'
+
 printf 'PASS: %s assertions\n' "$TEST_COUNT"
