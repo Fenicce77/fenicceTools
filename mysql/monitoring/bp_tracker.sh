@@ -20,11 +20,29 @@ terminal_setup() {
 clear_screen() { [[ "$SCREEN_REFRESH_ENABLED" == true ]] && printf '\033[H\033[2J' || true; }
 error() { printf '%b\n' "${C_RED}Error: $1${C_RESET}" >&2; }
 help() {
-  printf '%b\n' "${C_CYAN}${C_BOLD}InnoDB Buffer Pool Tracker${C_RESET}"
-  printf '%s\n' 'Usage: bp_tracker.sh --login-path NAME [OPTIONS]' 'Required:' '  -l, --login-path NAME' 'Options:'
-  printf '%s\n' '  -i, --interval SECONDS' '  -o, --output-file FILE' '      --top-objects [COUNT]' '      --object-filter TEXT'
-  printf '%s\n' '      --active-sessions [COUNT]' '      --user-filter TEXT' '      --no-color' '  -h, --help'
-  printf '%s\n' 'Examples:' '  bp_tracker.sh -l production' '  bp_tracker.sh -l production --top-objects 10 --active-sessions 5'
+  printf '%b\n\n' "${C_CYAN}${C_BOLD}MySQL InnoDB Buffer Pool Tracker${C_RESET}"
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Usage:${C_RESET}"
+  printf '%b\n\n' "  ${C_CYAN}$0 -l LOGIN_PATH [OPTIONS]${C_RESET}"
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Required:${C_RESET}"
+  printf '  %b%-32s%b %b%-19s%b %s\n\n' "$C_GREEN" '-l, --login-path' "$C_RESET" "$C_CYAN" 'NAME' "$C_RESET" 'MySQL login path for the target server'
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Monitoring:${C_RESET}"
+  printf '  %b%-32s%b %b%-19s%b %s\n' "$C_GREEN" '-i, --interval' "$C_RESET" "$C_CYAN" 'SECONDS' "$C_RESET" 'Refresh interval; positive integer (default: 10)'
+  printf '  %b%-32s%b %b%-19s%b %s\n\n' "$C_GREEN" '--no-color' "$C_RESET" "$C_CYAN" '' "$C_RESET" 'Disable ANSI colors; interactive refresh remains enabled'
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Runtime and output:${C_RESET}"
+  printf '  %b%-32s%b %b%-19s%b %s\n\n' "$C_GREEN" '-o, --output-file' "$C_RESET" "$C_CYAN" 'FILE' "$C_RESET" 'Plain-text snapshot log; query text is never recorded'
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Expensive optional views:${C_RESET}"
+  printf '  %b%-32s%b %b%-19s%b %s\n' "$C_GREEN" '--top-objects [COUNT]' "$C_RESET" "$C_CYAN" '1-100' "$C_RESET" 'Per-table residency; sampled no more often than every 60 seconds'
+  printf '  %b%-32s%b %b%-19s%b %s\n' "$C_GREEN" '--object-filter' "$C_RESET" "$C_CYAN" 'TEXT' "$C_RESET" 'Literal substring filter for top objects'
+  printf '  %b%-32s%b %b%-19s%b %s\n' "$C_GREEN" '--active-sessions [COUNT]' "$C_RESET" "$C_CYAN" '1-100' "$C_RESET" 'Session correlation; statement prefix is screen-only'
+  printf '  %b%-32s%b %b%-19s%b %s\n\n' "$C_GREEN" '--user-filter' "$C_RESET" "$C_CYAN" 'TEXT' "$C_RESET" 'Literal substring filter for active sessions'
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Help:${C_RESET}"
+  printf '  %b%-32s%b %b%-19s%b %s\n\n' "$C_GREEN" '-h, --help' "$C_RESET" "$C_CYAN" '' "$C_RESET" 'Show this help and exit'
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Examples:${C_RESET}"
+  printf '  %b%s -l production%b\n' "$C_CYAN" "$0" "$C_RESET"
+  printf '  %b%s -l production --top-objects 10 --active-sessions 5%b\n\n' "$C_CYAN" "$0" "$C_RESET"
+  printf '%b\n' "${C_YELLOW}${C_BOLD}Safety:${C_RESET}"
+  printf '%b\n' "${C_YELLOW}  Default mode reads only aggregated Buffer Pool statistics. Top objects is opt-in${C_RESET}"
+  printf '%b\n' "${C_YELLOW}  because it can inspect resident pages and affect a busy production server.${C_RESET}"
 }
 need_value() { [[ -n "${2:-}" && "${2:-}" != -* ]] || { error "Option $1 requires a value."; return 1; }; }
 valid_count() { [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 && "$2" -le 100 ]] || { error "$1 count must be between 1 and 100."; return 1; }; }
@@ -59,6 +77,10 @@ run_once() { global; top; sessions; render; }
 main() {
   preparse_no_color "$@"
   terminal_setup
+  if [[ $# -eq 0 ]]; then
+    help
+    return 0
+  fi
   if ! parse "$@"; then
     help
     return 1

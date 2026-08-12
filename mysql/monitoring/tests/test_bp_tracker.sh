@@ -14,10 +14,12 @@ assert_not_contains() { ! grep -F -- "$2" "$1" >/dev/null || fail "$3"; TEST_COU
 assert_no_ansi() { if LC_ALL=C grep -q $'\033' "$1"; then fail "$2"; fi; TEST_COUNT=$((TEST_COUNT + 1)); }
 run_failure() { if "$@" >"$TMP/failure.out" 2>&1; then fail "command unexpectedly succeeded: $*"; fi; }
 
-run_failure "$SCRIPT"
-assert_contains "$TMP/failure.out" 'login-path is required' 'missing login path was not rejected'
-assert_contains "$TMP/failure.out" 'Usage:' 'no-argument invocation did not show help'
-assert_contains "$TMP/failure.out" 'Examples:' 'no-argument help did not show examples'
+if "$SCRIPT" >"$TMP/no-arguments.out" 2>&1; then :; else fail 'no-argument help did not succeed'; fi
+assert_contains "$TMP/no-arguments.out" 'Usage:' 'no-argument invocation did not show help'
+assert_contains "$TMP/no-arguments.out" 'Required:' 'no-argument help did not show required options'
+assert_contains "$TMP/no-arguments.out" 'Monitoring:' 'no-argument help did not show monitoring options'
+assert_contains "$TMP/no-arguments.out" 'Safety:' 'no-argument help did not show safety guidance'
+assert_contains "$TMP/no-arguments.out" 'Examples:' 'no-argument help did not show examples'
 run_failure "$SCRIPT" --login-path x --interval 0
 assert_contains "$TMP/failure.out" 'interval must be a positive integer' 'zero interval was accepted'
 assert_contains "$TMP/failure.out" 'Usage:' 'invalid invocation did not show help'
@@ -26,6 +28,8 @@ assert_contains "$TMP/failure.out" 'count must be between 1 and 100' 'large top 
 
 "$SCRIPT" --help >"$TMP/help.out"
 assert_contains "$TMP/help.out" '--no-color' 'help omits no-color'
+assert_contains "$TMP/help.out" 'Runtime and output:' 'help does not use standard runtime section'
+assert_contains "$TMP/help.out" 'Expensive optional views:' 'help does not document optional-view risk'
 assert_no_ansi "$TMP/help.out" 'redirected help contains ANSI'
 
 : > "$TMP/sql.log"
