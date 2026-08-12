@@ -55,12 +55,12 @@ run_pseudo_tty_monitor() {
 
     case "$(uname -s)" in
         Darwin)
-            { sleep 0.15; printf 'q'; } | TERM="$term" script -q /dev/null "$@" >"$output_file" 2>&1
+            { sleep 0.50; printf 'q'; } | TERM="$term" script -q /dev/null "$@" >"$output_file" 2>&1
             ;;
         Linux)
             local runner_command
             printf -v runner_command '%q ' env "TERM=$term" "$@"
-            { sleep 0.15; printf 'q'; } | script -q -e -c "$runner_command" /dev/null >"$output_file" 2>&1
+            { sleep 0.50; printf 'q'; } | script -q -e -c "$runner_command" /dev/null >"$output_file" 2>&1
             ;;
         *)
             fail "unsupported pseudo-terminal platform: $(uname -s)"

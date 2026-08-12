@@ -12,6 +12,9 @@ initialize_defaults() {
     VIEW_MODE="CONN"
     SORT_MODE="CONN"
     THRESHOLD=0
+    NO_COLOR=false
+    COLOR_ENABLED=false
+    SCREEN_REFRESH_ENABLED=false
     PAUSED=false
     QUERY_TIMEOUT=5
     MYSQL_BIN=${MYSQL_BIN:-mysql}
@@ -39,9 +42,56 @@ initialize_defaults() {
     TIMESTAMP=""
     TIMESTAMP_SECOND=-1
     RUNNING=true
+    blk=""
+    bld=""
+    red=""
+    grn=""
+    yel=""
+    ora=""
+    blu=""
+    mag=""
+    cyn=""
+    wht=""
+    off=""
+}
+
+preparse_no_color() {
+    local argument=""
+
+    for argument in "$@"; do
+        [[ "$argument" == "--no-color" ]] && NO_COLOR=true
+    done
+
+    return 0
+}
+
+initialize_terminal_capabilities() {
+    COLOR_ENABLED=false
+    SCREEN_REFRESH_ENABLED=false
+
+    if [[ -t 1 && -n "${TERM:-}" && "${TERM:-}" != "dumb" ]]; then
+        SCREEN_REFRESH_ENABLED=true
+        if [[ "$NO_COLOR" == false ]]; then
+            COLOR_ENABLED=true
+        fi
+    fi
 }
 
 initialize_colors() {
+    blk=""
+    bld=""
+    red=""
+    grn=""
+    yel=""
+    ora=""
+    blu=""
+    mag=""
+    cyn=""
+    wht=""
+    off=""
+
+    [[ "$COLOR_ENABLED" == true ]] || return 0
+
     blk=$(tput blink 2>/dev/null || true)
     bld=$(tput bold 2>/dev/null || true)
     red=${bld}$(tput setaf 1 2>/dev/null || true)
@@ -55,8 +105,13 @@ initialize_colors() {
     off=$(tput sgr0 2>/dev/null || true)
 }
 
-usage_text() {
+refresh_interactive_screen() {
+    [[ "$SCREEN_REFRESH_ENABLED" == true ]] || return 0
     printf '\033[H\033[2J'
+}
+
+usage_text() {
+    refresh_interactive_screen
     printf '%b\n' "${cyn}=================================================================================${off}"
     printf '%b\n' "${bld} ProxySQL Ultimate Monitor (DBA Edition) ${off}"
     printf '%b\n' "${cyn}=================================================================================${off}"
@@ -68,6 +123,7 @@ usage_text() {
     printf '%b\n' "  ${grn}-u, --user-filter=STR${off}  Filter by user (string match or comma-separated list)."
     printf '%b\n' "  ${grn}-t, --threshold=N${off}      Alert threshold for active connections (Default: 0)."
     printf '%b\n' "  ${grn}-o, --output-file=FILE${off} File path to save the continuous output log."
+    printf '%b\n' "  ${grn}--no-color${off}             Disable ANSI colors; interactive refresh remains enabled."
     printf '%b\n\n' "  ${grn}-h, --help${off}             Shows this help and exits."
     printf '%b\n' "${yel}Use Cases and Examples:${off}"
     printf '%b\n' "  ${wht}1. Sub-second monitoring execution as system user:${off}"
@@ -108,6 +164,7 @@ parse_arguments() {
             --threshold=*) THRESHOLD="${1#*=}" ;;
             -o|--output-file) require_option_value "$1" "${2-}"; OUTPUT_FILE=$2; shift ;;
             --output-file=*) OUTPUT_FILE="${1#*=}" ;;
+            --no-color) NO_COLOR=true ;;
             -h|--help) usage 0 ;;
             *) print_error "Unknown parameter: $1"; usage 1 ;;
         esac
@@ -562,7 +619,7 @@ render_screen() {
     local stale_label=""
     local filters=""
 
-    printf '\033[H\033[2J'
+    refresh_interactive_screen
     printf '%b\n' "${cyn}${SEP_LINE}${off}"
 
     case "$VIEW_MODE" in
@@ -810,8 +867,12 @@ monitor_loop() {
 
 main() {
     initialize_defaults
+    preparse_no_color "$@"
+    initialize_terminal_capabilities
     initialize_colors
     parse_arguments "$@"
+    initialize_terminal_capabilities
+    initialize_colors
     validate_arguments
     trap cleanup EXIT
     trap 'exit 130' INT
@@ -822,7 +883,6 @@ main() {
 }
 
 initialize_defaults
-initialize_colors
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     main "$@"
