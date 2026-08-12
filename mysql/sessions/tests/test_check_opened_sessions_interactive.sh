@@ -323,9 +323,9 @@ printf '%s\n' \
     'call=$((call + 1))' \
     'printf "%s\\n" "$call" > "$DYNAMIC_MYSQL_STATE"' \
     'if [[ "$call" -eq 1 ]]; then' \
-    "    output=\$'ROW\\tapp\\tbilling\\tshared\\t3\\nROW\\treport\\tanalytics\\tshared\\t7\\nTOTAL\\t\\t\\t\\t10'" \
+    "    output=\$'ROW\\tapp\\tbilling\\tapi\\t3\\nROW\\tapp\\tbilling\\tworker\\t10\\nROW\\treport\\tanalytics\\tshared\\t7\\nROW\\treport\\tarchive\\tshared\\t20\\nROW\\treader\\twarehouse\\tbatch\\t4\\nROW\\twriter\\twarehouse\\tbatch\\t12\\nTOTAL\\t\\t\\t\\t56'" \
     'else' \
-    "    output=\$'ROW\\tapp\\tbilling\\tshared\\t5\\nROW\\treport\\tanalytics\\tshared\\t6\\nROW\\tnewuser\\tnewdb\\tshared\\t1\\nTOTAL\\t\\t\\t\\t12'" \
+    "    output=\$'ROW\\tapp\\tbilling\\tapi\\t5\\nROW\\tapp\\tbilling\\tworker\\t11\\nROW\\treport\\tanalytics\\tshared\\t6\\nROW\\treport\\tarchive\\tshared\\t22\\nROW\\treader\\twarehouse\\tbatch\\t4\\nROW\\twriter\\twarehouse\\tbatch\\t9\\nTOTAL\\t\\t\\t\\t57'" \
     'fi' \
     'FAKE_MYSQL_OUTPUT="$output" exec "$DYNAMIC_MYSQL_BASE" "$@"' > "$DYNAMIC_FAKE"
 chmod +x "$DYNAMIC_FAKE"
@@ -337,9 +337,12 @@ run_pseudo_tty "$TMP/runtime_diff.out" \
 assert_status 0
 assert_contains "$TMP/runtime_diff.out" 'Delta'
 strip_frame_ansi "$TMP/runtime_diff.out" > "$TMP/runtime_diff.plain"
-assert_contains "$TMP/runtime_diff.plain" 'app      billing    shared         5     +2'
-assert_contains "$TMP/runtime_diff.plain" 'report   analytics  shared         6     -1'
-assert_contains "$TMP/runtime_diff.plain" 'newuser  newdb      shared         1     +1'
+assert_contains "$TMP/runtime_diff.plain" 'app     billing    api            5     +2'
+assert_contains "$TMP/runtime_diff.plain" 'app     billing    worker        11     +1'
+assert_contains "$TMP/runtime_diff.plain" 'report  analytics  shared         6     -1'
+assert_contains "$TMP/runtime_diff.plain" 'report  archive    shared        22     +2'
+assert_contains "$TMP/runtime_diff.plain" 'reader  warehouse  batch          4     +0'
+assert_contains "$TMP/runtime_diff.plain" 'writer  warehouse  batch          9     -3'
 unset DYNAMIC_MYSQL_STATE DYNAMIC_MYSQL_BASE
 
 # Runtime timestamp collisions are rejected atomically without replacing content.
