@@ -15,6 +15,9 @@ COLOR_ENABLED=true
 SCREEN_REFRESH_ENABLED=false
 SAMPLE_ROWS=()
 SAMPLE_TOTAL=0
+PREVIOUS_ROWS=()
+PREVIOUS_SAMPLE_AVAILABLE=false
+RUNTIME_MESSAGE=''
 
 is_interactive_terminal() {
     [[ -t 1 && -t 0 && -n "${TERM-}" && "$TERM" != dumb ]]
@@ -83,6 +86,12 @@ require_value() {
     if [[ -z "$value" || "$value" == -* ]]; then
         cli_error "Option $option requires a value."
     fi
+}
+
+validate_user_filter_value() {
+    local value=$1
+
+    [[ -z "$value" ]] || { [[ "$value" != ,* ]] && [[ "$value" != *, ]] && [[ "$value" != *,,* ]]; }
 }
 
 parse_arguments() {
@@ -225,7 +234,7 @@ parse_arguments() {
 
     [[ "$REFRESH_TIME" =~ ^[1-9][0-9]*$ ]] || cli_error '--refresh-time must be a positive integer.'
 
-    if [[ -n "$FILTER_USER" ]] && { [[ "$FILTER_USER" == ,* ]] || [[ "$FILTER_USER" == *, ]] || [[ "$FILTER_USER" == *,,* ]]; }; then
+    if ! validate_user_filter_value "$FILTER_USER"; then
         cli_error '--user must not contain empty components.'
     fi
 
@@ -332,6 +341,15 @@ claim_log_file() {
     set +C
 }
 
+reserve_runtime_log_file() {
+    set -C
+    if ! exec 3>"$LOG_FILE"; then
+        set +C
+        return 1
+    fi
+    set +C
+}
+
 filter_label() {
     local value=$1
     local fallback=$2
@@ -343,12 +361,37 @@ filter_label() {
     fi
 }
 
+state_label() {
+    if [[ "$1" == true ]]; then
+        printf 'ON'
+    else
+        printf 'OFF'
+    fi
+}
+
+previous_sessions() {
+    local wanted_user=$1
+    local wanted_database=$2
+    local wanted_host=$3
+    local row user database host sessions
+
+    for row in "${PREVIOUS_ROWS[@]}"; do
+        IFS=$'\t' read -r user database host sessions <<< "$row"
+        if [[ "$user" == "$wanted_user" && "$database" == "$wanted_database" && "$host" == "$wanted_host" ]]; then
+            printf '%s' "$sessions"
+            return 0
+        fi
+    done
+    printf '0'
+}
+
 render_frame() {
     local user_width=4
     local database_width=8
     local host_width=4
     local sessions_width=8
-    local row user database host sessions
+    local delta_width=5
+    local row user database host sessions previous delta delta_text
     local timestamp
 
     for row in "${SAMPLE_ROWS[@]}"; do
@@ -357,33 +400,71 @@ render_frame() {
         (( ${#database} > database_width )) && database_width=${#database}
         (( ${#host} > host_width )) && host_width=${#host}
         (( ${#sessions} > sessions_width )) && sessions_width=${#sessions}
+        if [[ "$DIFF_ENABLED" == true ]]; then
+            if [[ "$PREVIOUS_SAMPLE_AVAILABLE" == true ]]; then
+                previous=$(previous_sessions "$user" "$database" "$host")
+                delta=$((sessions - previous))
+            else
+                delta=0
+            fi
+            printf -v delta_text '%+d' "$delta"
+            (( ${#delta_text} > delta_width )) && delta_width=${#delta_text}
+        fi
     done
 
     timestamp=$(date '+%F %T')
     printf '%bOpen MySQL Sessions%b\n' "$COLOR_CYAN" "$COLOR_RESET"
     printf 'Timestamp: %s | Refresh interval: %ss | Diff: %s | Logging: %s\n' \
-        "$timestamp" "$REFRESH_TIME" "$DIFF_ENABLED" "$LOGGING_ENABLED"
+        "$timestamp" "$REFRESH_TIME" "$(state_label "$DIFF_ENABLED")" "$(state_label "$LOGGING_ENABLED")"
     printf 'Filters: user=%s database=%s host=%s\n' \
         "$(filter_label "$FILTER_USER" '<all>')" \
         "$(filter_label "$FILTER_DATABASE" '<all>')" \
         "$(filter_label "$FILTER_HOST" '<all>')"
     printf 'Total matching connections: %s\n\n' "$SAMPLE_TOTAL"
-    printf '%-*s  %-*s  %-*s  %*s\n' \
+    printf '%-*s  %-*s  %-*s  %*s' \
         "$user_width" 'User' "$database_width" 'Database' "$host_width" 'Host' "$sessions_width" 'Sessions'
-    printf '%-*s  %-*s  %-*s  %*s\n' \
+    [[ "$DIFF_ENABLED" == true ]] && printf '  %*s' "$delta_width" 'Delta'
+    printf '\n'
+    printf '%-*s  %-*s  %-*s  %*s' \
         "$user_width" "$(printf '%*s' "$user_width" '' | tr ' ' '-')" \
         "$database_width" "$(printf '%*s' "$database_width" '' | tr ' ' '-')" \
         "$host_width" "$(printf '%*s' "$host_width" '' | tr ' ' '-')" \
         "$sessions_width" "$(printf '%*s' "$sessions_width" '' | tr ' ' '-')"
+    [[ "$DIFF_ENABLED" == true ]] && printf '  %*s' "$delta_width" "$(printf '%*s' "$delta_width" '' | tr ' ' '-')"
+    printf '\n'
 
     for row in "${SAMPLE_ROWS[@]}"; do
         IFS=$'\t' read -r user database host sessions <<< "$row"
-        printf '%b%-*s%b  %b%-*s%b  %b%-*s%b  %b%*s%b\n' \
+        printf '%b%-*s%b  %b%-*s%b  %b%-*s%b  %b%*s%b' \
             "$COLOR_CYAN" "$user_width" "$user" "$COLOR_RESET" \
             "$COLOR_CYAN" "$database_width" "$database" "$COLOR_RESET" \
             "$COLOR_CYAN" "$host_width" "$host" "$COLOR_RESET" \
             "$COLOR_YELLOW" "$sessions_width" "$sessions" "$COLOR_RESET"
+        if [[ "$DIFF_ENABLED" == true ]]; then
+            if [[ "$PREVIOUS_SAMPLE_AVAILABLE" == true ]]; then
+                previous=$(previous_sessions "$user" "$database" "$host")
+                delta=$((sessions - previous))
+            else
+                delta=0
+            fi
+            printf -v delta_text '%+d' "$delta"
+            printf '  %b%*s%b' "$COLOR_YELLOW" "$delta_width" "$delta_text" "$COLOR_RESET"
+        fi
+        printf '\n'
     done
+
+    if [[ "$SCREEN_REFRESH_ENABLED" == true ]]; then
+        if [[ -n "$RUNTIME_MESSAGE" ]]; then
+            printf '\n%b%s%b\n' "$COLOR_RED" "$RUNTIME_MESSAGE" "$COLOR_RESET"
+        fi
+        printf '\n%bInteractive options:%b %b[q]%b Quit  %b[m]%b Modify filters  %b[d]%b Toggle diff  %b[l]%b Toggle logging | Diff: %s | Logging: %s\n' \
+            "$COLOR_CYAN" "$COLOR_RESET" \
+            "$COLOR_YELLOW" "$COLOR_RESET" \
+            "$COLOR_YELLOW" "$COLOR_RESET" \
+            "$COLOR_YELLOW" "$COLOR_RESET" \
+            "$COLOR_YELLOW" "$COLOR_RESET" \
+            "$(state_label "$DIFF_ENABLED")" "$(state_label "$LOGGING_ENABLED")"
+    fi
 }
 
 append_log() {
@@ -413,11 +494,121 @@ append_log() {
     COLOR_RESET=$saved_color_reset
 }
 
+toggle_diff() {
+    if [[ "$DIFF_ENABLED" == true ]]; then
+        DIFF_ENABLED=false
+    else
+        DIFF_ENABLED=true
+    fi
+    RUNTIME_MESSAGE=''
+}
+
+toggle_logging() {
+    if [[ "$LOGGING_ENABLED" == true ]]; then
+        LOGGING_ENABLED=false
+        RUNTIME_MESSAGE=''
+        return 0
+    fi
+
+    if [[ -z "$LOG_FILE" ]]; then
+        LOG_FILE="open_sessions_$(date '+%Y%m%d_%H%M%S').log"
+        if ! reserve_runtime_log_file; then
+            LOG_FILE=''
+            RUNTIME_MESSAGE='ERROR: Log file already exists; logging remains OFF.'
+            return 0
+        fi
+    fi
+
+    LOGGING_ENABLED=true
+    RUNTIME_MESSAGE=''
+}
+
+prompt_filters() {
+    local candidate_user candidate_database candidate_host
+
+    printf '\033[?25h'
+    printf '\nModify filters (blank keeps current value)\n'
+    printf 'User [%s]: ' "$(filter_label "$FILTER_USER" '<all>')"
+    IFS= read -r candidate_user || candidate_user=''
+    printf 'Database [%s]: ' "$(filter_label "$FILTER_DATABASE" '<all>')"
+    IFS= read -r candidate_database || candidate_database=''
+    printf 'Host [%s]: ' "$(filter_label "$FILTER_HOST" '<all>')"
+    IFS= read -r candidate_host || candidate_host=''
+    printf '\033[?25l'
+
+    [[ -n "$candidate_user" ]] || candidate_user=$FILTER_USER
+    [[ -n "$candidate_database" ]] || candidate_database=$FILTER_DATABASE
+    [[ -n "$candidate_host" ]] || candidate_host=$FILTER_HOST
+
+    if ! validate_user_filter_value "$candidate_user"; then
+        RUNTIME_MESSAGE='ERROR: --user must not contain empty components. Filters unchanged.'
+        return 0
+    fi
+
+    FILTER_USER=$candidate_user
+    FILTER_DATABASE=$candidate_database
+    FILTER_HOST=$candidate_host
+    RUNTIME_MESSAGE=''
+}
+
+handle_key() {
+    case "${1-}" in
+        q|Q) return 10 ;;
+        m|M) prompt_filters ;;
+        d|D) toggle_diff ;;
+        l|L) toggle_logging ;;
+    esac
+}
+
+restore_terminal() {
+    if [[ "$SCREEN_REFRESH_ENABLED" == true ]]; then
+        printf '\033[?25h'
+    fi
+    if [[ -n "$LOG_FILE" ]]; then
+        exec 3>&- || true
+    fi
+}
+
+run_interactive() {
+    local key=''
+    local key_status
+
+    trap restore_terminal EXIT
+    trap 'exit 130' HUP INT TERM
+    printf '\033[?25l'
+
+    while true; do
+        collect_sample
+        refresh_screen
+        render_frame
+        append_log
+        PREVIOUS_ROWS=("${SAMPLE_ROWS[@]}")
+        PREVIOUS_SAMPLE_AVAILABLE=true
+
+        key=''
+        if IFS= read -rsn 1 -t "$REFRESH_TIME" key; then
+            if handle_key "$key"; then
+                :
+            else
+                key_status=$?
+                if [[ "$key_status" -eq 10 ]]; then
+                    break
+                fi
+                return "$key_status"
+            fi
+        fi
+    done
+}
+
 setup_colors
 parse_arguments "$@"
 setup_colors
 claim_log_file
-collect_sample
-refresh_screen
-render_frame
-append_log
+if [[ "$SCREEN_REFRESH_ENABLED" == true ]]; then
+    run_interactive
+else
+    collect_sample
+    refresh_screen
+    render_frame
+    append_log
+fi

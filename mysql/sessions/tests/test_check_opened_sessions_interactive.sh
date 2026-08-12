@@ -61,17 +61,22 @@ run_case() {
     set -e
 }
 
-run_tty_case() {
-    local name=$1
-    shift
+run_pseudo_tty() {
+    local output_file=$1
+    local input_command=$2
+    shift 2
     local command=''
     local argument
 
     if [[ "$(uname -s)" == Darwin ]]; then
+        for argument in "$SCRIPT" "$@"; do
+            printf -v command '%s%q ' "$command" "$argument"
+        done
+        printf -v command 'cd %q && %s' "$TMP" "$command"
         set +e
-        TERM=xterm script -q "$TMP/$name.out" "$SCRIPT" "$@" \
-            >"$TMP/$name.console" 2>"$TMP/$name.err"
-        STATUS=$?
+        /bin/bash -c "$input_command" | TERM=xterm script -q "$output_file" /bin/bash -c "$command" \
+            >"$output_file.console" 2>"$output_file.err"
+        STATUS=${PIPESTATUS[1]}
         set -e
         return
     fi
@@ -79,11 +84,19 @@ run_tty_case() {
     for argument in "$SCRIPT" "$@"; do
         printf -v command '%s%q ' "$command" "$argument"
     done
+    printf -v command 'cd %q && %s' "$TMP" "$command"
     set +e
-    TERM=xterm script -q -c "$command" "$TMP/$name.out" \
-        >"$TMP/$name.console" 2>"$TMP/$name.err"
-    STATUS=$?
+    /bin/bash -c "$input_command" | TERM=xterm script -q -e -c "$command" "$output_file" \
+        >"$output_file.console" 2>"$output_file.err"
+    STATUS=${PIPESTATUS[1]}
     set -e
+}
+
+run_tty_case() {
+    local name=$1
+    shift
+
+    run_pseudo_tty "$TMP/$name.out" '{ sleep 0.2; printf q; }' "$@"
 }
 
 strip_frame_ansi() {
@@ -196,22 +209,132 @@ assert_not_contains "$TMP/redirected.out" $'\033['
 assert_not_contains "$TMP/redirected.out" $'\033[H\033[2J'
 assert_not_contains "$TMP/redirected.out" 'Interactive options:'
 
+# An initial diff-enabled frame has no prior sample and must not invent increases.
+run_case initial_diff --login-path reporting --diff --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/initial_diff.out" 'Delta'
+assert_contains "$TMP/initial_diff.out" '+0'
+assert_not_contains "$TMP/initial_diff.out" '+3'
+
 # A usable pseudo-TTY clears the frame. --no-color keeps refresh but removes styling.
 run_tty_case tty_color --login-path reporting --mysql-bin "$FAKE"
 assert_status 0
 assert_contains "$TMP/tty_color.out" $'\033[H\033[2J'
 assert_contains "$TMP/tty_color.out" $'\033[0;36m'
+assert_contains "$TMP/tty_color.out" 'Interactive options:'
+assert_contains "$TMP/tty_color.out" $'\033[0;33m[q]\033[0m'
+assert_contains "$TMP/tty_color.out" $'\033[?25l'
+assert_contains "$TMP/tty_color.out" $'\033[?25h'
 
 run_tty_case tty_no_color --login-path reporting --mysql-bin "$FAKE" --no-color
 assert_status 0
 assert_contains "$TMP/tty_no_color.out" $'\033[H\033[2J'
+assert_contains "$TMP/tty_no_color.out" 'Interactive options:'
 strip_refresh_sequence "$TMP/tty_no_color.out" > "$TMP/tty_no_color.without_refresh"
-assert_not_contains "$TMP/tty_no_color.without_refresh" $'\033'
+LC_ALL=C sed $'s/\033\[?25[hl]//g' "$TMP/tty_no_color.without_refresh" > "$TMP/tty_no_color.without_terminal"
+assert_not_contains "$TMP/tty_no_color.without_terminal" $'\033'
 
 # Removing style bytes from a colored frame must preserve every table column position.
 strip_frame_ansi "$TMP/tty_color.out" > "$TMP/tty_color.plain"
 strip_frame_ansi "$TMP/tty_no_color.out" > "$TMP/tty_no_color.plain"
 cmp -s "$TMP/tty_color.plain" "$TMP/tty_no_color.plain" || fail 'colored and no-color frame layouts differ'
+
+# Runtime controls must remain responsive in a real pseudo-TTY and report state
+# through the compact legend after each toggle.
+run_pseudo_tty "$TMP/runtime_controls.out" \
+    '{ sleep 0.3; printf d; sleep 0.3; printf l; sleep 0.3; printf q; }' \
+    --login-path reporting --refresh-time 1 --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/runtime_controls.out" 'Interactive options:'
+assert_contains "$TMP/runtime_controls.out" '[q]'
+assert_contains "$TMP/runtime_controls.out" '[m]'
+assert_contains "$TMP/runtime_controls.out" 'Diff: ON'
+assert_contains "$TMP/runtime_controls.out" 'Logging: ON'
+assert_contains "$TMP/runtime_controls.out" $'\033[H\033[2J'
+runtime_logs=("$TMP"/open_sessions_*.log)
+[[ -f "${runtime_logs[0]}" ]] || fail 'runtime logging did not create a timestamped log'
+[[ "${#runtime_logs[@]}" -eq 1 ]] || fail 'runtime logging created more than one log file'
+assert_contains "${runtime_logs[0]}" 'Diff: ON'
+assert_not_contains "${runtime_logs[0]}" $'\033'
+
+# Blank prompt values retain filters; accepted values traverse the same safe SQL
+# serializer used by startup options.
+: > "$TMP/sql.log"
+run_pseudo_tty "$TMP/runtime_filters.out" \
+    "{ sleep 0.3; printf 'm\\n\\n\\n'; sleep 0.3; printf 'm'; printf '%s\\n' \"alice,o'connor\"; printf '%s\\n' \"billing'archive\"; printf '%s\\n' 'api%_west\\node'; sleep 0.3; printf q; }" \
+    --login-path reporting --refresh-time 1 --user app --database billing --host api --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/runtime_filters.out" 'Modify filters (blank keeps current value)'
+assert_contains "$TMP/runtime_filters.out" 'Filters: user=app database=billing host=api'
+assert_contains "$TMP/runtime_filters.out" "Filters: user=alice,o'connor database=billing'archive host=api%_west\\node"
+assert_contains "$TMP/sql.log" 'USER IN (CONVERT(0x616c696365 USING utf8mb4), CONVERT(0x6f27636f6e6e6f72 USING utf8mb4))'
+assert_contains "$TMP/sql.log" 'DB = CONVERT(0x62696c6c696e672761726368697665 USING utf8mb4)'
+assert_contains "$TMP/sql.log" 'HOST LIKE CONVERT(0x256170695c255c5f776573745c5c6e6f646525 USING utf8mb4)'
+
+# Invalid interactive filters leave the complete prior filter set active.
+: > "$TMP/sql.log"
+run_pseudo_tty "$TMP/runtime_invalid_filter.out" \
+    "{ sleep 0.3; printf 'm%s\\n%s\\n%s\\n' 'alice,,bob' 'changed_db' 'changed_host'; sleep 0.3; printf q; }" \
+    --login-path reporting --refresh-time 1 --user app --database billing --host api --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/runtime_invalid_filter.out" 'ERROR: --user must not contain empty components. Filters unchanged.'
+assert_contains "$TMP/runtime_invalid_filter.out" 'Filters: user=app database=billing host=api'
+assert_not_contains "$TMP/sql.log" 'CONVERT(0x616c6963652c2c626f62 USING utf8mb4)'
+assert_not_contains "$TMP/sql.log" 'CONVERT(0x6368616e6765645f6462 USING utf8mb4)'
+
+# Delta values must use the immediately prior sample and the full row key.
+DYNAMIC_FAKE="$TMP/dynamic_mysql.sh"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'call=0' \
+    '[[ ! -f "$DYNAMIC_MYSQL_STATE" ]] || read -r call < "$DYNAMIC_MYSQL_STATE"' \
+    'call=$((call + 1))' \
+    'printf "%s\\n" "$call" > "$DYNAMIC_MYSQL_STATE"' \
+    'if [[ "$call" -eq 1 ]]; then' \
+    "    output=\$'ROW\\tapp\\tbilling\\tapi\\t3\\nROW\\tapp\\tbilling\\tworker\\t4\\nTOTAL\\t\\t\\t\\t7'" \
+    'else' \
+    "    output=\$'ROW\\tapp\\tbilling\\tapi\\t5\\nROW\\tapp\\tbilling\\tworker\\t4\\nROW\\tapp\\tbilling\\tnew\\t1\\nTOTAL\\t\\t\\t\\t10'" \
+    'fi' \
+    'FAKE_MYSQL_OUTPUT="$output" exec "$DYNAMIC_MYSQL_BASE" "$@"' > "$DYNAMIC_FAKE"
+chmod +x "$DYNAMIC_FAKE"
+export DYNAMIC_MYSQL_STATE="$TMP/dynamic.state"
+export DYNAMIC_MYSQL_BASE="$FAKE"
+run_pseudo_tty "$TMP/runtime_diff.out" \
+    '{ sleep 0.3; printf d; sleep 0.3; printf q; }' \
+    --login-path reporting --refresh-time 1 --mysql-bin "$DYNAMIC_FAKE"
+assert_status 0
+assert_contains "$TMP/runtime_diff.out" 'Delta'
+assert_contains "$TMP/runtime_diff.out" '+2'
+assert_contains "$TMP/runtime_diff.out" '+1'
+assert_contains "$TMP/runtime_diff.out" '+0'
+unset DYNAMIC_MYSQL_STATE DYNAMIC_MYSQL_BASE
+
+# Runtime timestamp collisions are rejected atomically without replacing content.
+DATE_WRAPPER="$TMP/date"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'if [[ "${1-}" == +%Y%m%d_%H%M%S ]]; then' \
+    "    printf '%s\\n' '20260812_120000'" \
+    'else' \
+    '    /bin/date "$@"' \
+    'fi' > "$DATE_WRAPPER"
+chmod +x "$DATE_WRAPPER"
+printf 'preserve runtime log\n' > "$TMP/open_sessions_20260812_120000.log"
+saved_path=$PATH
+PATH="$TMP:$PATH"
+export PATH
+run_pseudo_tty "$TMP/runtime_log_collision.out" \
+    '{ sleep 0.3; printf l; sleep 0.3; printf q; }' \
+    --login-path reporting --refresh-time 1 --mysql-bin "$FAKE"
+PATH=$saved_path
+export PATH
+assert_status 0
+assert_contains "$TMP/runtime_log_collision.out" 'ERROR: Log file already exists; logging remains OFF.'
+assert_contains "$TMP/runtime_log_collision.out" 'Logging: OFF'
+assert_contains "$TMP/open_sessions_20260812_120000.log" 'preserve runtime log'
+assert_occurrences "$TMP/open_sessions_20260812_120000.log" 'preserve runtime log' 1
 
 # Snapshot logs are plain text and their requested destination is created once.
 run_case new_log --login-path reporting --logging --log-file "$TMP/new-snapshot.log" --mysql-bin "$FAKE"
