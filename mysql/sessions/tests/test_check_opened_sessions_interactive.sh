@@ -5,7 +5,22 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="$ROOT/check_opened_sessions_interactive.sh"
 FAKE="$ROOT/tests/fake_mysql_open_sessions.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/open-sessions-cli-test.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+CLAIM_PID=''
+cleanup() {
+    local exit_status=$?
+
+    set +e
+    if [[ -n "$CLAIM_PID" ]]; then
+        : > "$TMP/claim.release"
+        if kill -0 "$CLAIM_PID" 2>/dev/null; then
+            kill "$CLAIM_PID" 2>/dev/null || true
+        fi
+        wait "$CLAIM_PID" 2>/dev/null || true
+    fi
+    rm -rf "$TMP"
+    return "$exit_status"
+}
+trap cleanup EXIT
 export FAKE_MYSQL_SQL_LOG="$TMP/sql.log"
 
 fail() {
@@ -74,6 +89,10 @@ run_tty_case() {
 strip_frame_ansi() {
     LC_ALL=C sed $'s/\033\\[[0-9;]*m//g' "$1" | tr -d '\r' | \
         sed 's/^Timestamp: .*/Timestamp: <normalized>/'
+}
+
+strip_refresh_sequence() {
+    LC_ALL=C sed $'s/\033\\[H\033\\[2J//g' "$1"
 }
 
 # A monitor without connection credentials must stop before terminal setup.
@@ -186,9 +205,8 @@ assert_contains "$TMP/tty_color.out" $'\033[0;36m'
 run_tty_case tty_no_color --login-path reporting --mysql-bin "$FAKE" --no-color
 assert_status 0
 assert_contains "$TMP/tty_no_color.out" $'\033[H\033[2J'
-assert_not_contains "$TMP/tty_no_color.out" $'\033[0;31m'
-assert_not_contains "$TMP/tty_no_color.out" $'\033[0;33m'
-assert_not_contains "$TMP/tty_no_color.out" $'\033[0;36m'
+strip_refresh_sequence "$TMP/tty_no_color.out" > "$TMP/tty_no_color.without_refresh"
+assert_not_contains "$TMP/tty_no_color.without_refresh" $'\033'
 
 # Removing style bytes from a colored frame must preserve every table column position.
 strip_frame_ansi "$TMP/tty_color.out" > "$TMP/tty_color.plain"
@@ -215,7 +233,7 @@ assert_contains "$TMP/existing.log" 'preserve me'
 # creator cannot claim or overwrite it while the monitor still holds descriptor 3.
 export FAKE_MYSQL_READY_FILE="$TMP/claim.ready"
 export FAKE_MYSQL_RELEASE_FILE="$TMP/claim.release"
-"$SCRIPT" --login-path reporting --log-file "$TMP/claimed.log" --mysql-bin "$FAKE" \
+"$SCRIPT" --login-path reporting --logging --log-file "$TMP/claimed.log" --mysql-bin "$FAKE" \
     >"$TMP/claimed.out" 2>"$TMP/claimed.err" &
 CLAIM_PID=$!
 for _ in $(seq 1 100); do
@@ -234,8 +252,12 @@ set -e
 touch "$FAKE_MYSQL_RELEASE_FILE"
 wait "$CLAIM_PID"
 STATUS=$?
+CLAIM_PID=''
 assert_status 0
-[[ ! -s "$TMP/claimed.log" ]] || fail 'competing creator modified the claimed log path'
+assert_contains "$TMP/claimed.log" 'Open MySQL Sessions'
+assert_contains "$TMP/claimed.log" 'Total matching connections: 3'
+assert_not_contains "$TMP/claimed.log" $'\033'
+assert_not_contains "$TMP/claimed.log" 'competing writer'
 unset FAKE_MYSQL_READY_FILE FAKE_MYSQL_RELEASE_FILE
 unset FAKE_MYSQL_OUTPUT
 
