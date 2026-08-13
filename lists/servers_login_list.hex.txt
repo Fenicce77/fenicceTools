@@ -28,3 +28,5 @@ root-pepeta-ke-primary
 root-pepeta-ke-replica
 root-pepeta-ke-virtual
 root-pepeta-sysops
+root-zm-primary
+root-zm-virtual
