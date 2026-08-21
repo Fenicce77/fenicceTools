@@ -28,6 +28,10 @@ case "${FAKE_MYSQL_BP_RESIZE_MODE:-active}" in
         printf '%s\n' 'resize status query failed' >&2
         exit 1
         ;;
+    query-failure-7)
+        printf '%s\n' 'resize status query failed with client status 7' >&2
+        exit 7
+        ;;
     *)
         printf 'unsupported fake resize mode: %s\n' "${FAKE_MYSQL_BP_RESIZE_MODE}" >&2
         exit 2

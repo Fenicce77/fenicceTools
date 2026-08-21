@@ -11,6 +11,9 @@ RESIZE_TEXT=''
 RESIZE_CODE=''
 RESIZE_PROGRESS=''
 TARGET_BYTES=''
+COLLECTOR_DIAGNOSTIC=''
+COLLECTOR_EXIT=0
+COLLECTOR_FATAL_RESULT=10
 COLOR_OPTION_GREEN=''
 COLOR_OPTION_RED=''
 
@@ -53,6 +56,12 @@ ${COLOR_CYAN}Options:${COLOR_RESET}
   --no-color              Disable ANSI color output.
   -h, --help              Show this help and exit.
 
+${COLOR_CYAN}Runtime keys:${COLOR_RESET}
+  q, Q                    Quit an active interactive monitor.
+
+${COLOR_CYAN}Progress semantics:${COLOR_RESET}
+  Stage progress is for the current stage, not overall resize completion.
+
 ${COLOR_CYAN}Examples:${COLOR_RESET}
   $SCRIPT_NAME -l monitor
   $SCRIPT_NAME -l monitor -i 10 --mysql-bin /usr/local/bin/mysql
@@ -65,31 +74,53 @@ cli_error() {
     exit 2
 }
 
-parse_arguments() {
-    local argument
-
-    for argument in "$@"; do
-        if [[ "$argument" == '--no-color' ]]; then
-            NO_COLOR=1
-            break
-        fi
+no_color_requested() {
+    while (($#)); do
+        case "$1" in
+            -l|--login-path|-i|--interval|--mysql-bin)
+                if (($# >= 2)); then
+                    shift 2
+                else
+                    shift
+                fi
+                ;;
+            --no-color)
+                return 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
     done
+    return 1
+}
+
+require_value() {
+    local option=$1 argument_count=$2 value=${3-}
+
+    if ((argument_count < 2)) || [[ -z "$value" || "$value" == -* ]]; then
+        cli_error "$option requires a value."
+    fi
+}
+
+parse_arguments() {
+    no_color_requested "$@" && NO_COLOR=1
     setup_terminal
 
     while (($#)); do
         case "$1" in
             -l|--login-path)
-                (($# >= 2)) || cli_error '--login-path requires a value.'
+                require_value '--login-path' "$#" "${2-}"
                 LOGIN_PATH=$2
                 shift 2
                 ;;
             -i|--interval)
-                (($# >= 2)) || cli_error '--interval requires a value.'
+                require_value '--interval' "$#" "${2-}"
                 INTERVAL=$2
                 shift 2
                 ;;
             --mysql-bin)
-                (($# >= 2)) || cli_error '--mysql-bin requires a value.'
+                require_value '--mysql-bin' "$#" "${2-}"
                 MYSQL_BIN=$2
                 shift 2
                 ;;
@@ -116,7 +147,7 @@ parse_arguments() {
 }
 
 collect_resize_state() {
-    RESIZE_STATE=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --raw --skip-column-names -e "SELECT
+    if RESIZE_STATE=$("$MYSQL_BIN" --login-path="$LOGIN_PATH" --batch --raw --skip-column-names -e "SELECT
     MAX(CASE WHEN VARIABLE_NAME = 'Innodb_buffer_pool_resize_status' THEN VARIABLE_VALUE END),
     MAX(CASE WHEN VARIABLE_NAME = 'Innodb_buffer_pool_resize_status_code' THEN VARIABLE_VALUE END),
     MAX(CASE WHEN VARIABLE_NAME = 'Innodb_buffer_pool_resize_status_progress' THEN VARIABLE_VALUE END),
@@ -126,7 +157,14 @@ WHERE VARIABLE_NAME IN (
     'Innodb_buffer_pool_resize_status',
     'Innodb_buffer_pool_resize_status_code',
     'Innodb_buffer_pool_resize_status_progress'
-);")
+);" 2>&1); then
+        return 0
+    else
+        COLLECTOR_EXIT=$?
+        COLLECTOR_DIAGNOSTIC=$RESIZE_STATE
+        RESIZE_STATE=''
+        return "$COLLECTOR_FATAL_RESULT"
+    fi
 }
 
 parse_resize_state() {
@@ -220,15 +258,21 @@ progress_bar() {
     printf '[%s%s] %s%%\n' "$filled" "$empty" "$percent"
 }
 
+frame_timestamp() {
+    date '+%Y-%m-%d %H:%M:%S %Z'
+}
+
 render_frame() {
-    local label color progress target
+    local label color progress target timestamp
 
     label=$(stage_label)
     color=$(stage_color)
     progress=$(stage_progress)
     target=$(format_target_size "$TARGET_BYTES")
+    timestamp=$(frame_timestamp)
 
     printf '%s\n' 'InnoDB Buffer Pool Resize Monitor'
+    printf 'Timestamp: %s\n' "$timestamp"
     printf 'Login path: %s\n' "$LOGIN_PATH"
     printf 'Target buffer pool size: %s\n' "$target"
     printf 'Refresh interval: %s seconds\n' "$INTERVAL"
@@ -243,8 +287,29 @@ render_frame() {
     printf 'Server status: %s\n' "$RESIZE_TEXT"
 }
 
+render_collector_error_frame() {
+    local timestamp
+
+    timestamp=$(frame_timestamp)
+    printf '%s\n' 'InnoDB Buffer Pool Resize Monitor'
+    printf 'Timestamp: %s\n' "$timestamp"
+    printf 'Login path: %s\n' "$LOGIN_PATH"
+    printf 'Refresh interval: %s seconds\n' "$INTERVAL"
+    printf '%sERROR: Unable to collect resize status (mysql exit %s).%s\n' \
+        "$COLOR_RED" "$COLLECTOR_EXIT" "$COLOR_RESET"
+    printf 'Diagnostic: %s\n' "${COLLECTOR_DIAGNOSTIC:-No diagnostic output.}"
+}
+
 run_sample() {
-    collect_resize_state || return $?
+    local result
+
+    if collect_resize_state; then
+        :
+    else
+        result=$?
+        render_collector_error_frame
+        return "$result"
+    fi
     parse_resize_state
     render_frame
 
@@ -286,6 +351,7 @@ monitor_loop() {
         case "$result" in
             0) return 0 ;;
             7) return 7 ;;
+            "$COLLECTOR_FATAL_RESULT") return "$COLLECTOR_FATAL_RESULT" ;;
         esac
 
         render_interactive_options
