@@ -7,6 +7,10 @@ INTERVAL=5
 MYSQL_BIN=''
 NO_COLOR=0
 RESIZE_STATE=''
+RESIZE_TEXT=''
+RESIZE_CODE=''
+RESIZE_PROGRESS=''
+TARGET_BYTES=''
 
 setup_terminal() {
     if [[ "$NO_COLOR" -eq 1 ]]; then
@@ -26,22 +30,22 @@ setup_terminal() {
 
 show_help() {
     cat <<EOF
-${COLOR_CYAN}Usage:${COLOR_RESET} $SCRIPT_NAME --login-path NAME [OPTIONS]
+${COLOR_CYAN}Usage:${COLOR_RESET} $SCRIPT_NAME -l NAME [OPTIONS]
 
 Monitor the read-only InnoDB buffer pool resize status variables.
 
 ${COLOR_CYAN}Required:${COLOR_RESET}
-  --login-path NAME       mysql_config_editor login path to use.
+  -l, --login-path NAME   mysql_config_editor login path to use.
 
 ${COLOR_CYAN}Options:${COLOR_RESET}
-  --interval SECONDS      Sampling interval; positive integer (default: 5).
+  -i, --interval SECONDS  Sampling interval; positive integer (default: 5).
   --mysql-bin PATH        Path to a regular executable mysql client.
   --no-color              Disable ANSI color output.
   -h, --help              Show this help and exit.
 
 ${COLOR_CYAN}Examples:${COLOR_RESET}
-  $SCRIPT_NAME --login-path monitor
-  $SCRIPT_NAME --login-path monitor --interval 10 --mysql-bin /usr/local/bin/mysql
+  $SCRIPT_NAME -l monitor
+  $SCRIPT_NAME -l monitor -i 10 --mysql-bin /usr/local/bin/mysql
 EOF
 }
 
@@ -64,12 +68,12 @@ parse_arguments() {
 
     while (($#)); do
         case "$1" in
-            --login-path)
+            -l|--login-path)
                 (($# >= 2)) || cli_error '--login-path requires a value.'
                 LOGIN_PATH=$2
                 shift 2
                 ;;
-            --interval)
+            -i|--interval)
                 (($# >= 2)) || cli_error '--interval requires a value.'
                 INTERVAL=$2
                 shift 2
@@ -115,10 +119,135 @@ WHERE VARIABLE_NAME IN (
 );")
 }
 
+parse_resize_state() {
+    local remaining=$RESIZE_STATE
+
+    RESIZE_TEXT=${remaining%%$'\t'*}
+    remaining=${remaining#*$'\t'}
+    RESIZE_CODE=${remaining%%$'\t'*}
+    remaining=${remaining#*$'\t'}
+    RESIZE_PROGRESS=${remaining%%$'\t'*}
+    TARGET_BYTES=${remaining#*$'\t'}
+}
+
+stage_name() {
+    case "$1" in
+        2) printf '%s\n' 'Disabling AHI' ;;
+        3) printf '%s\n' 'Withdrawing blocks' ;;
+        4) printf '%s\n' 'Acquiring global lock' ;;
+        5) printf '%s\n' 'Resizing pool' ;;
+        6) printf '%s\n' 'Resizing hash' ;;
+        *) return 1 ;;
+    esac
+}
+
+stage_label() {
+    case "$RESIZE_CODE" in
+        0) printf '%s\n' 'No resize in progress' ;;
+        1) printf '%s\n' 'Starting resize' ;;
+        2|3|4|5|6) stage_name "$RESIZE_CODE" ;;
+        7) printf '%s\n' 'Resize failed' ;;
+        *) printf '%s\n' 'Numeric resize status unavailable' ;;
+    esac
+}
+
+stage_color() {
+    case "$RESIZE_CODE" in
+        0) printf '%s' "$COLOR_GREEN" ;;
+        1) printf '%s' "$COLOR_CYAN" ;;
+        2|3|4|5|6) printf '%s' "$COLOR_YELLOW" ;;
+        7|*) printf '%s' "$COLOR_RED" ;;
+    esac
+}
+
+format_target_size() {
+    [[ "$1" =~ ^[0-9]+$ ]] || {
+        printf '%s\n' 'N/A'
+        return
+    }
+
+    awk -v bytes="$1" '
+        BEGIN {
+            split("B KiB MiB GiB TiB", units, " ")
+            value = bytes
+            unit = 1
+            while (value >= 1024 && unit < 5) {
+                value /= 1024
+                unit++
+            }
+            if (unit == 1) {
+                printf "%.0f %s\n", value, units[unit]
+            } else {
+                printf "%.2f %s\n", value, units[unit]
+            }
+        }
+    '
+}
+
+stage_progress() {
+    if [[ ! "$RESIZE_CODE" =~ ^[0-7]$ || ! "$RESIZE_PROGRESS" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' 'N/A'
+        return
+    fi
+
+    if ((RESIZE_PROGRESS > 100)); then
+        printf '%s\n' '100'
+    else
+        printf '%s\n' "$RESIZE_PROGRESS"
+    fi
+}
+
+progress_bar() {
+    local percent=$1
+    local filled_cells empty_cells filled empty
+
+    filled_cells=$((percent * 16 / 100))
+    empty_cells=$((16 - filled_cells))
+    printf -v filled '%*s' "$filled_cells" ''
+    printf -v empty '%*s' "$empty_cells" ''
+    filled=${filled// /#}
+    empty=${empty// /-}
+    printf '[%s%s] %s%%\n' "$filled" "$empty" "$percent"
+}
+
+render_frame() {
+    local label color progress target
+
+    label=$(stage_label)
+    color=$(stage_color)
+    progress=$(stage_progress)
+    target=$(format_target_size "$TARGET_BYTES")
+
+    printf '%s\n' 'InnoDB Buffer Pool Resize Monitor'
+    printf 'Login path: %s\n' "$LOGIN_PATH"
+    printf 'Target buffer pool size: %s\n' "$target"
+    printf 'Refresh interval: %s seconds\n' "$INTERVAL"
+    printf '%sStage: %s (%s)%s\n' "$color" "$label" "${RESIZE_CODE:-N/A}" "$COLOR_RESET"
+    if [[ "$progress" == 'N/A' ]]; then
+        printf 'Stage progress: %s\n' "$progress"
+        printf '%s\n' 'Numeric resize status is unavailable'
+    else
+        printf 'Stage progress: %s%%\n' "$progress"
+        progress_bar "$progress"
+    fi
+    printf 'Server status: %s\n' "$RESIZE_TEXT"
+}
+
+run_sample() {
+    collect_resize_state
+    parse_resize_state
+    render_frame
+
+    case "$RESIZE_CODE" in
+        0) return 0 ;;
+        7) return 7 ;;
+        *) return 1 ;;
+    esac
+}
+
 main() {
     parse_arguments "$@"
-    collect_resize_state
-    printf '%s\n' "$RESIZE_STATE"
+    run_sample
 }
 
 main "$@"

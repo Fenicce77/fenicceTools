@@ -47,6 +47,7 @@ assert_contains "$TMP/help.out" '--mysql-bin PATH' 'help did not describe mysql 
 assert_no_ansi "$TMP/help.out" 'no-color help contains ANSI sequences'
 
 : > "$TMP/sql.log"
+export FAKE_MYSQL_BP_RESIZE_LOG="$TMP/sql.log"
 FAKE_MYSQL_BP_RESIZE_LOG="$TMP/sql.log" "$SCRIPT" --login-path monitor --no-color --mysql-bin "$FAKE" >"$TMP/sample.out"
 status_variables=$(grep -oE 'Innodb_buffer_pool_[[:alnum:]_]+' "$TMP/sql.log" | LC_ALL=C sort -u)
 assert_equals "$status_variables" $'Innodb_buffer_pool_resize_status\nInnodb_buffer_pool_resize_status_code\nInnodb_buffer_pool_resize_status_progress' 'unexpected resize status variable inventory'
@@ -65,6 +66,27 @@ assert_not_contains <(printf '%s\n' "$normalized_sql") ' UNION ' 'query must not
 target_expressions=$(grep -oF '@@GLOBAL.innodb_buffer_pool_size' "$TMP/sql.log" | wc -l | tr -d '[:space:]')
 assert_equals "$target_expressions" '1' 'buffer pool target expression must occur exactly once'
 assert_not_contains "$TMP/sql.log" 'SET ' 'query mutates server state'
-assert_contains "$TMP/sample.out" $'Resizing\t0\t42\t1073741824' 'collector did not preserve the fake client response'
+assert_contains "$TMP/sample.out" 'Stage: No resize in progress (0)' 'completion stage was not rendered'
+assert_contains "$TMP/sample.out" 'Stage progress: 42%' 'completion stage progress was not rendered'
+assert_contains "$TMP/sample.out" '[######----------] 42%' 'progress bar did not use 16-cell floor arithmetic'
+
+FAKE_MYSQL_BP_RESIZE_MODE=withdrawing run_case withdrawing -l monitor --no-color --mysql-bin "$FAKE"
+assert_status 1
+assert_contains "$TMP/withdrawing.out" 'Stage: Withdrawing blocks (3)' 'withdrawing stage was not rendered'
+assert_contains "$TMP/withdrawing.out" 'Stage progress: 42%' 'withdrawing stage progress was not rendered'
+assert_contains "$TMP/withdrawing.out" '[######----------] 42%' 'withdrawing bar did not use 16-cell floor arithmetic'
+assert_contains "$TMP/withdrawing.out" 'Target buffer pool size: 8.00 GiB' 'target size was not formatted as GiB'
+
+FAKE_MYSQL_BP_RESIZE_MODE=unavailable_numeric run_case unavailable -l monitor --no-color --mysql-bin "$FAKE"
+assert_status 1
+assert_contains "$TMP/unavailable.out" 'Stage progress: N/A' 'unavailable numeric progress was not rendered as N/A'
+assert_contains "$TMP/unavailable.out" 'Numeric resize status is unavailable' 'unavailable numeric compatibility note was not rendered'
+
+FAKE_MYSQL_BP_RESIZE_MODE=failed run_case failed -l monitor --no-color --mysql-bin "$FAKE"
+assert_status 7
+assert_contains "$TMP/failed.out" 'Stage: Resize failed (7)' 'failure stage was not rendered'
+
+FAKE_MYSQL_BP_RESIZE_MODE=withdrawing FAKE_MYSQL_BP_RESIZE_LOG="$TMP/sql.log" "$SCRIPT" -l monitor --mysql-bin "$FAKE" >"$TMP/color.out" 2>"$TMP/color.err" || STATUS=$?
+assert_contains "$TMP/color.out" $'\033[1;33mStage: Withdrawing blocks (3)' 'withdrawing stage did not use yellow output'
 
 printf 'PASS: %s assertions\n' "$TEST_COUNT"
