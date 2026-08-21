@@ -28,6 +28,7 @@ run_case() {
 
 run_pseudo_tty() {
     local output_file=$1 input_command=$2 command='' argument
+    local pseudo_tty_term=${PSEUDO_TTY_TERM:-xterm}
     shift 2
 
     for argument in "$SCRIPT" "$@"; do
@@ -37,12 +38,12 @@ run_pseudo_tty() {
     set +e
     case "$(uname -s)" in
         Darwin)
-            /bin/bash -c "$input_command" | TERM=xterm script -q /dev/null /bin/bash -c "$command" \
+            /bin/bash -c "$input_command" | TERM="$pseudo_tty_term" script -q /dev/null /bin/bash -c "$command" \
                 >"$output_file" 2>&1
             STATUS=${PIPESTATUS[1]}
             ;;
         Linux)
-            /bin/bash -c "$input_command" | TERM=xterm script -q -e -c "$command" /dev/null \
+            /bin/bash -c "$input_command" | TERM="$pseudo_tty_term" script -q -e -c "$command" /dev/null \
                 >"$output_file" 2>&1
             STATUS=${PIPESTATUS[1]}
             ;;
@@ -133,6 +134,13 @@ assert_no_ansi "$TMP/dumb_terminal.out" 'TERM=dumb sample contains ANSI sequence
 assert_not_contains "$TMP/dumb_terminal.out" 'Interactive options:' 'TERM=dumb sample contains interactive legend'
 assert_occurrences "$TMP/dumb_terminal.out" 'InnoDB Buffer Pool Resize Monitor' 1 'TERM=dumb active state rendered more than once'
 
+PSEUDO_TTY_TERM=dumb FAKE_MYSQL_BP_RESIZE_MODE=withdrawing run_pseudo_tty \
+    "$TMP/tty-dumb.out" '{ sleep 1; printf q; }' -l monitor --interval 1 --mysql-bin "$FAKE"
+assert_status 1
+assert_no_ansi "$TMP/tty-dumb.out" 'TERM=dumb pseudo-TTY sample contains ANSI sequences'
+assert_not_contains "$TMP/tty-dumb.out" 'Interactive options:' 'TERM=dumb pseudo-TTY sample contains interactive legend'
+assert_occurrences "$TMP/tty-dumb.out" 'InnoDB Buffer Pool Resize Monitor' 1 'TERM=dumb pseudo-TTY active state rendered more than once'
+
 FAKE_MYSQL_BP_RESIZE_MODE=withdrawing run_pseudo_tty "$TMP/tty.out" '{ sleep 2; printf q; }' \
     --login-path monitor --interval 1 --mysql-bin "$FAKE"
 assert_status 0
@@ -150,6 +158,15 @@ assert_contains "$TMP/tty-no-color.out" $'\033[H\033[2J' 'no-color TTY output do
 assert_contains "$TMP/tty-no-color.out" 'Interactive options: [q] Quit' 'no-color TTY output is missing the interactive legend'
 remove_refresh_sequences "$TMP/tty-no-color.out" >"$TMP/tty-no-color.plain"
 assert_no_ansi "$TMP/tty-no-color.plain" 'no-color TTY output contains ANSI styling'
+
+FAKE_MYSQL_BP_RESIZE_MODE=unavailable_numeric run_pseudo_tty "$TMP/tty-unavailable.out" \
+    '{ sleep 2; printf q; }' --login-path monitor --interval 1 --mysql-bin "$FAKE"
+assert_status 0
+assert_contains "$TMP/tty-unavailable.out" $'\033[H\033[2J' 'unavailable numeric TTY output does not refresh the screen'
+remove_ansi_styles "$TMP/tty-unavailable.out" >"$TMP/tty-unavailable.plain"
+assert_contains "$TMP/tty-unavailable.plain" 'Interactive options: [q] Quit' 'unavailable numeric TTY output is missing the interactive legend'
+assert_contains "$TMP/tty-unavailable.plain" 'Stage progress: N/A' 'unavailable numeric TTY output did not render N/A progress'
+assert_at_least_occurrences "$TMP/tty-unavailable.out" 'InnoDB Buffer Pool Resize Monitor' 2 'unavailable numeric result-1 state did not poll'
 
 FAKE_MYSQL_BP_RESIZE_MODE=complete run_pseudo_tty "$TMP/tty-complete.out" ':' \
     --login-path monitor --interval 1 --mysql-bin "$FAKE"
