@@ -51,8 +51,16 @@ FAKE_MYSQL_BP_RESIZE_LOG="$TMP/sql.log" "$SCRIPT" --login-path monitor --no-colo
 status_variables=$(grep -oE 'Innodb_buffer_pool_[[:alnum:]_]+' "$TMP/sql.log" | LC_ALL=C sort -u)
 assert_equals "$status_variables" $'Innodb_buffer_pool_resize_status\nInnodb_buffer_pool_resize_status_code\nInnodb_buffer_pool_resize_status_progress' 'unexpected resize status variable inventory'
 
-query_sources=$(grep -oE 'FROM[[:space:]]+[^[:space:];]+' "$TMP/sql.log" | LC_ALL=C sort -u)
-assert_equals "$query_sources" 'FROM performance_schema.global_status' 'unexpected query source inventory'
+normalized_sql=$(tr '\n\t' '  ' < "$TMP/sql.log" | tr -s ' ' | tr '[:lower:]' '[:upper:]')
+assert_contains <(printf '%s\n' "$normalized_sql") 'FROM PERFORMANCE_SCHEMA.GLOBAL_STATUS WHERE' 'source must be followed immediately by WHERE'
+from_keyword_count=$(printf '%s\n' "$normalized_sql" | grep -oF 'FROM ' | wc -l | tr -d '[:space:]')
+assert_equals "$from_keyword_count" '1' 'query must contain exactly one FROM source keyword'
+from_clause=${normalized_sql#* FROM }
+from_clause=${from_clause%% WHERE *}
+assert_equals "$from_clause" 'PERFORMANCE_SCHEMA.GLOBAL_STATUS' 'unexpected FROM clause inventory'
+assert_not_contains <(printf '%s\n' "$normalized_sql") ' JOIN ' 'query must not join another source'
+assert_not_contains <(printf '%s\n' "$from_clause") ',' 'FROM clause must not use comma sources'
+assert_not_contains <(printf '%s\n' "$normalized_sql") ' UNION ' 'query must not combine another source'
 
 target_expressions=$(grep -oF '@@GLOBAL.innodb_buffer_pool_size' "$TMP/sql.log" | wc -l | tr -d '[:space:]')
 assert_equals "$target_expressions" '1' 'buffer pool target expression must occur exactly once'
