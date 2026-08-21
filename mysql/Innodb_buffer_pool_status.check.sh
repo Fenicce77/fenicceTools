@@ -11,20 +11,30 @@ RESIZE_TEXT=''
 RESIZE_CODE=''
 RESIZE_PROGRESS=''
 TARGET_BYTES=''
+COLOR_OPTION_GREEN=''
+COLOR_OPTION_RED=''
+
+is_interactive_terminal() {
+    [[ -t 0 && -t 1 && -n "${TERM:-}" && "${TERM:-}" != 'dumb' ]]
+}
 
 setup_terminal() {
-    if [[ "$NO_COLOR" -eq 1 ]]; then
+    if [[ "$NO_COLOR" -eq 1 ]] || ! is_interactive_terminal; then
         COLOR_RED=''
         COLOR_GREEN=''
         COLOR_YELLOW=''
         COLOR_CYAN=''
         COLOR_RESET=''
+        COLOR_OPTION_GREEN=''
+        COLOR_OPTION_RED=''
     else
         COLOR_RED=$'\033[1;31m'
         COLOR_GREEN=$'\033[1;32m'
         COLOR_YELLOW=$'\033[1;33m'
         COLOR_CYAN=$'\033[1;36m'
         COLOR_RESET=$'\033[0m'
+        COLOR_OPTION_GREEN=$'\033[32m'
+        COLOR_OPTION_RED=$'\033[31m'
     fi
 }
 
@@ -234,7 +244,7 @@ render_frame() {
 }
 
 run_sample() {
-    collect_resize_state
+    collect_resize_state || return $?
     parse_resize_state
     render_frame
 
@@ -245,9 +255,49 @@ run_sample() {
     esac
 }
 
+refresh_screen() {
+    is_interactive_terminal && printf '\033[H\033[2J'
+}
+
+render_interactive_options() {
+    printf '\nInteractive options: [%sq%s] %sQuit%s\n' \
+        "$COLOR_OPTION_GREEN" "$COLOR_RESET" "$COLOR_OPTION_RED" "$COLOR_RESET"
+}
+
+monitor_loop() {
+    local result key
+
+    if ! is_interactive_terminal; then
+        if run_sample; then
+            return 0
+        else
+            return $?
+        fi
+    fi
+
+    while true; do
+        refresh_screen
+        if run_sample; then
+            result=0
+        else
+            result=$?
+        fi
+
+        case "$result" in
+            0) return 0 ;;
+            7) return 7 ;;
+        esac
+
+        render_interactive_options
+        key=''
+        read -r -s -n 1 -t "$INTERVAL" key || true
+        [[ "$key" =~ ^[qQ]$ ]] && return 0
+    done
+}
+
 main() {
     parse_arguments "$@"
-    run_sample
+    monitor_loop
 }
 
 main "$@"
