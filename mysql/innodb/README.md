@@ -82,6 +82,115 @@ Inspect a configured remote instance without storing the result:
   ke-primary --display --no-color
 ```
 
+### Automate capture on Linux
+
+The sampler is a long-running foreground process. Use one service or one cron
+entry per instance; do not schedule it every five minutes because its internal
+loop already controls the capture interval and rejects concurrent execution.
+
+#### Recommended: systemd service
+
+`systemd` is suitable for Debian, Ubuntu, RHEL, Rocky Linux, AlmaLinux,
+Amazon Linux, and SUSE. Install the script and its `.conf` directory in a
+stable, readable location first. The service account must be able to read the
+instance client option file and create the configured sample directory.
+
+Create an environment file, for example
+`/etc/innodb-engine-status-sampler/ke-primary.env`:
+
+```ini
+INSTANCE_NAME=ke-primary
+SAMPLE_BASE_DIR=/srv/innodb/samples
+INTERVAL=5
+MYSQL_BIN=/usr/bin/mysql
+```
+
+Create `/etc/systemd/system/innodb-engine-status-sampler@.service`:
+
+```ini
+[Unit]
+Description=InnoDB Engine Status Sampler for %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=innodb-monitor
+Group=innodb-monitor
+EnvironmentFile=/etc/innodb-engine-status-sampler/%i.env
+ExecStart=/usr/local/sbin/innodb_engine_status.sampler.sh ${INSTANCE_NAME} --interval ${INTERVAL} --sample-base-dir ${SAMPLE_BASE_DIR} --mysql-bin ${MYSQL_BIN} --no-color
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The example expects the sampler at
+`/usr/local/sbin/innodb_engine_status.sampler.sh` and its instance configuration
+at `/usr/local/sbin/.conf/ke-primary.cnf`. Adjust the paths consistently if the
+repository is installed elsewhere.
+
+Create the service account and sample directory, then enable the instance:
+
+```bash
+sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin innodb-monitor
+sudo install -d -o innodb-monitor -g innodb-monitor /srv/innodb/samples
+sudo install -d -m 0750 /etc/innodb-engine-status-sampler
+sudo systemctl daemon-reload
+sudo systemctl enable --now innodb-engine-status-sampler@ke-primary.service
+sudo systemctl status innodb-engine-status-sampler@ke-primary.service
+sudo journalctl -u innodb-engine-status-sampler@ke-primary.service -f
+```
+
+On distributions where `useradd` is not available, create the equivalent
+non-login system account using the local account-management tool. Keep client
+option files restrictive because they can contain authentication material:
+
+```bash
+sudo chown innodb-monitor:innodb-monitor /usr/local/sbin/.conf/ke-primary.cnf
+sudo chmod 0600 /usr/local/sbin/.conf/ke-primary.cnf
+```
+
+For another instance, add its `.env` file and matching `.conf` file, then
+enable `innodb-engine-status-sampler@<instance>.service`.
+
+#### Alternative: crond
+
+Use `@reboot` with `crond` when a service unit cannot be installed. The cron
+job remains attached to the sampler's foreground loop and starts it once per
+boot. It does not provide `systemd` restart supervision.
+
+Create `/etc/cron.d/innodb-engine-status-sampler`:
+
+```cron
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+@reboot innodb-monitor /usr/local/sbin/innodb_engine_status.sampler.sh ke-primary --interval 5 --sample-base-dir /srv/innodb/samples --mysql-bin /usr/bin/mysql --no-color >>/var/log/innodb-engine-status-sampler/ke-primary.log 2>&1
+```
+
+Prepare the log path and reload or start the distribution's cron daemon:
+
+```bash
+sudo install -d -o innodb-monitor -g innodb-monitor /var/log/innodb-engine-status-sampler
+sudo chmod 0644 /etc/cron.d/innodb-engine-status-sampler
+
+# Debian and Ubuntu
+sudo systemctl enable --now cron.service
+
+# RHEL, Rocky Linux, AlmaLinux, Amazon Linux, and SUSE
+sudo systemctl enable --now crond.service
+```
+
+For a user-owned schedule, use `crontab -u innodb-monitor -e` and omit the
+username column from the `@reboot` line. Confirm the job after a restart with
+`systemctl status cron.service` or `systemctl status crond.service` and inspect
+the dedicated log file.
+
 ## Analyze: `innodb_status_analyzer.sh`
 
 `innodb_status_analyzer.sh` reads timestamped samples and extracts active
