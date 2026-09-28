@@ -357,3 +357,7 @@ and is not supported. The canonical sampler replaces its capture role.
 
 Historical analyzer implementations are preserved byte-for-byte under
 `innodb_analyzer/legacy/`. They are archival material, not supported commands.
+
+Historical sampler implementations are preserved byte-for-byte under
+`innodb_engine_status_sampler/legacy/`. The unversioned sampler in that
+directory is the sole supported capture command.
