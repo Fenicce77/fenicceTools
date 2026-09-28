@@ -122,7 +122,7 @@ else
 fi
 
 if [[ "$REPORT_MODE" == "file" || "$REPORT_MODE" == "both" ]]; then
-    echo -e "${YELLOW}${BOLD}[AVISO] Los detalles de la ejecución se están volcando en el fichero: ${REPORT_FILE}${NC}\n"
+    echo -e "${YELLOW}${BOLD}[WARNING] The execution details are being written to the file: ${REPORT_FILE}${NC}\n"
 fi
 
 out_always() {
