@@ -3,6 +3,8 @@ set -euo pipefail
 
 TEST_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SOURCE_SCRIPT="$TEST_DIR/../innodb_engine_status.sampler.sh"
+INNODB_DIR=$(cd "$TEST_DIR/../.." && pwd)
+LEGACY_DIR="$TEST_DIR/../legacy"
 FAKE_MYSQL="$TEST_DIR/fake_mysql_innodb_sampler.sh"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/innodb-sampler-test.XXXXXX")
 TEST_COUNT=0
@@ -115,6 +117,16 @@ run_tty_help() {
 }
 
 prepare_sampler_copy
+
+# Only the unversioned sampler is supported; prior implementations are archival.
+for legacy_file in innodb_engine_status.sampler.root.sh innodb_engine_status.sampler.v2.sh innodb_engine_status.sampler.nested.v2.sh; do
+    TEST_COUNT=$((TEST_COUNT + 1))
+    [[ -f "$LEGACY_DIR/$legacy_file" ]] || fail "missing archived sampler: $legacy_file"
+done
+for retired_file in "$INNODB_DIR/innodb_engine_status.sampler.root.sh" "$INNODB_DIR/innodb_engine_status.sampler.v2.sh" "$TEST_DIR/innodb_engine_status.sampler.v2.sh"; do
+    TEST_COUNT=$((TEST_COUNT + 1))
+    [[ ! -e "$retired_file" ]] || fail "retired sampler remains active: $retired_file"
+done
 
 # The public help must return without treating --help as an instance name.
 run_case help --help
