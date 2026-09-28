@@ -1,13 +1,26 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# --- COLOR DEFINITIONS ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+set -euo pipefail
+
+initialize_colors() {
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    CYAN=''
+    BOLD=''
+    NC=''
+
+    if [ "$COLOR_ENABLED" = true ] && [ -t 1 ]; then
+        RED=$'\033[0;31m'
+        GREEN=$'\033[0;32m'
+        YELLOW=$'\033[1;33m'
+        BLUE=$'\033[0;34m'
+        CYAN=$'\033[0;36m'
+        BOLD=$'\033[1m'
+        NC=$'\033[0m'
+    fi
+}
 
 # --- CONFIGURATION DEFAULTS ---
 TOP_LIMIT=20
@@ -21,97 +34,116 @@ OUTPUT_DIR=""
 START_DATE=""
 END_DATE=""
 REPORT_MODE="file"
+COLOR_ENABLED=true
+FILES_TO_PROCESS=()
+INPUT_DIRECTORIES=()
+INPUT_PATTERNS=()
+
+error_exit() {
+    printf '%sERROR:%s %s\n\n' "$RED" "$NC" "$1" >&2
+    show_help >&2
+    exit 2
+}
 
 # --- HELP FUNCTION (BLINDADA CON HEREDOC) ---
 show_help() {
-    echo -e "${BOLD}Usage: $0 [OPTIONS]${NC}"
+    printf '%sUsage:%s %s (--dir DIRECTORY | --file FILE [FILE ...] | --pattern PATTERN) [OPTIONS]\n\n' "$BOLD" "$NC" "$(basename "$0")"
     cat << 'EOF'
-Analyzes SHOW ENGINE INNODB STATUS logs to extract Deadlocks, persistent Locks, Users, IPs, Thread IDs, and Trx IDs.
-Files MUST strictly follow the naming convention: YYYYMMDD_HH.sample
+Analyze SHOW ENGINE INNODB STATUS samples for deadlocks and persistent locks.
+Input sample names must strictly follow: YYYYMMDD_HH.sample
 
 Options:
-  -d, --dir <directory>      Processes all files within the specified directory.
-  -f, --file <file...>       Processes one or multiple explicitly provided files.
-  -p, --pattern <pattern>    Processes files using a wildcard pattern.
-  -s, --start <date>         Process files from this date. Format: 'YYYY-MM-DD [HH[:MM[:SS]]]'
-                             If no --end is provided, it processes up to the end of this specific day.
-  -e, --end <date>           Process files up to this date. Format: 'YYYY-MM-DD [HH[:MM[:SS]]]'
-                             If no --start is provided, it processes from the beginning of this specific day.
-  -n, --top <number>         Specifies the number of queries to show in the global summary (Default: 20).
-  -t, --table <names>        Filters the analysis to show queries containing these table names (Comma-separated list).
-  -u, --user <name>          Filters the analysis to show only locks/deadlocks caused by this user.
-  -m, --mode <mode>          Selects the analysis scope: 'all', 'deadlocks', 'locks'.
-  -r, --report-mode <mode>   Detail output destination: 'screen', 'file', or 'both'. (Default: file)
-  -o, --output-dir <dir>     Directory to save generated CSV reports and logs. If unset, saves to current dir.
-  -h, --help                 Displays this help message.
+  -d, --dir DIRECTORY        Analyze valid samples in DIRECTORY.
+  -f, --file FILE [FILE...]  Analyze one or more explicit sample files; repeatable.
+  -p, --pattern PATTERN      Analyze files matched by PATTERN; repeatable.
+  -s, --start DATE           Start at YYYY-MM-DD [HH[:MM[:SS]]].
+  -e, --end DATE             End at YYYY-MM-DD [HH[:MM[:SS]]].
+  -n, --top NUMBER           Maximum global-summary rows (default: 20).
+  -t, --table LIST           Comma-separated table patterns.
+  -u, --user PATTERN         User pattern.
+  -m, --mode MODE            all, deadlocks, or locks (default: all).
+  -r, --report-mode MODE     screen, file, or both (default: file).
+  -o, --output-dir DIR       Destination for reports and CSV files.
+      --no-color             Disable ANSI colors.
+  -h, --help                 Show this help and exit.
+
+Examples:
+  innodb_status_analyzer.sh -d /var/log/mysql/innodb -m all -r both
+  innodb_status_analyzer.sh -f 20260928_10.sample --mode deadlocks --no-color
 EOF
 }
 
-if [[ $# -eq 0 ]]; then
-    show_help
-    exit 1
-fi
-
-# --- ARGUMENT PARSING LOGIC ---
-FILES_TO_PROCESS=()
 DATE_REGEX="^[0-9]{4}-[0-9]{2}-[0-9]{2}( [0-9]{2}(:[0-9]{2}(:[0-9]{2})?)?)?$"
+append_input() { FILES_TO_PROCESS+=("$1"); }
 
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        -d|--dir) shift; if [[ -n "$1" && -d "$1" ]]; then while IFS= read -r -d $'\0' file; do FILES_TO_PROCESS+=("$file"); done < <(find "$1" -maxdepth 1 -type f -print0 | sort -z); shift; else echo -e "${RED}Error: Missing directory for -d.${NC}"; exit 1; fi ;;
-        -f|--file) shift; while [[ "$#" -gt 0 && ! "$1" =~ ^- ]]; do if [[ -f "$1" ]]; then FILES_TO_PROCESS+=("$1"); else echo -e "${YELLOW}Warning: File '$1' does not exist.${NC}"; fi; shift; done ;;
-        -p|--pattern) shift; if [[ -n "$1" && ! "$1" =~ ^- ]]; then for file in $1; do if [[ -f "$file" ]]; then FILES_TO_PROCESS+=("$file"); fi; done; shift; else echo -e "${RED}Error: Missing pattern for -p.${NC}"; exit 1; fi ;;
-        -s|--start) shift; if [[ "$1" =~ $DATE_REGEX ]]; then START_DATE="$1"; shift; else echo -e "${RED}Error: Invalid start date format. Use YYYY-MM-DD [HH[:MM[:SS]]]${NC}"; exit 1; fi ;;
-        -e|--end) shift; if [[ "$1" =~ $DATE_REGEX ]]; then END_DATE="$1"; shift; else echo -e "${RED}Error: Invalid end date format. Use YYYY-MM-DD [HH[:MM[:SS]]]${NC}"; exit 1; fi ;;
-        -n|--top) shift; if [[ -n "$1" && "$1" =~ ^[0-9]+$ ]]; then TOP_LIMIT="$1"; TOP_LIMIT_PROVIDED=true; shift; else echo -e "${RED}Error: -n requires a valid integer.${NC}"; exit 1; fi ;;
-        -t|--table) 
-            shift; 
-            if [[ -n "$1" && ! "$1" =~ ^- ]]; then 
-                TABLE_FILTER="$1"; 
-                # Convierte la lista separada por comas en un patrón regex OR válido para AWK (ej: tabla1|tabla2)
-                AWK_TABLE_PATTERN=$(echo "$TABLE_FILTER" | sed 's/[[:space:]]*,[[:space:]]*/|/g; s/\./\\./g; s/\*/.*/g; s/?/./g' | tr '[:upper:]' '[:lower:]'); 
-                shift; 
-            else 
-                echo -e "${RED}Error: Missing table name(s) for -t.${NC}"; exit 1; 
-            fi ;;
-        -u|--user) shift; if [[ -n "$1" && ! "$1" =~ ^- ]]; then USER_FILTER="$1"; AWK_USER_PATTERN=$(echo "$USER_FILTER" | sed 's/\./\\./g; s/\*/.*/g; s/?/./g' | tr '[:upper:]' '[:lower:]'); shift; else echo -e "${RED}Error: Missing user name for -u.${NC}"; exit 1; fi ;;
-        -m|--mode) shift; if [[ -n "$1" && "$1" =~ ^(all|deadlocks|locks)$ ]]; then ANALYSIS_MODE="$1"; shift; else echo -e "${RED}Error: Mode must be 'all', 'deadlocks', or 'locks'.${NC}"; exit 1; fi ;;
-        -r|--report-mode) shift; if [[ -n "$1" && "$1" =~ ^(screen|file|both)$ ]]; then REPORT_MODE="$1"; shift; else echo -e "${RED}Error: --report-mode must be 'screen', 'file', or 'both'.${NC}"; exit 1; fi ;;
-        -o|--output-dir) shift; if [[ -n "$1" && ! "$1" =~ ^- ]]; then OUTPUT_DIR="$1"; shift; else echo -e "${RED}Error: Missing directory path for -o.${NC}"; exit 1; fi ;;
-        -h|--help) show_help; exit 0 ;;
-        *) echo -e "${RED}Unknown parameter: $1${NC}"; show_help; exit 1 ;;
-    esac
-done
+collect_input_files() {
+    local candidate directory pattern sorted_file filename existing duplicate
+    for directory in "${INPUT_DIRECTORIES[@]}"; do
+        while IFS= read -r -d '' candidate; do append_input "$candidate"; done < <(find "$directory" -maxdepth 1 -type f -print0)
+    done
+    for pattern in "${INPUT_PATTERNS[@]}"; do
+        for candidate in $pattern; do [ -f "$candidate" ] && append_input "$candidate"; done
+    done
+    VALIDATED_FILES=()
+    while IFS= read -r sorted_file; do
+        [ -n "$sorted_file" ] || continue
+        filename=$(basename "$sorted_file")
+        if [[ "$filename" =~ ^[0-9]{8}_[0-9]{2}\.sample$ ]]; then
+            duplicate=false
+            for existing in "${VALIDATED_FILES[@]}"; do
+                [ "$existing" = "$sorted_file" ] && duplicate=true && break
+            done
+            if [ "$duplicate" = false ]; then
+                VALIDATED_FILES+=("$sorted_file")
+            fi
+        else
+            printf '%sWARNING:%s skipped invalid sample name: %s\n' "$YELLOW" "$NC" "$filename" >&2
+        fi
+    done < <(printf '%s\n' "${FILES_TO_PROCESS[@]}" | LC_ALL=C sort)
+    FILES_TO_PROCESS=("${VALIDATED_FILES[@]}")
+}
+
+query_hash() {
+    if command -v md5sum >/dev/null 2>&1; then
+        printf '%s' "$1" | md5sum | cut -c1-12
+    elif command -v md5 >/dev/null 2>&1; then
+        printf '%s' "$1" | md5 -q | cut -c1-12
+    else
+        error_exit 'Neither md5sum nor md5 is available in PATH.'
+    fi
+}
+
+parse_arguments() {
+    [ "$#" -gt 0 ] || error_exit 'An input target is required.'
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -d|--dir) [ "$#" -ge 2 ] && [ -d "$2" ] || error_exit '--dir requires an existing directory.'; INPUT_DIRECTORIES+=("$2"); shift 2 ;;
+            -f|--file) shift; [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ] || error_exit '--file requires at least one file.'; while [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; do [ -f "$1" ] && append_input "$1" || printf '%sWARNING:%s missing file: %s\n' "$YELLOW" "$NC" "$1" >&2; shift; done ;;
+            -p|--pattern) [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ] || error_exit '--pattern requires a pattern.'; INPUT_PATTERNS+=("$2"); shift 2 ;;
+            -s|--start) [ "$#" -ge 2 ] && [[ "$2" =~ $DATE_REGEX ]] || error_exit '--start requires YYYY-MM-DD [HH[:MM[:SS]]].'; START_DATE="$2"; shift 2 ;;
+            -e|--end) [ "$#" -ge 2 ] && [[ "$2" =~ $DATE_REGEX ]] || error_exit '--end requires YYYY-MM-DD [HH[:MM[:SS]]].'; END_DATE="$2"; shift 2 ;;
+            -n|--top) [ "$#" -ge 2 ] && [[ "$2" =~ ^[0-9]+$ ]] || error_exit '--top requires a non-negative integer.'; TOP_LIMIT="$2"; TOP_LIMIT_PROVIDED=true; shift 2 ;;
+            -t|--table) [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ] || error_exit '--table requires a value.'; TABLE_FILTER="$2"; AWK_TABLE_PATTERN=$(printf '%s' "$2" | sed 's/[[:space:]]*,[[:space:]]*/|/g; s/\./\\./g; s/\*/.*/g; s/?/./g' | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+            -u|--user) [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ] || error_exit '--user requires a value.'; USER_FILTER="$2"; AWK_USER_PATTERN=$(printf '%s' "$2" | sed 's/\./\\./g; s/\*/.*/g; s/?/./g' | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+            -m|--mode) [ "$#" -ge 2 ] && [[ "$2" =~ ^(all|deadlocks|locks)$ ]] || error_exit '--mode must be all, deadlocks, or locks.'; ANALYSIS_MODE="$2"; shift 2 ;;
+            -r|--report-mode) [ "$#" -ge 2 ] && [[ "$2" =~ ^(screen|file|both)$ ]] || error_exit '--report-mode must be screen, file, or both.'; REPORT_MODE="$2"; shift 2 ;;
+            -o|--output-dir) [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ] || error_exit '--output-dir requires a directory.'; OUTPUT_DIR="$2"; shift 2 ;;
+            --no-color) COLOR_ENABLED=false; shift ;;
+            -h|--help) show_help; exit 0 ;;
+            *) error_exit "Unknown option: $1" ;;
+        esac
+    done
+    collect_input_files
+    [ "${#FILES_TO_PROCESS[@]}" -gt 0 ] || error_exit 'No valid input samples were selected.'
+}
+
+initialize_colors
+parse_arguments "$@"
 
 # Preparar variables en mayúsculas (Compatible con macOS/Bash 3.2)
 ANALYSIS_MODE_UPPER=$(echo "$ANALYSIS_MODE" | tr '[:lower:]' '[:upper:]')
 REPORT_MODE_UPPER=$(echo "$REPORT_MODE" | tr '[:lower:]' '[:upper:]')
 
-# Deduplicación inicial
-if [[ ${#FILES_TO_PROCESS[@]} -gt 0 ]]; then
-    UNIQUE_FILES=()
-    while IFS= read -r line; do
-        UNIQUE_FILES+=("$line")
-    done < <(printf '%s\n' "${FILES_TO_PROCESS[@]}" | sort -u)
-    FILES_TO_PROCESS=("${UNIQUE_FILES[@]}")
-fi
-
-# --- STRICT FILENAME ENFORCEMENT (YYYYMMDD_HH.sample) ---
-VALIDATED_FILES=()
-for file in "${FILES_TO_PROCESS[@]}"; do
-    filename=$(basename "$file")
-    if [[ "$filename" =~ ^[0-9]{8}_[0-9]{2}\.sample$ ]]; then
-        VALIDATED_FILES+=("$file")
-    else
-        echo -e "${YELLOW}Warning: File '$filename' ignored. Does not match required 'YYYYMMDD_HH.sample' format.${NC}"
-    fi
-done
-FILES_TO_PROCESS=("${VALIDATED_FILES[@]}")
-
-if [[ ${#FILES_TO_PROCESS[@]} -eq 0 ]]; then
-    echo -e "${RED}Error: No valid files found to process after applying the naming convention filter.${NC}"
-    exit 1
-fi
 
 # --- OUTPUT ROUTING LOGIC ---
 if [[ -n "$OUTPUT_DIR" ]]; then
@@ -265,7 +297,7 @@ generate_report_section() {
         ' "$file" | sort -nr > "${file}_agg"
         
         while IFS=$'\t' read -r freq timestamps users_list hosts_list threads_list trxs_list query; do
-            hash=$(printf "%s" "$query" | md5sum | cut -c1-12)
+            hash=$(query_hash "$query")
             echo -e "${RED}---------------------------------------------------------------"
             echo -e "${BOLD}[CRITICAL (DEADLOCK)] HASH: $hash | Events: $freq${NC}${RED}"
             echo -e "Query Template : $query"
@@ -340,7 +372,7 @@ generate_report_section() {
         ' "$file" | sort -nr > "${file}_agg"
         
         while IFS=$'\t' read -r freq range_data users_list hosts_list threads_list trxs_list query; do
-            hash=$(printf "%s" "$query" | md5sum | cut -c1-12)
+            hash=$(query_hash "$query")
             max_dur=$(echo "$range_data" | tr ';' '\n' | cut -d'|' -f1 | sort -nr | head -n 1)
             color="${GREEN}"; severity_label="LOW (< 30s max contention)"
             if (( max_dur >= 60 )); then color="${RED}"; severity_label="HIGH (>= 60s max contention)"
@@ -551,14 +583,14 @@ for current_file in "${FILES_TO_PROCESS[@]}"; do
     if [[ -n "$OUTPUT_DIR" ]]; then
         if [[ "$HAS_DATE_FILTER" == true ]]; then
             while IFS='|' read -r type ts user host thread trx q; do
-                hash=$(printf "%s" "$q" | md5sum | cut -c1-12)
+                hash=$(query_hash "$q")
                 printf "%s,%s,%s,%s,%s,%s,%s\034%s\n" "$type" "$hash" "$ts" "$user" "$host" "$thread" "$trx" "$q"
             done < "$TMP_RAW" >> "$GLOBAL_DETAILS_TMP"
         else
             OUTPUT_CSV="${OUTPUT_DIR}/${FILE_NAME_BASE}.analysis_${ANALYSIS_MODE_UPPER}_${PARAM_STR}.csv"
             echo "Type,Hash,Timestamp,User,Host,ThreadID,TransactionID,QueryTemplate" > "$OUTPUT_CSV"
             while IFS='|' read -r type ts user host thread trx q; do
-                hash=$(printf "%s" "$q" | md5sum | cut -c1-12)
+                hash=$(query_hash "$q")
                 printf "%s,%s,%s,%s,%s,%s,%s\034%s\n" "$type" "$hash" "$ts" "$user" "$host" "$thread" "$trx" "$q"
             done < "$TMP_RAW" | awk -F'\034' '{
                 split($1, meta, ","); hash = meta[2];
@@ -570,7 +602,7 @@ for current_file in "${FILES_TO_PROCESS[@]}"; do
     fi
 
     if [[ "$ANALYSIS_MODE" =~ ^(all|deadlocks)$ ]]; then
-        grep "^DEADLOCK|" "$TMP_RAW" | sort -u > "$TMP_DEADLOCKS"
+        { grep "^DEADLOCK|" "$TMP_RAW" || true; } | sort -u > "$TMP_DEADLOCKS"
         {
             echo -e "\n${RED}${BOLD}### [ DEADLOCKS - $FILE_NAME_BASE ] ###${NC}"
             if [[ -s "$TMP_DEADLOCKS" ]]; then generate_report_section "$TMP_DEADLOCKS" "true"
@@ -579,7 +611,7 @@ for current_file in "${FILES_TO_PROCESS[@]}"; do
     fi
 
     if [[ "$ANALYSIS_MODE" =~ ^(all|locks)$ ]]; then
-        grep "^LOCK|" "$TMP_RAW" | sort -u > "$TMP_LOCKS"
+        { grep "^LOCK|" "$TMP_RAW" || true; } | sort -u > "$TMP_LOCKS"
         {
             echo -e "\n${YELLOW}${BOLD}### [ LOCKS - $FILE_NAME_BASE ] ###${NC}"
             if [[ -s "$TMP_LOCKS" ]]; then generate_report_section "$TMP_LOCKS" "false"
@@ -711,7 +743,7 @@ if [[ ${#FILES_TO_PROCESS[@]} -gt 1 || "$HAS_DATE_FILTER" == true ]]; then
                 echo "----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
 
                 grep "^DATA_DL|" "${GLOBAL_UNIQUE_RAW}_agg" | sort -t'|' -k2 -nr | head -n "$TOP_LIMIT" | while IFS='|' read -r _ occ users_list threads_list trxs_list first_seen last_seen q; do
-                    hash=$(printf "%s" "$q" | md5sum | cut -c1-12)
+                    hash=$(query_hash "$q")
                     row_color="${RED}"
 
                     short_q=$(echo "$q" | cut -c1-50); [[ ${#q} -gt 50 ]] && short_q+="..."
@@ -742,7 +774,7 @@ if [[ ${#FILES_TO_PROCESS[@]} -gt 1 || "$HAS_DATE_FILTER" == true ]]; then
                 echo "----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
 
                 grep "^DATA_LK|" "${GLOBAL_UNIQUE_RAW}_agg" | sort -t'|' -k2 -nr | head -n "$TOP_LIMIT" | while IFS='|' read -r _ t_lock occ users_list threads_list trxs_list first_seen last_seen q; do
-                    hash=$(printf "%s" "$q" | md5sum | cut -c1-12)
+                    hash=$(query_hash "$q")
                     row_color="${NC}"
                     if (( t_lock >= 60 )); then row_color="${YELLOW}"; fi
 
@@ -772,13 +804,13 @@ if [[ ${#FILES_TO_PROCESS[@]} -gt 1 || "$HAS_DATE_FILTER" == true ]]; then
         
         # Añadir bloque de Deadlocks al CSV
         grep "^DATA_DL|" "${GLOBAL_UNIQUE_RAW}_agg" | sort -t'|' -k2 -nr | while IFS='|' read -r _ occ users threads trxs f_seen l_seen q; do
-            hash=$(printf "%s" "$q" | md5sum | cut -c1-12)
+            hash=$(query_hash "$q")
             printf "DEADLOCK,%s,%s,%s,%d,%d,\"%s\",\"%s\",\"%s\",\"%s\"\n" "$hash" "$f_seen" "$l_seen" "$occ" "$occ" "$users" "$threads" "$trxs" "$q"
         done >> "$RECAP_CSV"
         
         # Añadir bloque de Locks al CSV
         grep "^DATA_LK|" "${GLOBAL_UNIQUE_RAW}_agg" | sort -t'|' -k2 -nr | while IFS='|' read -r _ t_lock occ users threads trxs f_seen l_seen q; do
-            hash=$(printf "%s" "$q" | md5sum | cut -c1-12)
+            hash=$(query_hash "$q")
             printf "LOCK,%s,%s,%s,%ds,%d,\"%s\",\"%s\",\"%s\",\"%s\"\n" "$hash" "$f_seen" "$l_seen" "$t_lock" "$occ" "$users" "$threads" "$trxs" "$q"
         done >> "$RECAP_CSV"
         
