@@ -26,8 +26,8 @@ Captures `SHOW ENGINE INNODB STATUS` samples using the canonical instance-name
 configuration contract. It supports scheduled file capture and local display
 mode; run `--help` for usage and examples.
 
-## Historical and maintenance scripts
+## Historical tools
 
-The remaining root-level scripts are retained for compatibility and are pending
-the same standardization review. Do not use them as replacements for the two
-supported tools above without reviewing their individual operational contracts.
+`legacy/innodb_engine_photographer.ptosc.sh` is the historical pt-online-schema-
+change-gated implementation. It is retained unchanged for reference and is not
+a supported command. The canonical sampler replaces its capture responsibilities.
