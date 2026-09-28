@@ -92,6 +92,24 @@ assert_no_escape /tmp/innodb_status_analyzer_test.out
 grep -q '20260928_10.sample' /tmp/innodb_status_analyzer_test.out
 grep -q '20260928_11.sample' /tmp/innodb_status_analyzer_test.out
 grep -q '20260928_12.sample' /tmp/innodb_status_analyzer_test.out
+
+REPORT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/innodb_status_analyzer.XXXXXX")
+trap 'rm -rf "$REPORT_DIR" /tmp/innodb_status_analyzer_test.out' EXIT
+assert_status 0 "$CANONICAL_SCRIPT" --no-color --file \
+    "$SCRIPT_DIR/fixtures/innodb_status_analyzer/20260928_13.sample" \
+    "$SCRIPT_DIR/fixtures/innodb_status_analyzer/20260928_14.sample" \
+    --report-mode both --output-dir "$REPORT_DIR"
+grep -q 'CRITICAL (DEADLOCK)' /tmp/innodb_status_analyzer_test.out
+grep -q 'Occurrences |' /tmp/innodb_status_analyzer_test.out
+if grep -q 'stale_user' /tmp/innodb_status_analyzer_test.out; then
+    printf 'FAIL: stale deadlock was not excluded\n' >&2
+    exit 1
+fi
+assert_file_exists "$REPORT_DIR/innodb_report_ALL.log"
+assert_file_exists "$REPORT_DIR/full_recap_ALL_no_filters.csv"
+grep -q '^Type,Hash,FirstSeen,LastSeen,TotalMetric,Occurrences,Users,Threads,TransactionIDs,QueryTemplate$' "$REPORT_DIR/full_recap_ALL_no_filters.csv"
+assert_no_escape "$REPORT_DIR/innodb_report_ALL.log"
+assert_no_escape "$REPORT_DIR/full_recap_ALL_no_filters.csv"
 before_digest=$(sample_digest "$FIXTURE")
 "$CANONICAL_SCRIPT" --file "$FIXTURE" --report-mode screen >/dev/null
 after_digest=$(sample_digest "$FIXTURE")

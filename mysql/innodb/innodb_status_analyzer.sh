@@ -128,7 +128,7 @@ parse_arguments() {
             -m|--mode) [ "$#" -ge 2 ] && [[ "$2" =~ ^(all|deadlocks|locks)$ ]] || error_exit '--mode must be all, deadlocks, or locks.'; ANALYSIS_MODE="$2"; shift 2 ;;
             -r|--report-mode) [ "$#" -ge 2 ] && [[ "$2" =~ ^(screen|file|both)$ ]] || error_exit '--report-mode must be screen, file, or both.'; REPORT_MODE="$2"; shift 2 ;;
             -o|--output-dir) [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ] || error_exit '--output-dir requires a directory.'; OUTPUT_DIR="$2"; shift 2 ;;
-            --no-color) COLOR_ENABLED=false; shift ;;
+            --no-color) COLOR_ENABLED=false; initialize_colors; shift ;;
             -h|--help) show_help; exit 0 ;;
             *) error_exit "Unknown option: $1" ;;
         esac
