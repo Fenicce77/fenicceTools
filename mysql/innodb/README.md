@@ -191,6 +191,81 @@ username column from the `@reboot` line. Confirm the job after a restart with
 `systemctl status cron.service` or `systemctl status crond.service` and inspect
 the dedicated log file.
 
+## Retain and compress: `compress.sample.files.sh`
+
+`compress.sample.files.sh` manages completed daily sample directories produced
+by the sampler. It is intentionally safe by default: it only prints its plan
+unless `--apply` is supplied. Use the default mode to review every candidate
+before allowing compression or deletion.
+
+### Configuration
+
+The configuration file is line-based and requires all three keys:
+
+```ini
+logdir=/srv/innodb/samples/mysql-primary.example.net_3306
+dailytocompressret=2
+toremovalretention=14
+```
+
+| Key | Meaning |
+|---|---|
+| `logdir` | Existing root that contains daily `YYYYMMDD` sample directories. `/` is rejected. |
+| `dailytocompressret` | Age in full days after which an eligible daily directory can be archived. |
+| `toremovalretention` | Age in full days after which a root-level `.tar.gz` archive can be removed. |
+
+Only immediate child directories whose names match `YYYYMMDD` are considered
+for compression. Only immediate root-level files ending in `.tar.gz` are
+considered for archive retention. Other files and directories are excluded.
+
+### Compression and deletion contract
+
+For each eligible daily directory, the tool creates a temporary archive under
+`logdir`, validates it with `tar -tzf`, atomically places it as
+`YYYYMMDD.tar.gz`, and only then removes the source directory. If the target
+archive already exists, the source is skipped; it is never overwritten.
+
+When archive retention applies, only the matching archive file is removed. The
+tool does not recursively delete arbitrary paths, does not accept `/` as the
+root, and supports paths containing spaces.
+
+### Parameters
+
+| Argument | Description |
+|---|---|
+| `-c`, `--config FILE` | Required readable configuration file. |
+| `--dry-run` | Print planned archive and removal actions without mutating the filesystem. This is the default. |
+| `--apply` | Perform the planned compression and retention actions. |
+| `--no-color` | Disable ANSI colors. |
+| `-h`, `--help` | Print complete help and exit. |
+
+### Operational examples
+
+Review an instance's pending retention actions:
+
+```bash
+./compress.sample.files.sh \
+  --config /etc/innodb/compress-mysql-primary.cnf
+```
+
+Apply exactly the reviewed plan:
+
+```bash
+./compress.sample.files.sh \
+  --config /etc/innodb/compress-mysql-primary.cnf --apply --no-color
+```
+
+Automate it daily only after validating dry-run output in the target layout:
+
+```cron
+15 02 * * * innodb-monitor /usr/local/sbin/compress.sample.files.sh --config /etc/innodb/compress-mysql-primary.cnf --apply --no-color >>/var/log/innodb-sample-retention/mysql-primary.log 2>&1
+```
+
+The scheduled account needs write permission to `logdir` and its parent archive
+location. Ensure the log directory exists and is writable before enabling the
+cron entry. Treat `--apply` as a change-management action: keep dry-run output
+in runbooks or deployment validation before changing retention values.
+
 ## Analyze: `innodb_status_analyzer.sh`
 
 `innodb_status_analyzer.sh` reads timestamped samples and extracts active

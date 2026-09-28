@@ -1,203 +1,81 @@
-#!/usr/bin/bash
-blk=$(tput blink)
-bld=$(tput bold)           	 # Bold
-red=${bld}$(tput setaf 1)    # Red
-grn=${bld}$(tput setaf 2)    # Green
-yel=${bld}$(tput setaf 3)    # Yellow
-blu=${bld}$(tput setaf 4)    # Blue
-mag=${bld}$(tput setaf 5)    # Purple
-cyn=${bld}$(tput setaf 6)    # Cyan
-wht=${bld}$(tput setaf 7)    # White
-off=$(tput sgr0)             # Text reset
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Error input parameters ouput function
-function error_param_msg (){
+PROGRAM=$(basename "$0")
+CONFIG_FILE=''
+APPLY=false
+RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; NC=''
 
-        echo -e " Usage command line : ${0} [config_file]"
-        echo -e " Example            : ${0} /root/scripts/sh/compress.sample.files.cnf"
+init_colors() {
+    if [ -t 1 ] && [ "${TERM:-}" != dumb ]; then
+        RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+        CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; NC=$'\033[0m'
+    fi
 }
 
-# Log message function
-function log_message(){
+help() {
+    printf '%s%s%s\n\n' "$CYAN$BOLD" 'Compress InnoDB status sample directories safely.' "$NC"
+    printf 'Usage: %s --config FILE [--dry-run|--apply] [--no-color]\n\n' "$PROGRAM"
+    cat <<'EOF'
+Options:
+  -c, --config FILE  Configuration with logdir, dailytocompressret, and toremovalretention.
+      --dry-run      Print planned compression and removal actions (default).
+      --apply        Perform the planned actions.
+      --no-color     Disable ANSI colors.
+  -h, --help         Show this help.
 
-        LABEL=$2
-        MESSAGE_HEAD_LINE="[`date +"%Y-%m-%d %H:%M:%S"`]${LABEL}"
+Examples:
+  compress.sample.files.sh --config /etc/innodb/compress.cnf
+  compress.sample.files.sh --config /etc/innodb/compress.cnf --apply
+EOF
+}
 
+fail() { printf '%sERROR:%s %s\n\n' "$RED$BOLD" "$NC" "$1" >&2; help >&2; exit 2; }
+info() { printf '%sINFO:%s %s\n' "$CYAN$BOLD" "$NC" "$1"; }
+plan() { printf '%s%s:%s %s\n' "$YELLOW$BOLD" "$( $APPLY && printf APPLY || printf DRY-RUN )" "$NC" "$1"; }
 
-        case "$3" in
-                'OK' ) MESSAGE_TYPE="${grn}${MESSAGE_HEAD_LINE}[OK]"
-                           MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[OK]"
-                        ;;
-                'INFO' ) MESSAGE_TYPE="${blu}${MESSAGE_HEAD_LINE}[INFO]"
-                           MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[INFO]"
-                        ;;
-                'ERROR' ) MESSAGE_TYPE="${red}${MESSAGE_HEAD_LINE}[ERROR]"
-                                  MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[ERROR]"
-                        ;;
-                'WARNING' ) MESSAGE_TYPE="${yel}${MESSAGE_HEAD_LINE}[WARN]"
-                                        MESSAGE_TYPE_LOG="${MESSAGE_HEAD_LINE}[WARN]"
-                        ;;
-                
-        esac
+read_option() { awk -F= -v key="$1" '$1 ~ "^[[:space:]]*" key "[[:space:]]*$" {v=$2; sub(/^[[:space:]]+/,"",v); sub(/[[:space:]]+$/,"",v); print v; exit}' "$CONFIG_FILE"; }
+is_integer() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
+main() {
+    init_colors
+    while [ "$#" -gt 0 ]; do
         case "$1" in
-                'STANDARD' ) MESSAGE_HEAD="${MESSAGE_TYPE}"
-                        ;;
-                'LOG' ) MESSAGE_HEAD="${MESSAGE_TYPE_LOG}"
-                        ;;
+            -c|--config) [ "$#" -ge 2 ] || fail '--config requires a file.'; CONFIG_FILE=$2; shift 2 ;;
+            --dry-run) APPLY=false; shift ;;
+            --apply) APPLY=true; shift ;;
+            --no-color) RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; NC=''; shift ;;
+            -h|--help) help; exit 0 ;;
+            *) fail "unknown option: $1" ;;
         esac
-        MSG=$4
-
-        #MESSAGE_HEAD="${MESSAGE_TYPE}"
-        echo "${MESSAGE_HEAD} ${MSG} ${off}"
+    done
+    [ -r "$CONFIG_FILE" ] || fail 'a readable --config file is required.'
+    local logdir compress_after remove_after day archive temp
+    logdir=$(read_option logdir); compress_after=$(read_option dailytocompressret); remove_after=$(read_option toremovalretention)
+    [ -n "$logdir" ] && [ -d "$logdir" ] && [ "$logdir" != / ] || fail 'logdir must be an existing directory other than /.'
+    is_integer "$compress_after" || fail 'dailytocompressret must be a non-negative integer.'
+    is_integer "$remove_after" || fail 'toremovalretention must be a non-negative integer.'
+    info "mode: $( $APPLY && printf apply || printf dry-run ); root: $logdir"
+    while IFS= read -r -d '' archive; do
+        plan "remove expired archive: $archive"
+        $APPLY && rm -f -- "$archive"
+    done < <(find "$logdir" -maxdepth 1 -type f -name '*.tar.gz' -mtime "+$remove_after" -print0)
+    while IFS= read -r -d '' day; do
+        [[ "$(basename "$day")" =~ ^[0-9]{8}$ ]] || continue
+        archive="$day.tar.gz"
+        if [ -e "$archive" ]; then
+            printf '%sWARNING:%s archive already exists; skipping source directory: %s\n' "$YELLOW$BOLD" "$NC" "$day" >&2
+            continue
+        fi
+        plan "archive sample directory: $day -> $archive"
+        if $APPLY; then
+            temp=$(mktemp "$logdir/.${PROGRAM}.XXXXXX")
+            tar -czf "$temp" -C "$logdir" "$(basename "$day")"
+            tar -tzf "$temp" >/dev/null
+            mv -- "$temp" "$archive"
+            rm -rf -- "$day"
+        fi
+    done < <(find "$logdir" -mindepth 1 -maxdepth 1 -type d -mtime "+$compress_after" -print0)
+    printf '%sDONE:%s %s\n' "$GREEN$BOLD" "$NC" "$( $APPLY && printf 'changes applied' || printf 'no changes made' )"
 }
-
-# Input parameters check and verification
-if [[ $# -eq 0 ]]; then
-
-        MSG=`log_message "LOG" "[PARAMETERS]" "ERROR" "NO PARAMETERS PROVIDED !!"`
-        echo "${MSG}"
-        error_param_msg
-        ERRORCODE=-10
-        exit ${ERRORCODE}
-fi
-
-CONFFILE=$1
-LOGDIR=`cat ${CONFFILE} | grep 'logdir' | awk -F'=' '{print $2}'`
-DAILYTOCOMPRESSRET=`cat ${CONFFILE} | grep 'dailytocompressret' | awk -F'=' '{print $2}'`
-TOREMOVALRETENTION=`cat ${CONFFILE} | grep 'toremovalretention' | awk -F'=' '{print $2}'`
-
-COMPRESSERR=0
-
-MSG=`log_message "LOG" "[PRE-START]" "INFO" "Starting Compress and Removing Innodb Engine Status Files Stored in : ${LOGDIR} !!"`
-echo "${MSG}"
-
-MSG=`log_message "LOG" "[PRE-START]" "INFO" "Source Files Retention to Compress       : ${DAILYTOCOMPRESSRET} days "`
-echo "${MSG}"
-MSG=`log_message "LOG" "[PRE-START]" "INFO" "Compressed Directories Retention to Keep : ${TOREMOVALRETENTION} days "`
-echo "${MSG}"
-
-MSG=`log_message "LOG" "[START]" "INFO" "Removing Files Compressed dayli directories older than ${TOREMOVALRETENTION} days !!"`
-echo "${MSG}"
-MSG=`log_message "LOG" "[FILES][COMPRESSED][REMOVAL][LIST]" "INFO" "List of Compressed Files older than ${TOREMOVALRETENTION} days to remove: !!"`
-echo "${MSG}"
-
-find ${LOGDIR} -type f -mtime +${TOREMOVALRETENTION} -name '*.tar.gz'
-
-MSG=`log_message "LOG" "[FILES][COMPRESSED][REMOVAL]" "INFO" "Removing Compressed Dayli Files Directories older than ${TOREMOVALRETENTION} days : !!"`
-echo "${MSG}"
-
-find ${LOGDIR} -type f -mtime +${TOREMOVALRETENTION} -name '*.tar.gz' -exec rm -f {} \;
-if [ $? -eq 0 ]; then 
-
-	MSG=`log_message "LOG" "[FILES][COMPRESSED][REMOVAL]" "OK" "Removing Compressed Files older than ${TOREMOVALRETENTION} days REMOVED!!"`
-	echo "${MSG}"
-else
-
-	MSG=`log_message "LOG" "[FILES][COMPRESSED][REMOVAL]" "ERROR" "Removing Compressed Files older than ${TOREMOVALRETENTION} days REMOVED!!"`
-	echo "${MSG}"
-fi
-
-
-MSG=`log_message "LOG" "[FILES][COMPRESSED][REMOVAL]" "INFO" "Removing Compressed Files than ${TOREMOVALRETENTION} days"`
-echo "${MSG}"
-
-MSG=`log_message "LOG" "[FILES][DIRS][REMOVAL]" "INFO" "Removing Directories for Files Older than ${TOREMOVALRETENTION} days"`
-echo "${MSG}"
-
-for d in `find ${LOGDIR} -type d -mtime +${TOREMOVALRETENTION}`
-do
-
-	MSG=`log_message "LOG" "[DIR][COMPRESSED][REMOVAL]" "INFO" "Removing Directories for Files Older than ${TOREMOVALRETENTION} days"`
-	echo "${MSG}"
-
-	rm -r ${d}
-	if [ $? -eq 0 ]; then 
-		MSG=`log_message "LOG" "[DIR][COMPRESSED][REMOVAL]" "OK" " ${d} REMOVED!!"`
-		echo "${MSG}"
-	else
-		MSG=`log_message "LOG" "[DIR][COMPRESSED][REMOVAL]" "ERROR" " ${d} NOT REMOVED!!"`
-		echo "${MSG}"	
-
-	fi
-done
-
-for dir in `find ${LOGDIR} -type d -mtime +${DAILYTOCOMPRESSRET}`
-do
-	for f in `find ${dir} -name '*.sample'`
-	do
-		pigz -k -3 -p2 ${f}
-		
-		if [ $? -eq 0 ];then 
-			fname="${f}.gz"
-			ls $fname > /dev/null 2>&1
-			if [ $? -eq 0 ]; then
-
-					MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][COMPRESS]" "OK" " ${f} Succesfully compressed to : ${fname}"`
-					echo "${MSG}"
-
-					MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][COMPRESS][REMOVAL]" "INFO" " Removing uncompressed source file ${f}"`
-					echo "${MSG}"
-					rm -f ${f}
-					if [ $? -eq 0 ]; then 
-
-						MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][COMPRESS][DELETE]" "OK" " ${f} file succesfully removed !!"`
-						echo "${MSG}"
-
-					else
-
-						MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][COMPRESS][DELETE]" "WARNING" " ${f}  NOT removed !!"`
-						echo "${MSG}"
-
-						COMPRESSERR=2
-					fi
-			fi
-		else
-			COMPRESSERR=$?
-			MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][COMPRESS]" "WARNING" " ${f}  NOT compressed !!"`
-			echo "${MSG}"
-		fi
-	done
-	if [ $COMPRESSERR -eq 0 ];then
-
-		MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][COMPRESS]" "OK" " Files Succesfully compressed in ${dir} !!"`
-		echo "${MSG}"
-
-		MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][REMOVAL]" "INFO" " Removing uncompressed files ${dir}"`
-		echo "${MSG}"
-		#rm -f ${dir}/*.sample
-		#if [ $? -eq 0 ];then 
-		#	echo "Uncompressed sample files succesfully removed"
-			# echo "Compressing daily sampling directory ${dir} to ${dir}.tar.gz "
-			# echo "[`date +"%Y-%m-%d %H:%M:%S"]`[COMPRESS][INFO] Compressing daily sampling directory ${dir} to ${dir}.tar.gz"
-			MSG=`log_message "LOG" "[DIR][DAILY][COMPRESS][SOURCE]" "INFO" " Compressing daily sampling directory ${dir} to ${dir}.tar.gz"`
-			echo "${MSG}"
-
-			tar cvfz ${dir}.tar.gz ${dir}/* > /dev/null 2>&1
-			if [ $? -eq 0 ];then
-				ls ${dir}.tar.gz > /dev/null 2>&1
-				if [ $? -eq 0 ];then
-
-					MSG=`log_message "LOG" "[DIR][DAILY][COMPRESS][SOURCE]" "OK" " Daily sampling directory ${dir} Succesfully compressed in ${dir}.tar.gz"`
-					echo "${MSG}"
-
-					MSG=`log_message "LOG" "[DIR][DAILY][SOURCE][REMOVAL]" "INFO" " Removing uncompressed files in ${dir}"`
-					echo "${MSG}"
-
-					rm -rf ${dir}
-					if [ $? -eq 0 ];then
-
-						MSG=`log_message "LOG" "[DIR][DAILY][SOURCE][REMOVAL]" "OK" " Uncompressed files in ${dir} Succesfully Removed"`
-						echo "${MSG}"
-
-					fi
-				fi
-			fi
-		#fi
-	else
-
-		MSG=`log_message "LOG" "[FILE][DAILY][SOURCE][COMPRESS]" "ERROR" " Files in ${dir} not compressed. Please check files !! "`
-		echo "${MSG}"
-	fi
-done
-
+main "$@"
