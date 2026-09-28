@@ -1,0 +1,1 @@
+This fixture must be ignored because its filename is invalid.
