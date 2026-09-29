@@ -226,6 +226,9 @@ parse_arguments() {
                 print_help 1
                 exit 0
                 ;;
+            --password|--password=*)
+                usage_error 'Password options are not accepted; use --login-path for remote authentication.'
+                ;;
             --*)
                 usage_error "Unknown option: $1"
                 ;;
@@ -521,9 +524,11 @@ normalize_events() {
             position = "-"
             current_schema = "-"
             transaction_id = ""
+            transaction_id_pending = 0
             in_transaction = 0
             sql_block = ""
             buffered = 0
+            active_row_table_id = ""
         }
 
         function trim(value) {
@@ -607,6 +612,7 @@ normalize_events() {
             event_schemas[buffered] = event_schema
             event_tables[buffered] = event_table
             event_transactions[buffered] = transaction_id
+            transaction_id_pending = 0
         }
 
         function flush_events(fallback_transaction, event_index, event_transaction) {
@@ -629,6 +635,22 @@ normalize_events() {
             buffered = 0
         }
 
+        function record_decoded_row(operation, reference,
+            event_schema, event_table) {
+            parse_reference(reference)
+            event_schema = parsed_schema
+            event_table = parsed_table
+
+            if (active_row_table_id != "" \
+                && (active_row_table_id in mapped_tables) \
+                && mapped_tables[active_row_table_id] != "") {
+                event_schema = mapped_schemas[active_row_table_id]
+                event_table = mapped_tables[active_row_table_id]
+            }
+
+            buffer_event("DML", operation, event_schema, event_table)
+        }
+
         function record_statement(sql, upper_sql, operation, event_class,
             remainder, prefix_length, event_schema, event_table) {
             sql = trim(sql)
@@ -638,6 +660,7 @@ normalize_events() {
             upper_sql = toupper(sql)
             operation = ""
             event_class = ""
+            remainder = ""
 
             if (match(upper_sql, /^INSERT[[:space:]]+(IGNORE[[:space:]]+)?INTO[[:space:]]+/)) {
                 operation = "INSERT"
@@ -657,6 +680,13 @@ normalize_events() {
             } else if (match(upper_sql, /^CREATE[[:space:]]+(TEMPORARY[[:space:]]+)?TABLE[[:space:]]+(IF[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]+)?/)) {
                 operation = "CREATE"
                 event_class = "DDL"
+            } else if (match(upper_sql, /^CREATE[[:space:]]+((UNIQUE|FULLTEXT|SPATIAL)[[:space:]]+)?INDEX[[:space:]]+/)) {
+                operation = "CREATE"
+                event_class = "DDL"
+                if (!match(upper_sql, /[[:space:]]+ON[[:space:]]+/)) {
+                    return
+                }
+                remainder = substr(sql, RSTART + RLENGTH)
             } else if (match(upper_sql, /^DROP[[:space:]]+(TEMPORARY[[:space:]]+)?TABLE[[:space:]]+(IF[[:space:]]+EXISTS[[:space:]]+)?/)) {
                 operation = "DROP"
                 event_class = "DDL"
@@ -670,8 +700,10 @@ normalize_events() {
                 return
             }
 
-            prefix_length = RLENGTH
-            remainder = substr(sql, prefix_length + 1)
+            if (remainder == "") {
+                prefix_length = RLENGTH
+                remainder = substr(sql, prefix_length + 1)
+            }
             parse_reference(remainder)
             event_schema = parsed_schema == "" ? current_schema : parsed_schema
             event_table = parsed_table
@@ -681,12 +713,36 @@ normalize_events() {
             } else {
                 print_event(timestamp, position, event_class, operation,
                     event_schema, event_table, transaction_id)
+                transaction_id_pending = 0
             }
         }
 
         {
             line = $0
-            if (line ~ /^[[:space:]]*(###|#Q>)/) {
+            if (line ~ /^[[:space:]]*#Q>/) {
+                next
+            }
+            if (line ~ /^[[:space:]]*###[[:space:]]+/) {
+                decoded_line = line
+                sub(/^[[:space:]]*###[[:space:]]+/, "", decoded_line)
+                upper_decoded_line = toupper(decoded_line)
+                decoded_operation = ""
+
+                if (match(upper_decoded_line,
+                    /^INSERT[[:space:]]+INTO[[:space:]]+/)) {
+                    decoded_operation = "INSERT"
+                } else if (match(upper_decoded_line,
+                    /^UPDATE[[:space:]]+/)) {
+                    decoded_operation = "UPDATE"
+                } else if (match(upper_decoded_line,
+                    /^DELETE[[:space:]]+FROM[[:space:]]+/)) {
+                    decoded_operation = "DELETE"
+                }
+
+                if (decoded_operation != "") {
+                    decoded_reference = substr(decoded_line, RLENGTH + 1)
+                    record_decoded_row(decoded_operation, decoded_reference)
+                }
                 next
             }
 
@@ -696,6 +752,7 @@ normalize_events() {
                 sub(/^#/, "", header)
                 split(header, header_parts, /[[:space:]]+/)
                 timestamp = normalize_timestamp(header_parts[1], header_parts[2])
+                active_row_table_id = ""
             }
 
             if (line ~ /^#[[:space:]]+at[[:space:]]+[0-9]+/) {
@@ -713,6 +770,7 @@ normalize_events() {
                 sub(/[[:space:]]*\/\*.*$/, "", gtid_value)
                 sub(/;.*$/, "", gtid_value)
                 transaction_id = trim(gtid_value)
+                transaction_id_pending = 1
                 next
             }
 
@@ -722,6 +780,7 @@ normalize_events() {
                 sub(/^.*GTID[[:space:]]+/, "", gtid_value)
                 split(gtid_value, gtid_parts, /[[:space:]]+/)
                 transaction_id = gtid_parts[1]
+                transaction_id_pending = 1
             }
 
             if (is_event_header && line ~ /Table_map:[[:space:]]*/) {
@@ -753,8 +812,7 @@ normalize_events() {
                 table_id = line
                 sub(/^.*table id[[:space:]]+/, "", table_id)
                 sub(/[^0-9].*$/, "", table_id)
-                buffer_event("DML", row_operation,
-                    mapped_schemas[table_id], mapped_tables[table_id])
+                active_row_table_id = table_id
                 next
             }
 
@@ -764,6 +822,7 @@ normalize_events() {
                 sub(/[^0-9].*$/, "", xid_value)
                 flush_events("XID:" xid_value)
                 transaction_id = ""
+                transaction_id_pending = 0
                 in_transaction = 0
                 next
             }
@@ -771,13 +830,28 @@ normalize_events() {
             trimmed_line = trim(line)
             upper_line = toupper(trimmed_line)
 
-            if (upper_line ~ /^BEGIN([[:space:];]|\/)/) {
+            if (upper_line ~ /^BEGIN([[:space:];]|\/|$)/) {
+                if (in_transaction || buffered > 0) {
+                    flush_events(transaction_id)
+                    transaction_id = ""
+                } else if (!transaction_id_pending) {
+                    transaction_id = ""
+                }
                 in_transaction = 1
+                transaction_id_pending = 0
                 next
             }
-            if (upper_line ~ /^COMMIT([[:space:];]|\/)/) {
+            if (upper_line ~ /^COMMIT([[:space:];]|\/|$)/) {
                 flush_events(transaction_id)
                 transaction_id = ""
+                transaction_id_pending = 0
+                in_transaction = 0
+                next
+            }
+            if (upper_line ~ /^ROLLBACK([[:space:];]|\/|$)/) {
+                flush_events(transaction_id)
+                transaction_id = ""
+                transaction_id_pending = 0
                 in_transaction = 0
                 next
             }
@@ -851,10 +925,12 @@ operation_color() {
 render_activity_report() {
     local events_file=$1
     local timestamp position event_class operation schema table transaction source_file
-    local color class_scope
+    local color class_scope table_reference
 
     setup_colors 1
     printf '\nActivity events:\n'
+    printf '%-19s  %8s  %-5s  %-9s  %-30s  %s\n' \
+        'Timestamp' 'Position' 'Class' 'Operation' 'Table' 'TransactionId'
     while IFS=$'\t' read -r timestamp position event_class operation schema table transaction source_file; do
         [[ -n "$timestamp" ]] || continue
         case "$event_class" in
@@ -866,10 +942,50 @@ render_activity_report() {
             continue
         fi
         color=$(operation_color "$operation")
-        printf '%s  %s  %s  %b%s%b  %s.%s  %s\n' \
+        table_reference="$schema.$table"
+        printf '%-19s  %8s  %-5s  %b%-9s%b  %-30s  %s\n' \
             "$timestamp" "$position" "$event_class" "$color" "$operation" \
-            "$COLOR_RESET" "$schema" "$table" "$transaction"
+            "$COLOR_RESET" "$table_reference" "$transaction"
     done < "$events_file"
+
+    printf '\nEvent totals:\n'
+    awk -v scope="$SCOPE" '
+        BEGIN {
+            FS = "\t"
+            dml_operations = "INSERT UPDATE DELETE REPLACE"
+            ddl_operations = "CREATE ALTER DROP TRUNCATE RENAME"
+        }
+        scope == "all" || tolower($3) == scope {
+            total++
+            class_counts[$3]++
+            operation_counts[$3 SUBSEP $4]++
+        }
+        END {
+            printf "  Total: %d\n", total
+            if (scope == "all" || scope == "dml") {
+                printf "  DML: %d\n", class_counts["DML"]
+                operation_count = split(dml_operations, operations, " ")
+                for (operation_index = 1; operation_index <= operation_count; operation_index++) {
+                    operation = operations[operation_index]
+                    if (operation_counts["DML" SUBSEP operation] > 0) {
+                        printf "    %s: %d\n", operation,
+                            operation_counts["DML" SUBSEP operation]
+                    }
+                }
+            }
+            if (scope == "all" || scope == "ddl") {
+                printf "  DDL: %d\n", class_counts["DDL"]
+                operation_count = split(ddl_operations, operations, " ")
+                for (operation_index = 1; operation_index <= operation_count; operation_index++) {
+                    operation = operations[operation_index]
+                    if (operation_counts["DDL" SUBSEP operation] > 0) {
+                        printf "    %s: %d\n", operation,
+                            operation_counts["DDL" SUBSEP operation]
+                    }
+                }
+            }
+        }
+    ' "$events_file"
 
     printf '\nTop tables by event count:\n'
     awk -v scope="$SCOPE" '

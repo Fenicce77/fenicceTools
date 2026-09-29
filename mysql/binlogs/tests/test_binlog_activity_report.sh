@@ -12,6 +12,9 @@ FIXTURE_ROOT="$TEST_DIR/fixtures/binlog_activity"
 MYSQL57_FIXTURE="$FIXTURE_ROOT/mysql57_statement.sample"
 MYSQL80_FIXTURE="$FIXTURE_ROOT/space dir/mysql80_row.sample"
 MYSQL80_MIXED_FIXTURE="$FIXTURE_ROOT/mysql80_mixed.sample"
+MYSQL80_CREATE_INDEX_FIXTURE="$FIXTURE_ROOT/mysql80_create_index.sample"
+MYSQL80_TRANSACTION_FIXTURE="$FIXTURE_ROOT/mysql80_transaction_boundaries.sample"
+MYSQL80_DECODED_ROWS_FIXTURE="$FIXTURE_ROOT/mysql80_decoded_rows.sample"
 MARIADB10_ROW_FIXTURE="$FIXTURE_ROOT/mariadb10_row.sample"
 MARIADB11_MIXED_FIXTURE="$FIXTURE_ROOT/mariadb11_mixed.sample"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/binlog-activity-test.XXXXXX")
@@ -231,8 +234,15 @@ assert_contains "$OUTPUT" 'Usage:'
 : > "$TMP/mysql-client.log"
 run_cli --password command-line-secret
 assert_status 2
-assert_contains "$OUTPUT" 'Unknown option: --password'
+assert_contains "$OUTPUT" 'Password options are not accepted; use --login-path for remote authentication.'
 assert_not_contains "$OUTPUT" 'command-line-secret'
+assert_file_empty "$TMP/reader.log"
+assert_file_empty "$TMP/mysql-client.log"
+
+run_cli --password=inline-command-line-secret
+assert_status 2
+assert_contains "$OUTPUT" 'Password options are not accepted; use --login-path for remote authentication.'
+assert_not_contains "$OUTPUT" 'inline-command-line-secret'
 assert_file_empty "$TMP/reader.log"
 assert_file_empty "$TMP/mysql-client.log"
 
@@ -336,6 +346,26 @@ expected_mysql57=$(printf '%s\n%s' \
     $'2026-09-29 10:00:02\t280\tDDL\tALTER\tsales\torders\t-')
 assert_equals "$OUTPUT" "$expected_mysql57"
 
+run_shell 'source "$1"; normalize_events "'"$MYSQL80_CREATE_INDEX_FIXTURE"'" mysql mysql-8.0+ statement'
+assert_status 0
+expected_mysql80_create_index=$(printf '%s\n%s\n%s\n%s' \
+    $'2026-09-29 10:10:00\t100\tDDL\tCREATE\tsales\torders\t-' \
+    $'2026-09-29 10:10:01\t200\tDDL\tCREATE\tsales\tcustomers\t-' \
+    $'2026-09-29 10:10:02\t300\tDDL\tCREATE\tcatalog\tproducts\t-' \
+    $'2026-09-29 10:10:03\t400\tDDL\tCREATE\tgeo\tplaces\t-')
+assert_equals "$OUTPUT" "$expected_mysql80_create_index"
+
+run_shell 'source "$1"; normalize_events "'"$MYSQL80_TRANSACTION_FIXTURE"'" mysql mysql-8.0+ statement'
+assert_status 0
+expected_mysql80_transactions=$(printf '%s\n%s\n%s\n%s\n%s\n%s' \
+    $'2026-09-29 10:20:01\t200\tDML\tINSERT\taudit\trolled_back\t24bc7856-9a3b-11ef-9abc-0242ac120002:80' \
+    $'2026-09-29 10:20:03\t400\tDML\tINSERT\taudit\tafter_rollback\t-' \
+    $'2026-09-29 10:20:05\t600\tDML\tINSERT\taudit\tfirst_begin\t24bc7856-9a3b-11ef-9abc-0242ac120002:81' \
+    $'2026-09-29 10:20:07\t800\tDML\tINSERT\taudit\tsecond_begin\t-' \
+    $'2026-09-29 10:20:09\t1000\tDML\tINSERT\taudit\tautocommit_gtid\t24bc7856-9a3b-11ef-9abc-0242ac120002:82' \
+    $'2026-09-29 10:20:11\t1200\tDML\tINSERT\taudit\tafter_autocommit\t-')
+assert_equals "$OUTPUT" "$expected_mysql80_transactions"
+
 run_shell 'source "$1"; normalize_events "'"$MYSQL80_FIXTURE"'" mysql mysql-8.0+ row'
 assert_status 0
 expected_mysql80=$(printf '%s\n%s\n%s' \
@@ -343,6 +373,14 @@ expected_mysql80=$(printf '%s\n%s\n%s' \
     $'2026-09-29 11:00:01\t240\tDML\tUPDATE\tsales\torders\tXID:9001' \
     $'2026-09-29 11:00:02\t360\tDML\tDELETE\tsales\torders\tXID:9001')
 assert_equals "$OUTPUT" "$expected_mysql80"
+
+run_shell 'source "$1"; normalize_events "'"$MYSQL80_DECODED_ROWS_FIXTURE"'" mysql mysql-8.0+ row'
+assert_status 0
+expected_mysql80_decoded_rows=$(printf '%s\n%s\n%s' \
+    $'2026-09-29 11:10:00\t126\tDML\tINSERT\tsales\torders\t24bc7856-9a3b-11ef-9abc-0242ac120002:82' \
+    $'2026-09-29 11:10:00\t126\tDML\tINSERT\tsales\torders\t24bc7856-9a3b-11ef-9abc-0242ac120002:82' \
+    $'2026-09-29 11:10:01\t240\tDML\tUPDATE\tfallback\taccounts\t24bc7856-9a3b-11ef-9abc-0242ac120002:82')
+assert_equals "$OUTPUT" "$expected_mysql80_decoded_rows"
 
 run_shell 'source "$1"; normalize_events "'"$MYSQL80_MIXED_FIXTURE"'" mysql mysql-8.0+ mixed'
 assert_status 0
@@ -380,14 +418,25 @@ run_cli --source local \
     --server-version '8.4.6' --binlog-format mixed --top-tables 2 \
     --mysqlbinlog-bin "$FAKE_READER" --no-color
 assert_status 0
-assert_contains "$OUTPUT" '2026-09-29 11:00:00  126  DML  INSERT  sales.orders  XID:9001'
-assert_contains "$OUTPUT" '2026-09-29 12:00:01  260  DDL  CREATE  sales.order_archive  -'
+assert_contains "$OUTPUT" 'Timestamp            Position  Class  Operation  Table                           TransactionId'
+assert_contains "$OUTPUT" '2026-09-29 11:00:00       126  DML    INSERT     sales.orders                    XID:9001'
+assert_contains "$OUTPUT" '2026-09-29 12:00:01       260  DDL    CREATE     sales.order_archive             -'
+assert_contains "$OUTPUT" $'Event totals:\n  Total: 5\n  DML: 4\n    INSERT: 2\n    UPDATE: 1\n    DELETE: 1\n  DDL: 1\n    CREATE: 1'
 expected_top_tables=$(printf '%s\n%s' \
     '4  sales.orders' \
     '1  sales.order_archive')
 actual_top_tables=$(printf '%s\n' "$OUTPUT" | awk '/^Top tables by event count:$/ { capture=1; next } capture && /^[0-9]+  / { print; count++; if (count == 2) exit }')
 assert_equals "$actual_top_tables" "$expected_top_tables"
 assert_not_contains "$OUTPUT" $'\033['
+
+run_cli --source local \
+    --file "$MYSQL80_FIXTURE" "$MYSQL80_MIXED_FIXTURE" \
+    --server-version '8.4.6' --binlog-format mixed --scope dml \
+    --mysqlbinlog-bin "$FAKE_READER" --no-color
+assert_status 0
+assert_contains "$OUTPUT" $'Event totals:\n  Total: 4\n  DML: 4\n    INSERT: 2\n    UPDATE: 1\n    DELETE: 1'
+assert_not_contains "$OUTPUT" '  DDL:'
+assert_not_contains "$OUTPUT" 'sales.order_archive'
 
 run_shell 'source "$1"; READER="/reader"; SOURCE=remote; REMOTE_LOGIN_PATH=reporting; START_DATETIME="2026-09-29 14:00:00"; STOP_DATETIME="2026-09-29 15:00:00"; build_reader_command; printf "<%s>\n" "${READER_COMMAND[@]}"'
 assert_status 0
@@ -413,8 +462,8 @@ assert_contains "$OUTPUT" 'Server family: mariadb'
 assert_contains "$OUTPUT" 'Server version: 11.4.2-custom'
 assert_contains "$OUTPUT" 'Server profile: mariadb-10+'
 assert_contains "$OUTPUT" 'Binlog format: mixed'
-assert_contains "$OUTPUT" '2026-09-29 14:00:00  145  DML  UPDATE  warehouse,west.quoted"items  0-1-1201'
-assert_contains "$OUTPUT" '2026-09-29 14:00:01  250  DDL  CREATE  warehouse,west.archive,2026  -'
+assert_contains "$OUTPUT" '2026-09-29 14:00:00       145  DML    UPDATE     warehouse,west.quoted"items     0-1-1201'
+assert_contains "$OUTPUT" '2026-09-29 14:00:01       250  DDL    CREATE     warehouse,west.archive,2026     -'
 assert_contains "$(< "$TMP/mysql-client.log")" $'DISCOVERY_ARG\t--login-path=remote-report'
 assert_contains "$(< "$TMP/mysql-client.log")" '@@GLOBAL.binlog_format'
 assert_not_contains "$(< "$TMP/mysql-client.log")" '--password'

@@ -1,0 +1,54 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+# at 100
+#260929 10:20:00 server id 9  end_log_pos 200 CRC32 0x00000000  GTID last_committed=0 sequence_number=80
+SET @@SESSION.GTID_NEXT= '24bc7856-9a3b-11ef-9abc-0242ac120002:80'/*!*/;
+BEGIN
+/*!*/;
+# at 200
+#260929 10:20:01 server id 9  end_log_pos 300 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+INSERT INTO `audit`.`rolled_back` (`id`) VALUES (1)
+/*!*/;
+ROLLBACK/*!*/;
+# at 300
+#260929 10:20:02 server id 9  end_log_pos 400 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+BEGIN
+/*!*/;
+# at 400
+#260929 10:20:03 server id 9  end_log_pos 500 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+INSERT INTO `audit`.`after_rollback` (`id`) VALUES (2)
+/*!*/;
+COMMIT/*!*/;
+# at 500
+#260929 10:20:04 server id 9  end_log_pos 600 CRC32 0x00000000  GTID last_committed=1 sequence_number=81
+SET @@SESSION.GTID_NEXT= '24bc7856-9a3b-11ef-9abc-0242ac120002:81'/*!*/;
+BEGIN
+/*!*/;
+# at 600
+#260929 10:20:05 server id 9  end_log_pos 700 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+INSERT INTO `audit`.`first_begin` (`id`) VALUES (3)
+/*!*/;
+# at 700
+#260929 10:20:06 server id 9  end_log_pos 800 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+BEGIN
+/*!*/;
+# at 800
+#260929 10:20:07 server id 9  end_log_pos 900 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+INSERT INTO `audit`.`second_begin` (`id`) VALUES (4)
+/*!*/;
+COMMIT/*!*/;
+# at 900
+#260929 10:20:08 server id 9  end_log_pos 1000 CRC32 0x00000000  GTID last_committed=2 sequence_number=82
+SET @@SESSION.GTID_NEXT= '24bc7856-9a3b-11ef-9abc-0242ac120002:82'/*!*/;
+# at 1000
+#260929 10:20:09 server id 9  end_log_pos 1100 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+INSERT INTO `audit`.`autocommit_gtid` (`id`) VALUES (5)
+/*!*/;
+# at 1100
+#260929 10:20:10 server id 9  end_log_pos 1200 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+BEGIN
+/*!*/;
+# at 1200
+#260929 10:20:11 server id 9  end_log_pos 1300 CRC32 0x00000000  Query thread_id=19 exec_time=0 error_code=0
+INSERT INTO `audit`.`after_autocommit` (`id`) VALUES (6)
+/*!*/;
+COMMIT/*!*/;
