@@ -1,5 +1,0 @@
-[client]
-host=mysqlserver
-port=3306
-user=photographer
-password=photopraherpwd

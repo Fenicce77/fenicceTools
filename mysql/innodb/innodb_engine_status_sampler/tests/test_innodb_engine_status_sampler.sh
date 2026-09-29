@@ -3,6 +3,7 @@ set -euo pipefail
 
 TEST_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SOURCE_SCRIPT="$TEST_DIR/../innodb_engine_status.sampler.sh"
+TEMPLATE_CONFIG="$TEST_DIR/../conf/mysql.instance.conn.template.cnf"
 INNODB_DIR=$(cd "$TEST_DIR/../.." && pwd)
 LEGACY_DIR="$TEST_DIR/../legacy"
 FAKE_MYSQL="$TEST_DIR/fake_mysql_innodb_sampler.sh"
@@ -117,6 +118,13 @@ run_tty_help() {
 }
 
 prepare_sampler_copy
+
+# The template documents all client parameters but contains only a placeholder secret.
+TEST_COUNT=$((TEST_COUNT + 1))
+[[ -r "$TEMPLATE_CONFIG" ]] || fail 'missing canonical connection template'
+assert_contains "$TEMPLATE_CONFIG" '[client]' 'template client section'
+assert_contains "$TEMPLATE_CONFIG" 'host=mysql.example.net' 'template host placeholder'
+assert_contains "$TEMPLATE_CONFIG" 'password=REPLACE_WITH_LOCAL_SECRET' 'template password placeholder'
 
 # Only the unversioned sampler is supported; prior implementations are archival.
 for legacy_file in innodb_engine_status.sampler.root.sh innodb_engine_status.sampler.v2.sh innodb_engine_status.sampler.nested.v2.sh; do
