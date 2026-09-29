@@ -4,6 +4,9 @@ set -euo pipefail
 
 TEST_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SCRIPT="$TEST_DIR/../binlog_activity_report.sh"
+BINLOG_DIR=$(cd "$TEST_DIR/.." && pwd)
+README="$BINLOG_DIR/README.md"
+LEGACY_DIR="$BINLOG_DIR/legacy"
 FAKE_READER="$TEST_DIR/fake_binlog_reader.sh"
 FIXTURE_ROOT="$TEST_DIR/fixtures/binlog_activity"
 MYSQL57_FIXTURE="$FIXTURE_ROOT/mysql57_statement.sample"
@@ -97,6 +100,26 @@ assert_file_not_contains() {
     pass_assertion
 }
 
+assert_file_exists() {
+    local path=$1
+    [[ -f "$path" ]] || fail "expected file to exist: $path"
+    pass_assertion
+}
+
+assert_file_not_exists() {
+    local path=$1
+    [[ ! -e "$path" ]] || fail "expected file to be absent: $path"
+    pass_assertion
+}
+
+assert_file_contains() {
+    local path=$1
+    local needle=$2
+    LC_ALL=C grep -Fq -- "$needle" "$path" \
+        || fail "expected file to contain: $needle; file: $path"
+    pass_assertion
+}
+
 run_cli() {
     set +e
     OUTPUT=$(PATH="$TMP/fake-bin:$PATH" \
@@ -145,6 +168,36 @@ run_cli_pty() {
 if [[ ! -e "$SCRIPT" ]]; then
     fail "command does not exist: $SCRIPT"
 fi
+
+legacy_scripts=(
+    full_binlog_accounting_indexed.sh
+    summarize_DDLs_binlogs.sh
+    summarize_binlogs.sh
+    summarize_binlogs2.sh
+    summarize_binlogs2_range.sh
+    summarize_binlogs_notbinary.sh
+    summarize_binlogs_notbinary.top7.sh
+    summarize_binlogs_remote_DDLs.sh
+)
+
+assert_file_exists "$SCRIPT"
+[[ -x "$SCRIPT" ]] || fail "expected canonical command to be executable: $SCRIPT"
+pass_assertion
+assert_file_exists "$README"
+assert_equals "$(find "$LEGACY_DIR" -maxdepth 1 -type f -name '*.sh' -exec basename {} \; 2>/dev/null | LC_ALL=C sort)" \
+    "$(printf '%s\n' "${legacy_scripts[@]}" | LC_ALL=C sort)"
+
+for legacy_script in "${legacy_scripts[@]}"; do
+    assert_file_exists "$LEGACY_DIR/$legacy_script"
+    assert_file_not_exists "$BINLOG_DIR/$legacy_script"
+done
+
+assert_file_contains "$README" 'Local source'
+assert_file_contains "$README" 'Remote source'
+assert_file_contains "$README" '--login-path'
+assert_file_contains "$README" 'color'
+assert_file_contains "$README" 'Timestamp,SourceFile,Position,ServerFamily,ServerVersion,BinlogFormat,EventClass,Operation,Schema,Table,TransactionId'
+assert_file_contains "$README" 'read-only'
 
 # The checks below become reachable after the production command is added.
 run_cli
