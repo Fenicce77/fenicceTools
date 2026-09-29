@@ -66,6 +66,15 @@ assert_file_empty() {
     pass_assertion
 }
 
+assert_directory_empty() {
+    local path=$1
+    local entry
+
+    entry=$(find "$path" -mindepth 1 -maxdepth 1 -print -quit)
+    [[ -z "$entry" ]] || fail "expected directory to be empty: $path; found: $entry"
+    pass_assertion
+}
+
 run_cli() {
     set +e
     OUTPUT=$(FAKE_BINLOG_READER_LOG="$TMP/reader.log" "$SCRIPT" "$@" 2>&1)
@@ -219,6 +228,22 @@ expected_mariadb10=$(printf '%s\n%s' \
     $'2026-09-29 13:00:00\t145\tDML\tUPDATE\tinventory\tstock\t0-1-991' \
     $'2026-09-29 13:00:01\t340\tDML\tDELETE\tinventory\tstock_history\t0-1-992')
 assert_equals "$OUTPUT" "$expected_mariadb10"
+assert_equals "$(printf '%s\n' "$OUTPUT" | wc -l | tr -d ' ')" 2
+assert_not_contains "$OUTPUT" $'\tINSERT\tadversarial\tshadow\t'
+
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$TMP/failing-reader.sh"
+chmod +x "$TMP/failing-reader.sh"
+mkdir -p "$TMP/event-tmp"
+set +e
+OUTPUT=$(TMPDIR="$TMP/event-tmp" "$SCRIPT" \
+    --source local --file "$MYSQL57_FIXTURE" \
+    --server-version '5.7.44' --binlog-format statement \
+    --mysqlbinlog-bin "$TMP/failing-reader.sh" --no-color 2>&1)
+STATUS=$?
+set -e
+assert_status 1
+assert_contains "$OUTPUT" 'Binlog reader failed for:'
+assert_directory_empty "$TMP/event-tmp"
 
 : > "$TMP/reader.log"
 run_cli --source local \

@@ -6,6 +6,7 @@
 #Q> UPDATE `inventory`.`stock` SET `quantity` = 8 WHERE `id` = 14
 # at 95
 #260929 13:00:00 server id 4  end_log_pos 145 CRC32 0x00000000  Table_map: `inventory`.`stock` mapped to number 37 (flags: 0x0)
+#Q> UPDATE `inventory`.`stock` SET `note` = 'Table_map: `adversarial`.`shadow` mapped to number 37'
 # at 145
 #260929 13:00:00 server id 4  end_log_pos 220 CRC32 0x00000000  Update_rows_compressed_v1: table id 37 flags: STMT_END_F
 ### UPDATE `inventory`.`stock`
@@ -13,6 +14,7 @@
 ###   @1=14
 ### SET
 ###   @2=8 /* INT meta=0 nullable=1 is_null=0 */
+###   @3='Write_rows: table id 37 flags: STMT_END_F'
 # at 220
 #260929 13:00:00 server id 4  end_log_pos 250 CRC32 0x00000000  Xid = 1991
 COMMIT/*!*/;

@@ -21,6 +21,7 @@ MYSQLBINLOG_BIN=""
 INPUT_FILES=()
 PROFILE=""
 READER=""
+EVENTS_TEMP_FILE=""
 
 COLOR_BOLD=""
 COLOR_RED=""
@@ -119,6 +120,13 @@ runtime_error() {
     setup_colors 2
     printf '%bERROR:%b %s\n' "${COLOR_BOLD}${COLOR_RED}" "$COLOR_RESET" "$1" >&2
     exit 1
+}
+
+cleanup_events_temp_file() {
+    if [[ -n "$EVENTS_TEMP_FILE" ]]; then
+        rm -f "$EVENTS_TEMP_FILE"
+        EVENTS_TEMP_FILE=""
+    fi
 }
 
 require_value() {
@@ -558,8 +566,13 @@ normalize_events() {
 
         {
             line = $0
+            if (line ~ /^[[:space:]]*(###|#Q>)/) {
+                next
+            }
+
             header = line
-            if (header ~ /^#[0-9][0-9][0-9][0-9][0-9][0-9][[:space:]]+[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) {
+            is_event_header = header ~ /^#[0-9][0-9][0-9][0-9][0-9][0-9][[:space:]]+[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/
+            if (is_event_header) {
                 sub(/^#/, "", header)
                 split(header, header_parts, /[[:space:]]+/)
                 timestamp = normalize_timestamp(header_parts[1], header_parts[2])
@@ -583,14 +596,15 @@ normalize_events() {
                 next
             }
 
-            if (family == "mariadb" && line ~ /GTID[[:space:]]+[0-9]+-[0-9]+-[0-9]+/) {
+            if (is_event_header && family == "mariadb" \
+                && line ~ /GTID[[:space:]]+[0-9]+-[0-9]+-[0-9]+/) {
                 gtid_value = line
                 sub(/^.*GTID[[:space:]]+/, "", gtid_value)
                 split(gtid_value, gtid_parts, /[[:space:]]+/)
                 transaction_id = gtid_parts[1]
             }
 
-            if (line ~ /Table_map:[[:space:]]*/) {
+            if (is_event_header && line ~ /Table_map:[[:space:]]*/) {
                 table_reference = line
                 sub(/^.*Table_map:[[:space:]]*/, "", table_reference)
                 parse_reference(table_reference)
@@ -605,11 +619,14 @@ normalize_events() {
             }
 
             row_operation = ""
-            if (line ~ /Write_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
+            if (is_event_header \
+                && line ~ /Write_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
                 row_operation = "INSERT"
-            } else if (line ~ /Update_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
+            } else if (is_event_header \
+                && line ~ /Update_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
                 row_operation = "UPDATE"
-            } else if (line ~ /Delete_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
+            } else if (is_event_header \
+                && line ~ /Delete_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
                 row_operation = "DELETE"
             }
             if (row_operation != "") {
@@ -621,7 +638,7 @@ normalize_events() {
                 next
             }
 
-            if (line ~ /Xid[[:space:]]*=[[:space:]]*[0-9]+/) {
+            if (is_event_header && line ~ /Xid[[:space:]]*=[[:space:]]*[0-9]+/) {
                 xid_value = line
                 sub(/^.*Xid[[:space:]]*=[[:space:]]*/, "", xid_value)
                 sub(/[^0-9].*$/, "", xid_value)
@@ -663,9 +680,6 @@ normalize_events() {
                 next
             }
 
-            if (trimmed_line ~ /^(###|#Q>)/) {
-                next
-            }
             if (upper_line ~ /^(INSERT|REPLACE|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE|RENAME)[[:space:]]/) {
                 sql_block = trimmed_line
                 if (line ~ /\/\*!\*\/;/ || line ~ /;[[:space:]]*$/) {
@@ -768,20 +782,20 @@ print_local_summary() {
 }
 
 main() {
-    local events_file
-
     parse_arguments "$@"
     validate_common_arguments
 
     case "$SOURCE" in
         local)
             validate_local_arguments
-            events_file=$(mktemp "${TMPDIR:-/tmp}/binlog-activity-report.XXXXXX") \
+            EVENTS_TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/binlog-activity-report.XXXXXX") \
                 || runtime_error 'Unable to create temporary event file.'
-            read_local_files "$events_file"
+            trap cleanup_events_temp_file EXIT
+            read_local_files "$EVENTS_TEMP_FILE"
             print_local_summary
-            render_activity_report "$events_file"
-            rm -f "$events_file"
+            render_activity_report "$EVENTS_TEMP_FILE"
+            cleanup_events_temp_file
+            trap - EXIT
             ;;
         remote)
             usage_error 'Remote source support is not available in this implementation stage.'
