@@ -25,6 +25,8 @@ READER=""
 COLOR_BOLD=""
 COLOR_RED=""
 COLOR_CYAN=""
+COLOR_GREEN=""
+COLOR_YELLOW=""
 COLOR_RESET=""
 
 setup_colors() {
@@ -33,6 +35,8 @@ setup_colors() {
     COLOR_BOLD=""
     COLOR_RED=""
     COLOR_CYAN=""
+    COLOR_GREEN=""
+    COLOR_YELLOW=""
     COLOR_RESET=""
 
     [[ "$NO_COLOR" == false && "${TERM:-dumb}" != dumb ]] || return 0
@@ -45,6 +49,8 @@ setup_colors() {
     COLOR_BOLD=$'\033[1m'
     COLOR_RED=$'\033[0;31m'
     COLOR_CYAN=$'\033[0;36m'
+    COLOR_GREEN=$'\033[0;32m'
+    COLOR_YELLOW=$'\033[0;33m'
     COLOR_RESET=$'\033[0m'
 }
 
@@ -374,13 +380,372 @@ validate_local_arguments() {
     resolve_reader || usage_error 'Neither mysqlbinlog nor mariadb-binlog is available.'
 }
 
+normalize_events() {
+    local input_file=$1
+    local family=$2
+    local profile=$3
+    local format=$4
+
+    awk -v family="$family" -v profile="$profile" -v format="$format" '
+        BEGIN {
+            OFS = "\t"
+            timestamp = "-"
+            position = "-"
+            current_schema = "-"
+            transaction_id = ""
+            in_transaction = 0
+            sql_block = ""
+            buffered = 0
+        }
+
+        function trim(value) {
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            return value
+        }
+
+        function normalize_timestamp(date_token, time_token, year) {
+            year = substr(date_token, 1, 2) + 0
+            year = (year >= 70 ? 1900 : 2000) + year
+            return sprintf("%04d-%s-%s %s", year,
+                substr(date_token, 3, 2), substr(date_token, 5, 2), time_token)
+        }
+
+        function parse_reference(value, first, remainder, separator, count, parts) {
+            parsed_schema = ""
+            parsed_table = ""
+            value = trim(value)
+
+            if (substr(value, 1, 1) == "`") {
+                value = substr(value, 2)
+                separator = index(value, "`")
+                if (separator == 0) {
+                    return
+                }
+                first = substr(value, 1, separator - 1)
+                remainder = trim(substr(value, separator + 1))
+                if (substr(remainder, 1, 1) == ".") {
+                    remainder = trim(substr(remainder, 2))
+                    if (substr(remainder, 1, 1) == "`") {
+                        remainder = substr(remainder, 2)
+                        separator = index(remainder, "`")
+                        parsed_schema = first
+                        parsed_table = separator > 0 \
+                            ? substr(remainder, 1, separator - 1) : remainder
+                    } else {
+                        split(remainder, parts, /[[:space:](;,]+/)
+                        parsed_schema = first
+                        parsed_table = parts[1]
+                    }
+                } else {
+                    parsed_table = first
+                }
+                return
+            }
+
+            split(value, parts, /[[:space:](;,]+/)
+            count = split(parts[1], reference_parts, /\./)
+            if (count > 1) {
+                parsed_schema = reference_parts[count - 1]
+                parsed_table = reference_parts[count]
+            } else {
+                parsed_table = parts[1]
+            }
+            gsub(/`/, "", parsed_schema)
+            gsub(/`/, "", parsed_table)
+        }
+
+        function print_event(event_timestamp, event_position, event_class,
+            operation, event_schema, event_table, event_transaction) {
+            if (event_schema == "") {
+                event_schema = "-"
+            }
+            if (event_table == "") {
+                event_table = "-"
+            }
+            if (event_transaction == "") {
+                event_transaction = "-"
+            }
+            print event_timestamp, event_position, event_class, operation,
+                event_schema, event_table, event_transaction
+        }
+
+        function buffer_event(event_class, operation, event_schema, event_table) {
+            buffered++
+            event_timestamps[buffered] = timestamp
+            event_positions[buffered] = position
+            event_classes[buffered] = event_class
+            event_operations[buffered] = operation
+            event_schemas[buffered] = event_schema
+            event_tables[buffered] = event_table
+            event_transactions[buffered] = transaction_id
+        }
+
+        function flush_events(fallback_transaction, event_index, event_transaction) {
+            for (event_index = 1; event_index <= buffered; event_index++) {
+                event_transaction = event_transactions[event_index]
+                if (event_transaction == "") {
+                    event_transaction = fallback_transaction
+                }
+                print_event(event_timestamps[event_index], event_positions[event_index],
+                    event_classes[event_index], event_operations[event_index],
+                    event_schemas[event_index], event_tables[event_index], event_transaction)
+                delete event_timestamps[event_index]
+                delete event_positions[event_index]
+                delete event_classes[event_index]
+                delete event_operations[event_index]
+                delete event_schemas[event_index]
+                delete event_tables[event_index]
+                delete event_transactions[event_index]
+            }
+            buffered = 0
+        }
+
+        function record_statement(sql, upper_sql, operation, event_class,
+            remainder, prefix_length, event_schema, event_table) {
+            sql = trim(sql)
+            gsub(/[[:space:]]+/, " ", sql)
+            gsub(/\/\*!\*\//, "", sql)
+            sub(/;[[:space:]]*$/, "", sql)
+            upper_sql = toupper(sql)
+            operation = ""
+            event_class = ""
+
+            if (match(upper_sql, /^INSERT[[:space:]]+(IGNORE[[:space:]]+)?INTO[[:space:]]+/)) {
+                operation = "INSERT"
+                event_class = "DML"
+            } else if (match(upper_sql, /^REPLACE[[:space:]]+(INTO[[:space:]]+)?/)) {
+                operation = "REPLACE"
+                event_class = "DML"
+            } else if (match(upper_sql, /^UPDATE[[:space:]]+/)) {
+                operation = "UPDATE"
+                event_class = "DML"
+            } else if (match(upper_sql, /^DELETE[[:space:]]+FROM[[:space:]]+/)) {
+                operation = "DELETE"
+                event_class = "DML"
+            } else if (match(upper_sql, /^ALTER[[:space:]]+TABLE[[:space:]]+/)) {
+                operation = "ALTER"
+                event_class = "DDL"
+            } else if (match(upper_sql, /^CREATE[[:space:]]+(TEMPORARY[[:space:]]+)?TABLE[[:space:]]+(IF[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]+)?/)) {
+                operation = "CREATE"
+                event_class = "DDL"
+            } else if (match(upper_sql, /^DROP[[:space:]]+(TEMPORARY[[:space:]]+)?TABLE[[:space:]]+(IF[[:space:]]+EXISTS[[:space:]]+)?/)) {
+                operation = "DROP"
+                event_class = "DDL"
+            } else if (match(upper_sql, /^TRUNCATE[[:space:]]+(TABLE[[:space:]]+)?/)) {
+                operation = "TRUNCATE"
+                event_class = "DDL"
+            } else if (match(upper_sql, /^RENAME[[:space:]]+TABLE[[:space:]]+/)) {
+                operation = "RENAME"
+                event_class = "DDL"
+            } else {
+                return
+            }
+
+            prefix_length = RLENGTH
+            remainder = substr(sql, prefix_length + 1)
+            parse_reference(remainder)
+            event_schema = parsed_schema == "" ? current_schema : parsed_schema
+            event_table = parsed_table
+
+            if (in_transaction) {
+                buffer_event(event_class, operation, event_schema, event_table)
+            } else {
+                print_event(timestamp, position, event_class, operation,
+                    event_schema, event_table, transaction_id)
+            }
+        }
+
+        {
+            line = $0
+            header = line
+            if (header ~ /^#[0-9][0-9][0-9][0-9][0-9][0-9][[:space:]]+[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) {
+                sub(/^#/, "", header)
+                split(header, header_parts, /[[:space:]]+/)
+                timestamp = normalize_timestamp(header_parts[1], header_parts[2])
+            }
+
+            if (line ~ /^#[[:space:]]+at[[:space:]]+[0-9]+/) {
+                position_value = line
+                sub(/^#[[:space:]]+at[[:space:]]+/, "", position_value)
+                sub(/[^0-9].*$/, "", position_value)
+                position = position_value
+                next
+            }
+
+            if (line ~ /GTID_NEXT[[:space:]]*=/) {
+                gtid_value = line
+                sub(/^.*GTID_NEXT[[:space:]]*=[[:space:]]*/, "", gtid_value)
+                gsub(/[\047\042]/, "", gtid_value)
+                sub(/[[:space:]]*\/\*.*$/, "", gtid_value)
+                sub(/;.*$/, "", gtid_value)
+                transaction_id = trim(gtid_value)
+                next
+            }
+
+            if (family == "mariadb" && line ~ /GTID[[:space:]]+[0-9]+-[0-9]+-[0-9]+/) {
+                gtid_value = line
+                sub(/^.*GTID[[:space:]]+/, "", gtid_value)
+                split(gtid_value, gtid_parts, /[[:space:]]+/)
+                transaction_id = gtid_parts[1]
+            }
+
+            if (line ~ /Table_map:[[:space:]]*/) {
+                table_reference = line
+                sub(/^.*Table_map:[[:space:]]*/, "", table_reference)
+                parse_reference(table_reference)
+                table_id = line
+                sub(/^.*mapped to number[[:space:]]+/, "", table_id)
+                sub(/[^0-9].*$/, "", table_id)
+                if (table_id != "") {
+                    mapped_schemas[table_id] = parsed_schema
+                    mapped_tables[table_id] = parsed_table
+                }
+                next
+            }
+
+            row_operation = ""
+            if (line ~ /Write_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
+                row_operation = "INSERT"
+            } else if (line ~ /Update_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
+                row_operation = "UPDATE"
+            } else if (line ~ /Delete_rows[^:]*:[[:space:]]+table id[[:space:]]+[0-9]+/) {
+                row_operation = "DELETE"
+            }
+            if (row_operation != "") {
+                table_id = line
+                sub(/^.*table id[[:space:]]+/, "", table_id)
+                sub(/[^0-9].*$/, "", table_id)
+                buffer_event("DML", row_operation,
+                    mapped_schemas[table_id], mapped_tables[table_id])
+                next
+            }
+
+            if (line ~ /Xid[[:space:]]*=[[:space:]]*[0-9]+/) {
+                xid_value = line
+                sub(/^.*Xid[[:space:]]*=[[:space:]]*/, "", xid_value)
+                sub(/[^0-9].*$/, "", xid_value)
+                flush_events("XID:" xid_value)
+                transaction_id = ""
+                in_transaction = 0
+                next
+            }
+
+            trimmed_line = trim(line)
+            upper_line = toupper(trimmed_line)
+
+            if (upper_line ~ /^BEGIN([[:space:];]|\/)/) {
+                in_transaction = 1
+                next
+            }
+            if (upper_line ~ /^COMMIT([[:space:];]|\/)/) {
+                flush_events(transaction_id)
+                transaction_id = ""
+                in_transaction = 0
+                next
+            }
+            if (upper_line ~ /^USE[[:space:]]+/) {
+                schema_value = trimmed_line
+                sub(/^[Uu][Ss][Ee][[:space:]]+/, "", schema_value)
+                sub(/\/\*!\*\/;.*$/, "", schema_value)
+                sub(/;.*$/, "", schema_value)
+                gsub(/`/, "", schema_value)
+                current_schema = trim(schema_value)
+                next
+            }
+
+            if (sql_block != "") {
+                sql_block = sql_block " " trimmed_line
+                if (line ~ /\/\*!\*\/;/ || line ~ /;[[:space:]]*$/) {
+                    record_statement(sql_block)
+                    sql_block = ""
+                }
+                next
+            }
+
+            if (trimmed_line ~ /^(###|#Q>)/) {
+                next
+            }
+            if (upper_line ~ /^(INSERT|REPLACE|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE|RENAME)[[:space:]]/) {
+                sql_block = trimmed_line
+                if (line ~ /\/\*!\*\/;/ || line ~ /;[[:space:]]*$/) {
+                    record_statement(sql_block)
+                    sql_block = ""
+                }
+            }
+        }
+
+        END {
+            if (sql_block != "") {
+                record_statement(sql_block)
+            }
+            flush_events(transaction_id)
+        }
+    ' "$input_file"
+}
+
 read_local_files() {
+    local output_file=$1
     local input_file
 
+    : > "$output_file"
+
     for input_file in "${INPUT_FILES[@]}"; do
-        "$READER" --base64-output=DECODE-ROWS --verbose "$input_file" >/dev/null \
-            || runtime_error "Binlog reader failed for: $input_file"
+        if ! "$READER" --base64-output=DECODE-ROWS --verbose "$input_file" \
+            | normalize_events /dev/stdin "$SERVER_FAMILY" "$PROFILE" "$BINLOG_FORMAT" \
+                >> "$output_file"; then
+            runtime_error "Binlog reader failed for: $input_file"
+        fi
     done
+}
+
+operation_color() {
+    case "$1" in
+        INSERT|REPLACE) printf '%s' "$COLOR_GREEN" ;;
+        UPDATE) printf '%s' "$COLOR_YELLOW" ;;
+        DELETE) printf '%s' "$COLOR_RED" ;;
+        CREATE|ALTER|DROP|TRUNCATE|RENAME) printf '%s' "$COLOR_CYAN" ;;
+        *) printf '%s' "$COLOR_RESET" ;;
+    esac
+}
+
+render_activity_report() {
+    local events_file=$1
+    local timestamp position event_class operation schema table transaction color class_scope
+
+    setup_colors 1
+    printf '\nActivity events:\n'
+    while IFS=$'\t' read -r timestamp position event_class operation schema table transaction; do
+        [[ -n "$timestamp" ]] || continue
+        case "$event_class" in
+            DML) class_scope=dml ;;
+            DDL) class_scope=ddl ;;
+            *) class_scope=unknown ;;
+        esac
+        if [[ "$SCOPE" != all && "$SCOPE" != "$class_scope" ]]; then
+            continue
+        fi
+        color=$(operation_color "$operation")
+        printf '%s  %s  %s  %b%s%b  %s.%s  %s\n' \
+            "$timestamp" "$position" "$event_class" "$color" "$operation" \
+            "$COLOR_RESET" "$schema" "$table" "$transaction"
+    done < "$events_file"
+
+    printf '\nTop tables by event count:\n'
+    awk -v scope="$SCOPE" '
+        BEGIN { FS = "\t" }
+        scope == "all" || tolower($3) == scope {
+            counts[$5 "." $6]++
+        }
+        END {
+            for (table_name in counts) {
+                print counts[table_name] "\t" table_name
+            }
+        }
+    ' "$events_file" \
+        | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2 \
+        | awk -F $'\t' -v limit="$TOP_TABLES" \
+            'NR <= limit { printf "%d  %s\n", $1, $2 }'
 }
 
 print_local_summary() {
@@ -403,14 +768,20 @@ print_local_summary() {
 }
 
 main() {
+    local events_file
+
     parse_arguments "$@"
     validate_common_arguments
 
     case "$SOURCE" in
         local)
             validate_local_arguments
-            read_local_files
+            events_file=$(mktemp "${TMPDIR:-/tmp}/binlog-activity-report.XXXXXX") \
+                || runtime_error 'Unable to create temporary event file.'
+            read_local_files "$events_file"
             print_local_summary
+            render_activity_report "$events_file"
+            rm -f "$events_file"
             ;;
         remote)
             usage_error 'Remote source support is not available in this implementation stage.'
