@@ -202,6 +202,10 @@ before allowing compression or deletion.
 
 The configuration file is line-based and requires all three keys:
 
+Start from `conf/compress.sample.files.template.cnf`, copy it outside the
+repository, and set the target instance's sample root. Do not store an
+instance-specific runtime configuration in the repository.
+
 ```ini
 logdir=/srv/innodb/samples/mysql-primary.example.net_3306
 dailytocompressret=2

@@ -1,0 +1,6 @@
+# Copy this file outside the repository and set the instance sample root.
+logdir=/path/to/innodb/samples
+# Compress completed daily directories older than this many full days.
+dailytocompressret=2
+# Remove root-level .tar.gz archives older than this many full days.
+toremovalretention=14
