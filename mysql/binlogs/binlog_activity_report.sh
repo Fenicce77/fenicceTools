@@ -21,6 +21,7 @@ MYSQLBINLOG_BIN=""
 INPUT_FILES=()
 PROFILE=""
 READER=""
+READER_COMMAND=()
 EVENTS_TEMP_FILE=""
 
 COLOR_BOLD=""
@@ -356,7 +357,20 @@ validate_common_arguments() {
         || usage_error 'Top tables must be a positive integer.'
 }
 
+validate_csv_output() {
+    local parent_directory
+
+    [[ -n "$CSV_PATH" ]] || return 0
+    parent_directory=$(dirname "$CSV_PATH")
+    if [[ ! -d "$parent_directory" || ! -w "$parent_directory" \
+        || ( -e "$CSV_PATH" && ( ! -f "$CSV_PATH" || ! -w "$CSV_PATH" ) ) ]]; then
+        usage_error "CSV parent directory is not writable: $parent_directory"
+    fi
+}
+
 validate_local_arguments() {
+    local input_file
+
     if [[ "${#LOCAL_FILES[@]}" -gt 0 && -n "$LOCAL_DIR" ]]; then
         usage_error 'Local source accepts either --file or --dir, not both.'
     fi
@@ -385,7 +399,97 @@ validate_local_arguments() {
     resolve_profile "$SERVER_FAMILY" "$SERVER_VERSION" \
         || usage_error "Unsupported server family/version: $SERVER_FAMILY $SERVER_VERSION"
     collect_local_files
+    if [[ -n "$CSV_PATH" ]]; then
+        for input_file in "${INPUT_FILES[@]}"; do
+            [[ ! "$CSV_PATH" -ef "$input_file" ]] \
+                || usage_error "CSV output must not overwrite an input binlog: $input_file"
+        done
+    fi
     resolve_reader || usage_error 'Neither mysqlbinlog nor mariadb-binlog is available.'
+}
+
+discover_remote_identity() {
+    local login_path=$1
+    local mysql_client identity
+    local discovered_version discovered_comment discovered_format
+
+    mysql_client=$(command -v mysql 2>/dev/null || true)
+    [[ -n "$mysql_client" ]] \
+        || runtime_error 'mysql client is required for remote identity discovery.'
+
+    if ! identity=$("$mysql_client" \
+        "--login-path=$login_path" \
+        --batch --skip-column-names --raw \
+        --execute='SELECT @@version, @@version_comment, @@GLOBAL.binlog_format'); then
+        runtime_error "Unable to discover remote server identity with login path: $login_path"
+    fi
+
+    IFS=$'\t' read -r discovered_version discovered_comment discovered_format <<< "$identity"
+    [[ -n "$discovered_version" && -n "$discovered_comment" \
+        && -n "$discovered_format" ]] \
+        || runtime_error 'Remote identity query returned incomplete data.'
+
+    [[ -n "$SERVER_VERSION" ]] || SERVER_VERSION=$discovered_version
+    if [[ -z "$SERVER_FAMILY" ]]; then
+        SERVER_FAMILY=$(derive_server_family "$discovered_version $discovered_comment")
+    fi
+    if [[ -z "$BINLOG_FORMAT" ]]; then
+        BINLOG_FORMAT=$(printf '%s' "$discovered_format" | tr '[:upper:]' '[:lower:]')
+    fi
+}
+
+validate_remote_arguments() {
+    local remote_file
+
+    [[ -n "$REMOTE_LOGIN_PATH" ]] \
+        || usage_error 'Remote source requires --login-path.'
+    [[ "${#REMOTE_BINLOG_FILES[@]}" -gt 0 ]] \
+        || usage_error 'Remote source requires --binlog-file.'
+    [[ "${#LOCAL_FILES[@]}" -eq 0 && -z "$LOCAL_DIR" ]] \
+        || usage_error 'Remote source does not accept --file or --dir.'
+
+    INPUT_FILES=()
+    for remote_file in "${REMOTE_BINLOG_FILES[@]}"; do
+        add_unique_input "$remote_file"
+    done
+    REMOTE_BINLOG_FILES=("${INPUT_FILES[@]}")
+    INPUT_FILES=()
+
+    if [[ -n "$SERVER_FAMILY" ]]; then
+        case "$SERVER_FAMILY" in
+            mysql|mariadb) ;;
+            *) usage_error 'Server family must be mysql or mariadb.' ;;
+        esac
+    fi
+    if [[ -n "$BINLOG_FORMAT" ]]; then
+        case "$BINLOG_FORMAT" in
+            statement|row|mixed) ;;
+            *) usage_error 'Binlog format must be statement, row, or mixed.' ;;
+        esac
+    fi
+
+    if [[ -z "$SERVER_VERSION" || -z "$SERVER_FAMILY" || -z "$BINLOG_FORMAT" ]]; then
+        discover_remote_identity "$REMOTE_LOGIN_PATH"
+    fi
+
+    resolve_profile "$SERVER_FAMILY" "$SERVER_VERSION" \
+        || usage_error "Unsupported server family/version: $SERVER_FAMILY $SERVER_VERSION"
+    resolve_reader || usage_error 'Neither mysqlbinlog nor mariadb-binlog is available.'
+}
+
+build_reader_command() {
+    READER_COMMAND=("$READER")
+
+    if [[ "$SOURCE" == remote ]]; then
+        READER_COMMAND+=("--login-path=$REMOTE_LOGIN_PATH" --read-from-remote-server)
+    fi
+    READER_COMMAND+=(--base64-output=DECODE-ROWS --verbose)
+    if [[ -n "$START_DATETIME" ]]; then
+        READER_COMMAND+=("--start-datetime=$START_DATETIME")
+    fi
+    if [[ -n "$STOP_DATETIME" ]]; then
+        READER_COMMAND+=("--stop-datetime=$STOP_DATETIME")
+    fi
 }
 
 normalize_events() {
@@ -698,15 +802,20 @@ normalize_events() {
     ' "$input_file"
 }
 
-read_local_files() {
+read_binlog_files() {
     local output_file=$1
     local input_file
+    shift
 
     : > "$output_file"
+    build_reader_command
 
-    for input_file in "${INPUT_FILES[@]}"; do
-        if ! "$READER" --base64-output=DECODE-ROWS --verbose "$input_file" \
+    for input_file in "$@"; do
+        if ! "${READER_COMMAND[@]}" "$input_file" \
             | normalize_events /dev/stdin "$SERVER_FAMILY" "$PROFILE" "$BINLOG_FORMAT" \
+            | while IFS= read -r normalized_event; do
+                printf '%s\t%s\n' "$normalized_event" "$input_file"
+            done \
                 >> "$output_file"; then
             runtime_error "Binlog reader failed for: $input_file"
         fi
@@ -725,11 +834,12 @@ operation_color() {
 
 render_activity_report() {
     local events_file=$1
-    local timestamp position event_class operation schema table transaction color class_scope
+    local timestamp position event_class operation schema table transaction source_file
+    local color class_scope
 
     setup_colors 1
     printf '\nActivity events:\n'
-    while IFS=$'\t' read -r timestamp position event_class operation schema table transaction; do
+    while IFS=$'\t' read -r timestamp position event_class operation schema table transaction source_file; do
         [[ -n "$timestamp" ]] || continue
         case "$event_class" in
             DML) class_scope=dml ;;
@@ -762,12 +872,12 @@ render_activity_report() {
             'NR <= limit { printf "%d  %s\n", $1, $2 }'
 }
 
-print_local_summary() {
+print_summary() {
     local input_file
 
     setup_colors 1
     printf '%bBinlog Activity Report%b\n' "${COLOR_BOLD}${COLOR_CYAN}" "$COLOR_RESET"
-    printf 'Source: local\n'
+    printf 'Source: %s\n' "$SOURCE"
     printf 'Server family: %s\n' "$SERVER_FAMILY"
     printf 'Server version: %s\n' "$SERVER_VERSION"
     printf 'Server profile: %s\n' "$PROFILE"
@@ -776,14 +886,69 @@ print_local_summary() {
     printf 'Top tables: %s\n' "$TOP_TABLES"
     printf 'Reader: %s\n' "$READER"
     printf 'Input files:\n'
-    for input_file in "${INPUT_FILES[@]}"; do
-        printf '  %s\n' "$input_file"
-    done
+    case "$SOURCE" in
+        local)
+            for input_file in "${INPUT_FILES[@]}"; do
+                printf '  %s\n' "$input_file"
+            done
+            ;;
+        remote)
+            for input_file in "${REMOTE_BINLOG_FILES[@]}"; do
+                printf '  %s\n' "$input_file"
+            done
+            ;;
+    esac
+}
+
+csv_escape() {
+    local value=$1
+
+    value=${value//\"/\"\"}
+    case "$value" in
+        *','*|*'"'*|*$'\r'*|*$'\n'*) printf '"%s"' "$value" ;;
+        *) printf '%s' "$value" ;;
+    esac
+}
+
+write_csv() {
+    local path=$1
+    local timestamp position event_class operation schema table transaction source_file
+    local class_scope field separator
+
+    if ! : > "$path"; then
+        runtime_error "Unable to write CSV report: $path"
+    fi
+    printf '%s\r\n' \
+        'Timestamp,SourceFile,Position,ServerFamily,ServerVersion,BinlogFormat,EventClass,Operation,Schema,Table,TransactionId' \
+        >> "$path"
+
+    while IFS=$'\t' read -r timestamp position event_class operation schema table transaction source_file; do
+        [[ -n "$timestamp" ]] || continue
+        case "$event_class" in
+            DML) class_scope=dml ;;
+            DDL) class_scope=ddl ;;
+            *) class_scope=unknown ;;
+        esac
+        if [[ "$SCOPE" != all && "$SCOPE" != "$class_scope" ]]; then
+            continue
+        fi
+
+        separator=""
+        for field in "$timestamp" "$source_file" "$position" "$SERVER_FAMILY" \
+            "$SERVER_VERSION" "$BINLOG_FORMAT" "$event_class" "$operation" \
+            "$schema" "$table" "$transaction"; do
+            printf '%s' "$separator" >> "$path"
+            csv_escape "$field" >> "$path"
+            separator=','
+        done
+        printf '\r\n' >> "$path"
+    done < "$EVENTS_TEMP_FILE"
 }
 
 main() {
     parse_arguments "$@"
     validate_common_arguments
+    validate_csv_output
 
     case "$SOURCE" in
         local)
@@ -791,14 +956,24 @@ main() {
             EVENTS_TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/binlog-activity-report.XXXXXX") \
                 || runtime_error 'Unable to create temporary event file.'
             trap cleanup_events_temp_file EXIT
-            read_local_files "$EVENTS_TEMP_FILE"
-            print_local_summary
+            read_binlog_files "$EVENTS_TEMP_FILE" "${INPUT_FILES[@]}"
+            print_summary
             render_activity_report "$EVENTS_TEMP_FILE"
+            [[ -z "$CSV_PATH" ]] || write_csv "$CSV_PATH"
             cleanup_events_temp_file
             trap - EXIT
             ;;
         remote)
-            usage_error 'Remote source support is not available in this implementation stage.'
+            validate_remote_arguments
+            EVENTS_TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/binlog-activity-report.XXXXXX") \
+                || runtime_error 'Unable to create temporary event file.'
+            trap cleanup_events_temp_file EXIT
+            read_binlog_files "$EVENTS_TEMP_FILE" "${REMOTE_BINLOG_FILES[@]}"
+            print_summary
+            render_activity_report "$EVENTS_TEMP_FILE"
+            [[ -z "$CSV_PATH" ]] || write_csv "$CSV_PATH"
+            cleanup_events_temp_file
+            trap - EXIT
             ;;
     esac
 }

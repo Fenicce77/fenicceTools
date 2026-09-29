@@ -10,10 +10,15 @@ MYSQL57_FIXTURE="$FIXTURE_ROOT/mysql57_statement.sample"
 MYSQL80_FIXTURE="$FIXTURE_ROOT/space dir/mysql80_row.sample"
 MYSQL80_MIXED_FIXTURE="$FIXTURE_ROOT/mysql80_mixed.sample"
 MARIADB10_ROW_FIXTURE="$FIXTURE_ROOT/mariadb10_row.sample"
+MARIADB11_MIXED_FIXTURE="$FIXTURE_ROOT/mariadb11_mixed.sample"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/binlog-activity-test.XXXXXX")
 OUTPUT=""
 STATUS=0
 TEST_COUNT=0
+FAKE_MYSQL_IDENTITY=$'11.4.2-custom\tMariaDB Server\tMIXED'
+
+mkdir -p "$TMP/fake-bin"
+ln -s "$FAKE_READER" "$TMP/fake-bin/mysql"
 
 test_cleanup() {
     rm -rf "$TMP"
@@ -75,9 +80,31 @@ assert_directory_empty() {
     pass_assertion
 }
 
+assert_files_equal() {
+    local actual=$1
+    local expected=$2
+    cmp -s "$actual" "$expected" \
+        || fail "files differ: $actual and $expected"
+    pass_assertion
+}
+
+assert_file_not_contains() {
+    local path=$1
+    local needle=$2
+    if LC_ALL=C grep -q "$needle" "$path"; then
+        fail "expected file not to contain: $needle; file: $path"
+    fi
+    pass_assertion
+}
+
 run_cli() {
     set +e
-    OUTPUT=$(FAKE_BINLOG_READER_LOG="$TMP/reader.log" "$SCRIPT" "$@" 2>&1)
+    OUTPUT=$(PATH="$TMP/fake-bin:$PATH" \
+        FAKE_BINLOG_READER_LOG="$TMP/reader.log" \
+        FAKE_MYSQL_CLIENT_LOG="$TMP/mysql-client.log" \
+        FAKE_MYSQL_IDENTITY="$FAKE_MYSQL_IDENTITY" \
+        FAKE_REMOTE_FIXTURE="$MARIADB11_MIXED_FIXTURE" \
+        "$SCRIPT" "$@" 2>&1)
     STATUS=$?
     set -e
 }
@@ -86,6 +113,32 @@ run_shell() {
     set +e
     OUTPUT=$(/bin/bash -c "$1" _ "$SCRIPT" "$TMP" 2>&1)
     STATUS=$?
+    set -e
+}
+
+run_cli_pty() {
+    local command_string=""
+    local argument
+
+    set +e
+    if [[ "$(uname -s)" == Darwin ]]; then
+        OUTPUT=$(PATH="$TMP/fake-bin:$PATH" TERM=xterm \
+            FAKE_BINLOG_READER_LOG="$TMP/reader.log" \
+            FAKE_MYSQL_CLIENT_LOG="$TMP/mysql-client.log" \
+            FAKE_MYSQL_IDENTITY="$FAKE_MYSQL_IDENTITY" \
+            FAKE_REMOTE_FIXTURE="$MARIADB11_MIXED_FIXTURE" \
+            script -q /dev/null "$SCRIPT" "$@" 2>&1)
+        STATUS=$?
+    else
+        printf -v command_string '%q ' "$SCRIPT" "$@"
+        OUTPUT=$(PATH="$TMP/fake-bin:$PATH" TERM=xterm \
+            FAKE_BINLOG_READER_LOG="$TMP/reader.log" \
+            FAKE_MYSQL_CLIENT_LOG="$TMP/mysql-client.log" \
+            FAKE_MYSQL_IDENTITY="$FAKE_MYSQL_IDENTITY" \
+            FAKE_REMOTE_FIXTURE="$MARIADB11_MIXED_FIXTURE" \
+            script -q -e -c "$command_string" /dev/null 2>&1)
+        STATUS=$?
+    fi
     set -e
 }
 
@@ -259,5 +312,102 @@ expected_top_tables=$(printf '%s\n%s' \
 actual_top_tables=$(printf '%s\n' "$OUTPUT" | awk '/^Top tables by event count:$/ { capture=1; next } capture && /^[0-9]+  / { print; count++; if (count == 2) exit }')
 assert_equals "$actual_top_tables" "$expected_top_tables"
 assert_not_contains "$OUTPUT" $'\033['
+
+run_shell 'source "$1"; READER="/reader"; SOURCE=remote; REMOTE_LOGIN_PATH=reporting; START_DATETIME="2026-09-29 14:00:00"; STOP_DATETIME="2026-09-29 15:00:00"; build_reader_command; printf "<%s>\n" "${READER_COMMAND[@]}"'
+assert_status 0
+expected_reader_command=$(printf '%s\n' \
+    '</reader>' \
+    '<--login-path=reporting>' \
+    '<--read-from-remote-server>' \
+    '<--base64-output=DECODE-ROWS>' \
+    '<--verbose>' \
+    '<--start-datetime=2026-09-29 14:00:00>' \
+    '<--stop-datetime=2026-09-29 15:00:00>')
+assert_equals "$OUTPUT" "$expected_reader_command"
+
+: > "$TMP/reader.log"
+: > "$TMP/mysql-client.log"
+run_cli --source remote --login-path remote-report \
+    --binlog-file 'mariadb-bin,"west".000777' 'mariadb-bin,"west".000777' \
+    --start '2026-09-29 14:00:00' --stop '2026-09-29 15:00:00' \
+    --mysqlbinlog-bin "$FAKE_READER" --no-color
+assert_status 0
+assert_contains "$OUTPUT" 'Source: remote'
+assert_contains "$OUTPUT" 'Server family: mariadb'
+assert_contains "$OUTPUT" 'Server version: 11.4.2-custom'
+assert_contains "$OUTPUT" 'Server profile: mariadb-10+'
+assert_contains "$OUTPUT" 'Binlog format: mixed'
+assert_contains "$OUTPUT" '2026-09-29 14:00:00  145  DML  UPDATE  warehouse,west.quoted"items  0-1-1201'
+assert_contains "$OUTPUT" '2026-09-29 14:00:01  250  DDL  CREATE  warehouse,west.archive,2026  -'
+assert_contains "$(< "$TMP/mysql-client.log")" $'DISCOVERY_ARG\t--login-path=remote-report'
+assert_contains "$(< "$TMP/mysql-client.log")" '@@GLOBAL.binlog_format'
+assert_not_contains "$(< "$TMP/mysql-client.log")" '--password'
+assert_contains "$(< "$TMP/reader.log")" $'REMOTE_ARG\t--login-path=remote-report'
+assert_contains "$(< "$TMP/reader.log")" $'REMOTE_ARG\t--read-from-remote-server'
+assert_contains "$(< "$TMP/reader.log")" $'REMOTE_ARG\t--start-datetime=2026-09-29 14:00:00'
+assert_contains "$(< "$TMP/reader.log")" $'REMOTE_ARG\t--stop-datetime=2026-09-29 15:00:00'
+assert_not_contains "$(< "$TMP/reader.log")" '--password'
+assert_equals "$(LC_ALL=C grep -Fxc $'REMOTE_ARG\tmariadb-bin,"west".000777' "$TMP/reader.log")" 1
+
+: > "$TMP/mysql-client.log"
+run_cli --source remote --login-path override-report \
+    --binlog-file mysql-bin.000888 \
+    --server-family mysql --server-version 8.4.6 --binlog-format row \
+    --mysqlbinlog-bin "$FAKE_READER" --no-color
+assert_status 0
+assert_contains "$OUTPUT" 'Server family: mysql'
+assert_contains "$OUTPUT" 'Server version: 8.4.6'
+assert_contains "$OUTPUT" 'Server profile: mysql-8.0+'
+assert_contains "$OUTPUT" 'Binlog format: row'
+assert_file_empty "$TMP/mysql-client.log"
+
+: > "$TMP/reader.log"
+: > "$TMP/mysql-client.log"
+run_cli --source remote --login-path remote-report \
+    --binlog-file mariadb-bin.000999 \
+    --csv "$TMP/missing/output.csv" \
+    --mysqlbinlog-bin "$FAKE_READER" --no-color
+assert_status 2
+assert_contains "$OUTPUT" 'CSV parent directory is not writable:'
+assert_file_empty "$TMP/reader.log"
+assert_file_empty "$TMP/mysql-client.log"
+
+csv_path="$TMP/report.csv"
+expected_csv="$TMP/expected.csv"
+: > "$TMP/reader.log"
+: > "$TMP/mysql-client.log"
+run_cli --source remote --login-path remote-report \
+    --binlog-file 'mariadb-bin,"west".000777' \
+    --csv "$csv_path" --mysqlbinlog-bin "$FAKE_READER"
+assert_status 0
+assert_contains "$OUTPUT" 'Activity events:'
+printf '%s\r\n' \
+    'Timestamp,SourceFile,Position,ServerFamily,ServerVersion,BinlogFormat,EventClass,Operation,Schema,Table,TransactionId' \
+    '2026-09-29 14:00:00,"mariadb-bin,""west"".000777",145,mariadb,11.4.2-custom,mixed,DML,UPDATE,"warehouse,west","quoted""items",0-1-1201' \
+    '2026-09-29 14:00:01,"mariadb-bin,""west"".000777",250,mariadb,11.4.2-custom,mixed,DDL,CREATE,"warehouse,west","archive,2026",-' \
+    > "$expected_csv"
+assert_files_equal "$csv_path" "$expected_csv"
+assert_file_not_contains "$csv_path" $'\033\['
+
+pty_csv_path="$TMP/report-pty.csv"
+run_cli_pty --source remote --login-path remote-report \
+    --binlog-file 'mariadb-bin,"west".000777' \
+    --csv "$pty_csv_path" --mysqlbinlog-bin "$FAKE_READER"
+assert_status 0
+assert_contains "$OUTPUT" $'\033['
+assert_files_equal "$pty_csv_path" "$expected_csv"
+assert_file_not_contains "$pty_csv_path" $'\033\['
+
+cp "$MYSQL57_FIXTURE" "$TMP/binlog-csv-collision.bin"
+collision_before=$(cksum "$TMP/binlog-csv-collision.bin")
+: > "$TMP/reader.log"
+run_cli --source local --file "$TMP/binlog-csv-collision.bin" \
+    --server-version 5.7.44 --binlog-format statement \
+    --csv "$TMP/binlog-csv-collision.bin" \
+    --mysqlbinlog-bin "$FAKE_READER" --no-color
+assert_status 2
+assert_contains "$OUTPUT" 'CSV output must not overwrite an input binlog:'
+assert_equals "$(cksum "$TMP/binlog-csv-collision.bin")" "$collision_before"
+assert_file_empty "$TMP/reader.log"
 
 printf 'PASS: %s assertions\n' "$TEST_COUNT"
