@@ -4,8 +4,14 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 SCRIPT="$SCRIPT_DIR/../compress.sample.files.sh"
+TEMPLATE_CONFIG="$SCRIPT_DIR/../conf/compress.sample.files.template.cnf"
 TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/compress-samples.XXXXXX")
 trap 'rm -rf "$TEST_DIR"' EXIT
+
+[ -r "$TEMPLATE_CONFIG" ] || { printf 'FAIL: missing configuration template\n' >&2; exit 1; }
+grep -q '^logdir=/path/to/innodb/samples$' "$TEMPLATE_CONFIG"
+grep -q '^dailytocompressret=2$' "$TEMPLATE_CONFIG"
+grep -q '^toremovalretention=14$' "$TEMPLATE_CONFIG"
 
 SAMPLE_ROOT="$TEST_DIR/samples root"
 DAY_DIR="$SAMPLE_ROOT/20260925"
