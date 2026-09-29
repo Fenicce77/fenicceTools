@@ -1,5 +1,6 @@
 # Codex worktrees
 .worktrees/
+mysql/innodb/innodb_engine_status_sampler/.conf/*.cnf
 
 # macOS metadata
 .DS_Store

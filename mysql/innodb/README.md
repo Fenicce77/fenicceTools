@@ -23,16 +23,21 @@ file must contain `host` and `port`.
 innodb_engine_status_sampler/.conf/<instance_name>.cnf
 ```
 
+Start from `innodb_engine_status_sampler/conf/mysql.instance.conn.template.cnf`,
+copy it to the runtime path above, and set the instance values. Runtime client
+files are intentionally ignored by Git and must remain outside commits.
+
 ```ini
 [client]
 host=mysql-primary.example.net
 port=3306
 user=innodb_monitor
-password=change-me
+password=REPLACE_WITH_LOCAL_SECRET
 ```
 
 Authentication options are passed to the selected MySQL client through this
-option file. The sampler never invokes `sudo`.
+option file. Replace the password placeholder only in the local runtime file;
+it is intentionally ignored by Git. The sampler never invokes `sudo`.
 
 ### Capture layout and operational guarantees
 
