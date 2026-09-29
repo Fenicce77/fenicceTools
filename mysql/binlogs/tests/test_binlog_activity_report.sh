@@ -160,6 +160,15 @@ assert_status 2
 assert_contains "$OUTPUT" 'Unknown option: --unknown-option'
 assert_contains "$OUTPUT" 'Usage:'
 
+: > "$TMP/reader.log"
+: > "$TMP/mysql-client.log"
+run_cli --password command-line-secret
+assert_status 2
+assert_contains "$OUTPUT" 'Unknown option: --password'
+assert_not_contains "$OUTPUT" 'command-line-secret'
+assert_file_empty "$TMP/reader.log"
+assert_file_empty "$TMP/mysql-client.log"
+
 run_cli --source invalid
 assert_status 2
 assert_contains "$OUTPUT" 'Source must be local or remote.'
@@ -361,6 +370,23 @@ assert_contains "$OUTPUT" 'Server profile: mysql-8.0+'
 assert_contains "$OUTPUT" 'Binlog format: row'
 assert_file_empty "$TMP/mysql-client.log"
 
+FAKE_MYSQL_IDENTITY=$'8.0.0\t\tROW'
+: > "$TMP/mysql-client.log"
+run_cli --source remote --login-path partial-override-report \
+    --binlog-file mysql-bin.000889 \
+    --server-family mysql --server-version 8.4.6 \
+    --mysqlbinlog-bin "$FAKE_READER" --no-color
+assert_status 0
+assert_contains "$OUTPUT" 'Server family: mysql'
+assert_contains "$OUTPUT" 'Server version: 8.4.6'
+assert_contains "$OUTPUT" 'Binlog format: row'
+assert_contains "$(< "$TMP/mysql-client.log")" '@@version'
+assert_contains "$(< "$TMP/mysql-client.log")" '@@version_comment'
+assert_contains "$(< "$TMP/mysql-client.log")" '@@GLOBAL.binlog_format'
+assert_contains "$(< "$TMP/mysql-client.log")" \
+    $'DISCOVERY_ARG\t--execute=SELECT @@version, @@version_comment, @@GLOBAL.binlog_format'
+FAKE_MYSQL_IDENTITY=$'11.4.2-custom\tMariaDB Server\tMIXED'
+
 : > "$TMP/reader.log"
 : > "$TMP/mysql-client.log"
 run_cli --source remote --login-path remote-report \
@@ -408,6 +434,19 @@ run_cli --source local --file "$TMP/binlog-csv-collision.bin" \
 assert_status 2
 assert_contains "$OUTPUT" 'CSV output must not overwrite an input binlog:'
 assert_equals "$(cksum "$TMP/binlog-csv-collision.bin")" "$collision_before"
+assert_file_empty "$TMP/reader.log"
+
+newline_input="$TMP/"$'binlog\nactivity.bin'
+cp "$MYSQL57_FIXTURE" "$newline_input"
+newline_before=$(cksum "$newline_input")
+: > "$TMP/reader.log"
+run_cli --source local --file "$newline_input" \
+    --server-version 5.7.44 --binlog-format statement \
+    --csv "$TMP/newline-source.csv" \
+    --mysqlbinlog-bin "$FAKE_READER" --no-color
+assert_status 2
+assert_contains "$OUTPUT" 'Input binlog name contains unsupported control characters.'
+assert_equals "$(cksum "$newline_input")" "$newline_before"
 assert_file_empty "$TMP/reader.log"
 
 printf 'PASS: %s assertions\n' "$TEST_COUNT"

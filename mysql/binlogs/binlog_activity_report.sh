@@ -284,6 +284,12 @@ add_unique_input() {
     local candidate=$1
     local existing
 
+    case "$candidate" in
+        *$'\t'*|*$'\r'*|*$'\n'*)
+            usage_error 'Input binlog name contains unsupported control characters.'
+            ;;
+    esac
+
     for existing in "${INPUT_FILES[@]}"; do
         [[ "$existing" != "$candidate" ]] || return 0
     done
@@ -411,7 +417,7 @@ validate_local_arguments() {
 discover_remote_identity() {
     local login_path=$1
     local mysql_client identity
-    local discovered_version discovered_comment discovered_format
+    local discovered_version discovered_comment discovered_format identity_remainder
 
     mysql_client=$(command -v mysql 2>/dev/null || true)
     [[ -n "$mysql_client" ]] \
@@ -424,16 +430,26 @@ discover_remote_identity() {
         runtime_error "Unable to discover remote server identity with login path: $login_path"
     fi
 
-    IFS=$'\t' read -r discovered_version discovered_comment discovered_format <<< "$identity"
-    [[ -n "$discovered_version" && -n "$discovered_comment" \
-        && -n "$discovered_format" ]] \
-        || runtime_error 'Remote identity query returned incomplete data.'
+    case "$identity" in
+        *$'\t'*$'\t'*) ;;
+        *) runtime_error 'Remote identity query returned malformed data.' ;;
+    esac
+    discovered_version=${identity%%$'\t'*}
+    identity_remainder=${identity#*$'\t'}
+    discovered_comment=${identity_remainder%%$'\t'*}
+    discovered_format=${identity_remainder#*$'\t'}
 
-    [[ -n "$SERVER_VERSION" ]] || SERVER_VERSION=$discovered_version
+    if [[ -z "$SERVER_VERSION" ]]; then
+        [[ -n "$discovered_version" ]] \
+            || runtime_error 'Remote identity query did not return a server version.'
+        SERVER_VERSION=$discovered_version
+    fi
     if [[ -z "$SERVER_FAMILY" ]]; then
-        SERVER_FAMILY=$(derive_server_family "$discovered_version $discovered_comment")
+        SERVER_FAMILY=$(derive_server_family "$SERVER_VERSION $discovered_comment")
     fi
     if [[ -z "$BINLOG_FORMAT" ]]; then
+        [[ -n "$discovered_format" ]] \
+            || runtime_error 'Remote identity query did not return a binlog format.'
         BINLOG_FORMAT=$(printf '%s' "$discovered_format" | tr '[:upper:]' '[:lower:]')
     fi
 }
