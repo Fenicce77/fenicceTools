@@ -1,0 +1,472 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": [
+      "_id",
+      "created_at",
+      "feature",
+      "game",
+      "modified_at",
+      "qid"
+    ],
+    "properties": {
+      "_id": {
+        "bsonType": "objectId"
+      },
+      "created_at": {
+        "bsonType": "date"
+      },
+      "feature": {
+        "bsonType": "object",
+        "properties": {
+          "_t": {
+            "bsonType": "string"
+          },
+          "computed": {
+            "bsonType": "date"
+          },
+          "feed": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_t": {
+                  "bsonType": "string"
+                },
+                "id": {
+                  "bsonType": "string"
+                },
+                "margin": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_t": {
+                      "bsonType": "string"
+                    },
+                    "current": {
+                      "bsonType": "double"
+                    },
+                    "method": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "current",
+                    "method"
+                  ]
+                },
+                "odds": {
+                  "bsonType": "object",
+                  "properties": {
+                    "X100": {
+                      "bsonType": "object",
+                      "properties": {
+                        "1": {
+                          "bsonType": "double"
+                        },
+                        "2": {
+                          "bsonType": "double"
+                        },
+                        "away": {
+                          "bsonType": "double"
+                        },
+                        "home": {
+                          "bsonType": "double"
+                        },
+                        "over": {
+                          "bsonType": "double"
+                        },
+                        "under": {
+                          "bsonType": "double"
+                        },
+                        "X": {
+                          "bsonType": "double"
+                        }
+                      }
+                    }
+                  }
+                },
+                "qid": {
+                  "bsonType": "object",
+                  "properties": {
+                    "qualifiers": {
+                      "bsonType": "object",
+                      "properties": {}
+                    }
+                  },
+                  "required": [
+                    "qualifiers"
+                  ]
+                },
+                "selections": {
+                  "bsonType": "array",
+                  "items": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_t": {
+                        "bsonType": "string"
+                      },
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "odds": {
+                        "bsonType": "object",
+                        "properties": {
+                          "fit": {
+                            "bsonType": "double"
+                          },
+                          "raw": {
+                            "bsonType": "double"
+                          }
+                        },
+                        "required": [
+                          "fit",
+                          "raw"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "_t",
+                      "id",
+                      "odds"
+                    ]
+                  }
+                },
+                "spread": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_t": {
+                      "bsonType": "string"
+                    },
+                    "gross": {
+                      "bsonType": "object",
+                      "properties": {
+                        "value": {
+                          "bsonType": "double"
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "gross"
+                  ]
+                }
+              },
+              "required": [
+                "_t",
+                "id",
+                "odds",
+                "qid",
+                "selections"
+              ]
+            }
+          },
+          "id": {
+            "bsonType": "string"
+          },
+          "markets": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_t": {
+                  "bsonType": "string"
+                },
+                "blueprint": {
+                  "bsonType": "object",
+                  "properties": {
+                    "properties": {
+                      "bsonType": "array",
+                      "items": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "absolute": {
+                            "bsonType": "object",
+                            "properties": {
+                              "value": {
+                                "bsonType": "double"
+                              }
+                            },
+                            "required": [
+                              "value"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "absolute"
+                        ]
+                      }
+                    },
+                    "statistics": {
+                      "bsonType": "object",
+                      "properties": {}
+                    },
+                    "type": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "properties",
+                    "statistics",
+                    "type"
+                  ]
+                },
+                "description": {
+                  "bsonType": "string"
+                },
+                "id": {
+                  "bsonType": "string"
+                },
+                "odds": {
+                  "bsonType": "object",
+                  "properties": {}
+                },
+                "qid": {
+                  "bsonType": "object",
+                  "properties": {
+                    "qualifiers": {
+                      "bsonType": "object",
+                      "properties": {}
+                    }
+                  },
+                  "required": [
+                    "qualifiers"
+                  ]
+                },
+                "selections": {
+                  "bsonType": "array",
+                  "items": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_t": {
+                        "bsonType": "string"
+                      },
+                      "description": {
+                        "bsonType": "string"
+                      },
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "odds": {
+                        "bsonType": "object",
+                        "properties": {
+                          "fit": {
+                            "bsonType": "double"
+                          },
+                          "raw": {
+                            "bsonType": "double"
+                          }
+                        },
+                        "required": [
+                          "fit",
+                          "raw"
+                        ]
+                      },
+                      "probability": {
+                        "bsonType": "double"
+                      }
+                    },
+                    "required": [
+                      "_t",
+                      "id",
+                      "odds",
+                      "probability"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "_t",
+                "blueprint",
+                "id",
+                "odds",
+                "qid",
+                "selections"
+              ]
+            }
+          },
+          "parameters": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_t": {
+                  "bsonType": "string"
+                },
+                "id": {
+                  "bsonType": "string"
+                },
+                "value": {
+                  "bsonType": "object",
+                  "properties": {
+                    "bias": {
+                      "bsonType": "double"
+                    },
+                    "fit": {
+                      "bsonType": "double"
+                    },
+                    "lock": {
+                      "bsonType": "object",
+                      "properties": {
+                        "_t": {
+                          "bsonType": "string"
+                        },
+                        "to": {
+                          "bsonType": "object",
+                          "properties": {
+                            "domain": {
+                              "bsonType": "string"
+                            },
+                            "period": {
+                              "bsonType": "string"
+                            },
+                            "topic": {
+                              "bsonType": "string"
+                            }
+                          },
+                          "required": [
+                            "domain",
+                            "period",
+                            "topic"
+                          ]
+                        },
+                        "value": {
+                          "bsonType": "double"
+                        },
+                        "weight": {
+                          "bsonType": "double"
+                        }
+                      },
+                      "required": [
+                        "_t"
+                      ]
+                    },
+                    "maximum": {
+                      "bsonType": "object",
+                      "properties": {
+                        "_t": {
+                          "bsonType": "string"
+                        },
+                        "value": {
+                          "bsonType": "double"
+                        }
+                      },
+                      "required": [
+                        "_t",
+                        "value"
+                      ]
+                    },
+                    "minimum": {
+                      "bsonType": "object",
+                      "properties": {
+                        "_t": {
+                          "bsonType": "string"
+                        },
+                        "value": {
+                          "bsonType": "double"
+                        }
+                      },
+                      "required": [
+                        "_t",
+                        "value"
+                      ]
+                    },
+                    "raw": {
+                      "bsonType": "double"
+                    }
+                  },
+                  "required": [
+                    "fit",
+                    "raw"
+                  ]
+                }
+              },
+              "required": [
+                "_t",
+                "id",
+                "value"
+              ]
+            }
+          },
+          "qid": {
+            "bsonType": "object",
+            "properties": {
+              "domain": {
+                "bsonType": "string"
+              },
+              "period": {
+                "bsonType": "string"
+              },
+              "topic": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "domain",
+              "period",
+              "topic"
+            ]
+          },
+          "size": {
+            "bsonType": "object",
+            "properties": {
+              "away": {
+                "bsonType": "int"
+              },
+              "home": {
+                "bsonType": "int"
+              }
+            },
+            "required": [
+              "away",
+              "home"
+            ]
+          }
+        },
+        "required": [
+          "_t",
+          "computed",
+          "feed",
+          "id",
+          "markets",
+          "parameters",
+          "qid",
+          "size"
+        ]
+      },
+      "game": {
+        "bsonType": "string"
+      },
+      "modified_at": {
+        "bsonType": "date"
+      },
+      "qid": {
+        "bsonType": "object",
+        "properties": {
+          "domain": {
+            "bsonType": "string"
+          },
+          "period": {
+            "bsonType": "string"
+          },
+          "topic": {
+            "bsonType": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "period",
+          "topic"
+        ]
+      }
+    }
+  }
+}

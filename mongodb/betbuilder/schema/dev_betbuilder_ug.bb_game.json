@@ -1,0 +1,741 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": [
+      "_id",
+      "created_at",
+      "meta",
+      "modified_at"
+    ],
+    "properties": {
+      "_id": {
+        "bsonType": "objectId"
+      },
+      "created_at": {
+        "bsonType": "date"
+      },
+      "meta": {
+        "bsonType": "object",
+        "properties": {
+          "description": {
+            "bsonType": "string"
+          },
+          "fixture": {
+            "bsonType": "object",
+            "properties": {
+              "_t": {
+                "bsonType": "string"
+              },
+              "date": {
+                "bsonType": "date"
+              },
+              "partakers": {
+                "bsonType": "array"
+              }
+            },
+            "required": [
+              "_t",
+              "partakers"
+            ]
+          },
+          "id": {
+            "bsonType": "string"
+          },
+          "management": {
+            "bsonType": "object",
+            "properties": {
+              "spawnTemplate": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "spawnTemplate"
+            ]
+          },
+          "progress": {
+            "bsonType": "object",
+            "properties": {
+              "currentPeriod": {
+                "bsonType": "string"
+              },
+              "live": {
+                "bsonType": "object",
+                "properties": {
+                  "id": {
+                    "bsonType": "string"
+                  },
+                  "score": {
+                    "bsonType": "object",
+                    "properties": {}
+                  },
+                  "time": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_t": {
+                        "bsonType": "string"
+                      },
+                      "elapsed": {
+                        "bsonType": "string"
+                      },
+                      "stoppage": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_t",
+                      "elapsed",
+                      "stoppage"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "score",
+                  "time"
+                ]
+              },
+              "periods": {
+                "bsonType": "object",
+                "properties": {
+                  "1x": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "2x": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "abandoned": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "ap": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "awet": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "awp": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "cancelled": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "ended": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "ht": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "htb": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "interrupted": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "pe": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "postponed": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "pregame": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "sh": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "xht": {
+                    "bsonType": "object",
+                    "properties": {
+                      "id": {
+                        "bsonType": "string"
+                      },
+                      "score": {
+                        "bsonType": "object",
+                        "properties": {}
+                      },
+                      "time": {
+                        "bsonType": "object",
+                        "properties": {
+                          "_t": {
+                            "bsonType": "string"
+                          },
+                          "elapsed": {
+                            "bsonType": "string"
+                          },
+                          "stoppage": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  }
+                },
+                "required": [
+                  "1x",
+                  "2x",
+                  "abandoned",
+                  "ap",
+                  "awet",
+                  "awp",
+                  "cancelled",
+                  "ended",
+                  "ht",
+                  "htb",
+                  "interrupted",
+                  "pe",
+                  "postponed",
+                  "pregame",
+                  "sh",
+                  "xht"
+                ]
+              }
+            },
+            "required": [
+              "currentPeriod",
+              "live",
+              "periods"
+            ]
+          },
+          "timestamps": {
+            "bsonType": "object",
+            "properties": {
+              "_t": {
+                "bsonType": "string"
+              },
+              "computed": {
+                "bsonType": "date"
+              },
+              "feed": {
+                "bsonType": "date"
+              },
+              "fetched": {
+                "bsonType": "date"
+              }
+            },
+            "required": [
+              "_t",
+              "computed",
+              "feed",
+              "fetched"
+            ]
+          }
+        },
+        "required": [
+          "description",
+          "fixture",
+          "id",
+          "management",
+          "progress",
+          "timestamps"
+        ]
+      },
+      "modified_at": {
+        "bsonType": "date"
+      }
+    }
+  }
+}

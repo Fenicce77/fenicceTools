@@ -1,0 +1,590 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": [
+      "_id",
+      "created_at",
+      "description",
+      "domain",
+      "id",
+      "mapping",
+      "modified_at",
+      "period",
+      "stateMachine",
+      "topic",
+      "typing"
+    ],
+    "properties": {
+      "_id": {
+        "bsonType": "objectId"
+      },
+      "created_at": {
+        "bsonType": "date"
+      },
+      "description": {
+        "bsonType": "string"
+      },
+      "domain": {
+        "bsonType": "array",
+        "items": {
+          "bsonType": "object",
+          "properties": {
+            "description": {
+              "bsonType": "string"
+            },
+            "id": {
+              "bsonType": "string"
+            }
+          },
+          "required": [
+            "description",
+            "id"
+          ]
+        }
+      },
+      "id": {
+        "bsonType": "string"
+      },
+      "mapping": {
+        "bsonType": "object",
+        "properties": {
+          "betradar": {
+            "bsonType": "object",
+            "properties": {
+              "_t": {
+                "bsonType": "string"
+              },
+              "highlight": {
+                "bsonType": "object",
+                "properties": {}
+              },
+              "id": {
+                "bsonType": "string"
+              },
+              "periods": {
+                "bsonType": "object",
+                "properties": {}
+              },
+              "seeds": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_t": {
+                      "bsonType": "string"
+                    },
+                    "id": {
+                      "bsonType": "string"
+                    },
+                    "outcomes": {
+                      "bsonType": "object",
+                      "properties": {
+                        "1": {
+                          "bsonType": "string"
+                        },
+                        "2": {
+                          "bsonType": "string"
+                        },
+                        "3": {
+                          "bsonType": "string"
+                        },
+                        "12": {
+                          "bsonType": "string"
+                        },
+                        "13": {
+                          "bsonType": "string"
+                        },
+                        "1714": {
+                          "bsonType": "string"
+                        },
+                        "1715": {
+                          "bsonType": "string"
+                        },
+                        "player": {
+                          "bsonType": "string"
+                        }
+                      }
+                    },
+                    "qid": {
+                      "bsonType": "object",
+                      "properties": {
+                        "qualifiers": {
+                          "bsonType": "object",
+                          "properties": {
+                            "domain": {
+                              "bsonType": "string"
+                            },
+                            "market": {
+                              "bsonType": "string"
+                            },
+                            "period": {
+                              "bsonType": "string"
+                            },
+                            "player": {
+                              "bsonType": "string"
+                            },
+                            "side": {
+                              "bsonType": "string"
+                            },
+                            "topic": {
+                              "bsonType": "string"
+                            }
+                          },
+                          "required": [
+                            "domain",
+                            "market",
+                            "period",
+                            "topic"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "qualifiers"
+                      ]
+                    },
+                    "specifiers": {
+                      "bsonType": "object",
+                      "properties": {
+                        "hcp": {
+                          "bsonType": "string"
+                        },
+                        "total": {
+                          "bsonType": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "id",
+                    "outcomes",
+                    "qid",
+                    "specifiers"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "_t",
+              "highlight",
+              "id",
+              "periods",
+              "seeds"
+            ]
+          }
+        },
+        "required": [
+          "betradar"
+        ]
+      },
+      "modified_at": {
+        "bsonType": "date"
+      },
+      "period": {
+        "bsonType": "array",
+        "items": {
+          "bsonType": "object",
+          "properties": {
+            "contains": {
+              "bsonType": "array"
+            },
+            "description": {
+              "bsonType": "string"
+            },
+            "id": {
+              "bsonType": "string"
+            },
+            "level": {
+              "bsonType": "int"
+            },
+            "normal": {
+              "bsonType": "bool"
+            }
+          },
+          "required": [
+            "contains",
+            "description",
+            "id",
+            "level",
+            "normal"
+          ]
+        }
+      },
+      "stateMachine": {
+        "bsonType": "object",
+        "properties": {
+          "aliases": {
+            "bsonType": "object",
+            "properties": {
+              "0": {
+                "bsonType": "string"
+              },
+              "6": {
+                "bsonType": "string"
+              },
+              "7": {
+                "bsonType": "string"
+              },
+              "31": {
+                "bsonType": "string"
+              },
+              "32": {
+                "bsonType": "string"
+              },
+              "33": {
+                "bsonType": "string"
+              },
+              "34": {
+                "bsonType": "string"
+              },
+              "40": {
+                "bsonType": "string"
+              },
+              "41": {
+                "bsonType": "string"
+              },
+              "42": {
+                "bsonType": "string"
+              },
+              "50": {
+                "bsonType": "string"
+              },
+              "60": {
+                "bsonType": "string"
+              },
+              "70": {
+                "bsonType": "string"
+              },
+              "80": {
+                "bsonType": "string"
+              },
+              "90": {
+                "bsonType": "string"
+              },
+              "100": {
+                "bsonType": "string"
+              },
+              "110": {
+                "bsonType": "string"
+              },
+              "120": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "0",
+              "100",
+              "110",
+              "120",
+              "31",
+              "32",
+              "33",
+              "34",
+              "40",
+              "41",
+              "42",
+              "50",
+              "6",
+              "60",
+              "7",
+              "70",
+              "80",
+              "90"
+            ]
+          },
+          "inclusions": {
+            "bsonType": "object",
+            "properties": {
+              "aet": {
+                "bsonType": "object",
+                "properties": {
+                  "contains": {
+                    "bsonType": "array"
+                  },
+                  "partition": {
+                    "bsonType": "array",
+                    "items": {
+                      "bsonType": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              },
+              "ft": {
+                "bsonType": "object",
+                "properties": {
+                  "contains": {
+                    "bsonType": "array"
+                  },
+                  "partition": {
+                    "bsonType": "array",
+                    "items": {
+                      "bsonType": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              },
+              "live": {
+                "bsonType": "object",
+                "properties": {
+                  "contains": {
+                    "bsonType": "array"
+                  },
+                  "partition": {
+                    "bsonType": "array",
+                    "items": {
+                      "bsonType": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              },
+              "overtime": {
+                "bsonType": "object",
+                "properties": {
+                  "contains": {
+                    "bsonType": "array",
+                    "items": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "partition": {
+                    "bsonType": "array",
+                    "items": {
+                      "bsonType": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              }
+            },
+            "required": [
+              "aet",
+              "ft",
+              "live",
+              "overtime"
+            ]
+          },
+          "periods": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "description": {
+                  "bsonType": "string"
+                },
+                "duration": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_t": {
+                      "bsonType": "string"
+                    },
+                    "time": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "time"
+                  ]
+                },
+                "id": {
+                  "bsonType": "string"
+                },
+                "level": {
+                  "bsonType": "int"
+                },
+                "normal": {
+                  "bsonType": "bool"
+                },
+                "progressRole": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "description",
+                "id",
+                "level",
+                "normal",
+                "progressRole"
+              ]
+            }
+          },
+          "transitions": {
+            "bsonType": "object",
+            "properties": {
+              "exceptional": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_t": {
+                      "bsonType": "string"
+                    },
+                    "fanOut": {
+                      "bsonType": "array",
+                      "items": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "from": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "fanOut",
+                    "from"
+                  ]
+                }
+              },
+              "normal": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_t": {
+                      "bsonType": "string"
+                    },
+                    "chain": {
+                      "bsonType": "array",
+                      "items": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "from": {
+                      "bsonType": "string"
+                    },
+                    "to": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_t"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "exceptional",
+              "normal"
+            ]
+          }
+        },
+        "required": [
+          "aliases",
+          "inclusions",
+          "periods",
+          "transitions"
+        ]
+      },
+      "topic": {
+        "bsonType": "array",
+        "items": {
+          "bsonType": "object",
+          "properties": {
+            "description": {
+              "bsonType": "string"
+            },
+            "id": {
+              "bsonType": "string"
+            }
+          },
+          "required": [
+            "description",
+            "id"
+          ]
+        }
+      },
+      "typing": {
+        "bsonType": "array",
+        "items": {
+          "bsonType": "object",
+          "properties": {
+            "_t": {
+              "bsonType": "string"
+            },
+            "computed": {
+              "bsonType": "date"
+            },
+            "feed": {
+              "bsonType": "array"
+            },
+            "id": {
+              "bsonType": "string"
+            },
+            "markets": {
+              "bsonType": "array"
+            },
+            "parameters": {
+              "bsonType": "array"
+            },
+            "qid": {
+              "bsonType": "object",
+              "properties": {
+                "domain": {
+                  "bsonType": "string"
+                },
+                "period": {
+                  "bsonType": "string"
+                },
+                "player": {
+                  "bsonType": "string"
+                },
+                "side": {
+                  "bsonType": "string"
+                },
+                "topic": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "domain",
+                "period",
+                "topic"
+              ]
+            },
+            "size": {
+              "bsonType": "object",
+              "properties": {
+                "away": {
+                  "bsonType": "int"
+                },
+                "home": {
+                  "bsonType": "int"
+                }
+              },
+              "required": [
+                "away",
+                "home"
+              ]
+            }
+          },
+          "required": [
+            "_t",
+            "computed",
+            "feed",
+            "id",
+            "markets",
+            "parameters",
+            "qid",
+            "size"
+          ]
+        }
+      }
+    }
+  }
+}

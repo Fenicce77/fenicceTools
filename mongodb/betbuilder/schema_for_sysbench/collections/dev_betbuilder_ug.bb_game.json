@@ -1,0 +1,742 @@
+[
+  {
+    "database": "dev_betbuilder_ug",
+    "collection": "bb_game",
+    "required": [
+      "_id",
+      "created_at",
+      "meta",
+      "modified_at"
+    ],
+    "fields": {
+      "_id": {
+        "type": "objectId"
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "meta": {
+        "type": "object",
+        "fields": {
+          "description": {
+            "type": "string"
+          },
+          "fixture": {
+            "type": "object",
+            "fields": {
+              "_t": {
+                "type": "string"
+              },
+              "date": {
+                "type": "date"
+              },
+              "partakers": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "_t",
+              "partakers"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "management": {
+            "type": "object",
+            "fields": {
+              "spawnTemplate": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "spawnTemplate"
+            ]
+          },
+          "progress": {
+            "type": "object",
+            "fields": {
+              "currentPeriod": {
+                "type": "string"
+              },
+              "live": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "score": {
+                    "type": "object",
+                    "fields": {}
+                  },
+                  "time": {
+                    "type": "object",
+                    "fields": {
+                      "_t": {
+                        "type": "string"
+                      },
+                      "elapsed": {
+                        "type": "string"
+                      },
+                      "stoppage": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "_t",
+                      "elapsed",
+                      "stoppage"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "score",
+                  "time"
+                ]
+              },
+              "periods": {
+                "type": "object",
+                "fields": {
+                  "1x": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "2x": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "abandoned": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "ap": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "awet": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "awp": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "cancelled": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "ended": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "ht": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "htb": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "interrupted": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "pe": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "postponed": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "pregame": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "sh": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  },
+                  "xht": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "score": {
+                        "type": "object",
+                        "fields": {}
+                      },
+                      "time": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "elapsed": {
+                            "type": "string"
+                          },
+                          "stoppage": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "elapsed",
+                          "stoppage"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "score",
+                      "time"
+                    ]
+                  }
+                },
+                "required": [
+                  "1x",
+                  "2x",
+                  "abandoned",
+                  "ap",
+                  "awet",
+                  "awp",
+                  "cancelled",
+                  "ended",
+                  "ht",
+                  "htb",
+                  "interrupted",
+                  "pe",
+                  "postponed",
+                  "pregame",
+                  "sh",
+                  "xht"
+                ]
+              }
+            },
+            "required": [
+              "currentPeriod",
+              "live",
+              "periods"
+            ]
+          },
+          "timestamps": {
+            "type": "object",
+            "fields": {
+              "_t": {
+                "type": "string"
+              },
+              "computed": {
+                "type": "date"
+              },
+              "feed": {
+                "type": "date"
+              },
+              "fetched": {
+                "type": "date"
+              }
+            },
+            "required": [
+              "_t",
+              "computed",
+              "feed",
+              "fetched"
+            ]
+          }
+        },
+        "required": [
+          "description",
+          "fixture",
+          "id",
+          "management",
+          "progress",
+          "timestamps"
+        ]
+      },
+      "modified_at": {
+        "type": "date"
+      }
+    }
+  }
+]

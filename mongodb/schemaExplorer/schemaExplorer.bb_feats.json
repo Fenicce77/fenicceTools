@@ -1,0 +1,126 @@
+[
+  {
+    "database": "dev_betbuilder_ug",
+    "collection": "bb_feats",
+    "fields":  
+    {
+      "_id": "objectid",
+      "created_at": "date",
+      "feature": {
+        "type": "object",
+        "properties": {
+          "_t": "string",
+          "computed": "date",
+          "feed": {
+            "type": "array",
+            "items": "empty"
+          },
+          "id": "string",
+          "markets": {
+            "type": "array",
+            "items": {
+              "_t": "string",
+              "blueprint": {
+                "type": "object",
+                "properties": {
+                  "properties": {
+                    "type": "array",
+                    "items": "empty"
+                  },
+                  "statistics": {
+                    "type": "object",
+                    "properties": {}
+                  },
+                  "type": "string"
+                }
+              },
+              "id": "string",
+              "odds": {
+                "type": "object",
+                "properties": {}
+              },
+              "qid": {
+                "type": "object",
+                "properties": {
+                  "qualifiers": {
+                    "type": "object",
+                    "properties": {}
+                  }
+                }
+              },
+              "selections": {
+                "type": "array",
+                "items": {
+                  "_t": "string",
+                  "id": "string",
+                  "odds": {
+                    "type": "object",
+                    "properties": {
+                      "fit": "Number",
+                      "raw": "Number"
+                    }
+                  },
+                  "probability": "Number"
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "_t": "string",
+              "id": "string",
+              "value": {
+                "type": "object",
+                "properties": {
+                  "fit": "Number",
+                  "lock": {
+                    "type": "object",
+                    "properties": {
+                      "_t": "string",
+                      "to": {
+                        "type": "object",
+                        "properties": {
+                          "domain": "string",
+                          "period": "string",
+                          "topic": "string"
+                        }
+                      },
+                      "weight": "Number"
+                    }
+                  },
+                  "raw": "Number"
+                }
+              }
+            }
+          },
+          "qid": {
+            "type": "object",
+            "properties": {
+              "domain": "string",
+              "period": "string",
+              "topic": "string"
+            }
+          },
+          "size": {
+            "type": "object",
+            "properties": {
+              "away": "Number",
+              "home": "Number"
+            }
+          }
+        }
+      },
+      "game": "string",
+      "modified_at": "date",
+      "qid": {
+        "type": "object",
+        "properties": {
+          "domain": "string",
+          "period": "string",
+          "topic": "string"
+        }
+      }
+    }
+  }
+]

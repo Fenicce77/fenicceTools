@@ -1,0 +1,2 @@
+# <instance|alias>:<source_db>=<target_db>
+cd02:secure=cd02_secure_vault

@@ -1,0 +1,123 @@
+[
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "users",
+        "operation": "find",
+        "filter": {
+            "id": "<string>"
+        },
+        "batchSize": 64
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "templates",
+        "operation": "find",
+        "filter": {
+            "meta.id": "<string>"
+        }
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "sport",
+        "operation": "find",
+        "filter": {
+            "id": "<string>"
+        },
+        "batchSize": 64
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "games",
+        "operation": "aggregate",
+        "pipeline": [
+            {
+                "$match": {
+                "meta.id": {
+                  "$in": "<int>"
+                }
+              }
+            },
+            {
+                "$skip": 0
+            },
+            {
+                "$limit": 20
+            },
+            {
+                "$lookup": {
+                "from": "features",
+                "localField": "meta.id",
+                "foreignField": "game",
+                "as": "features"
+              }
+            },
+            {
+                "$project":{
+                    "meta":"$meta",
+                    "features": "$$ROOT.features.feature"
+                }
+
+            },
+            {
+              "$lookup": {
+                "from": "features",
+                "localField": "meta.id",
+                "foreignField": "game",
+                "as": "features"
+              }
+            },
+            {
+                "$sort": {
+                    "meta.timestamps.feed": 1
+                }
+            }
+        ]
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "betslips",
+        "operation": "aggregate",
+        "pipeline": [
+            {
+                "$match": {
+                 "$and": [
+                    {
+                        "signature": "<int>"
+                    },
+                    {
+                        "game": "<int>"
+                    }
+                  ]
+                }
+            }
+        ],
+        "cursor": {
+        "batchSize": 64
+        }
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "games",
+        "operation": "aggregate",
+        "pipeline": [
+            {
+                "$match": {
+                    "$and": [
+                        {
+                            "meta.fixture.date": 
+                            {
+                                "$lt": 
+                                {
+                                    "$date": "<date>"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "cursor": {
+        "batchSize": 64
+        }
+    }
+]

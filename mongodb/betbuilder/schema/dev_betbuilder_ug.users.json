@@ -1,0 +1,36 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": [
+      "_id",
+      "confidentiality",
+      "created_at",
+      "id",
+      "modified_at",
+      "psw"
+    ],
+    "properties": {
+      "_id": {
+        "bsonType": "objectId"
+      },
+      "confidentiality": {
+        "bsonType": "int"
+      },
+      "created_at": {
+        "bsonType": "date"
+      },
+      "id": {
+        "bsonType": "string"
+      },
+      "modified_at": {
+        "bsonType": "date"
+      },
+      "psw": {
+        "bsonType": "array",
+        "items": {
+          "bsonType": "int"
+        }
+      }
+    }
+  }
+}

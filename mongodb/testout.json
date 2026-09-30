@@ -1,0 +1,17 @@
+[
+  {
+    _id: ObjectId('6941f2a5a588ab0c00aa3b00'),
+    opid: '6941f2a4ae1aff61a19956a2',
+    name: '2025-12-17T00:00:36Z',
+    replsets: [
+      {
+        node: 'devel-gcssmongodb01-node02.betika.private:27017'
+      }
+    ],
+    n: [
+      {
+        ack: 'devel-gcssmongodb01-node02.betika.private:27017'
+      }
+    ]
+  }
+]

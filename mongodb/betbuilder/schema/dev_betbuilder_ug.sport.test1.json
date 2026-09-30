@@ -1,0 +1,592 @@
+[
+  {
+    "database": "dev_betbuilder_ug",
+    "collection": "sport",
+    "type": "object",
+    "required": [
+      "_id",
+      "created_at",
+      "description",
+      "domain",
+      "id",
+      "mapping",
+      "modified_at",
+      "period",
+      "stateMachine",
+      "topic",
+      "typing"
+    ],
+    "fields": {
+      "_id": {
+        "type": "objectId"
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "description": {
+        "type": "string"
+      },
+      "domain": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "fields": {
+            "description": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "description",
+            "id"
+          ]
+        }
+      },
+      "id": {
+        "type": "string"
+      },
+      "mapping": {
+        "type": "object",
+        "fields": {
+          "betradar": {
+            "type": "object",
+            "fields": {
+              "_t": {
+                "type": "string"
+              },
+              "highlight": {
+                "type": "object",
+                "fields": {}
+              },
+              "id": {
+                "type": "string"
+              },
+              "periods": {
+                "type": "object",
+                "fields": {}
+              },
+              "seeds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "fields": {
+                    "_t": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "outcomes": {
+                      "type": "object",
+                      "fields": {
+                        "1": {
+                          "type": "string"
+                        },
+                        "2": {
+                          "type": "string"
+                        },
+                        "3": {
+                          "type": "string"
+                        },
+                        "12": {
+                          "type": "string"
+                        },
+                        "13": {
+                          "type": "string"
+                        },
+                        "1714": {
+                          "type": "string"
+                        },
+                        "1715": {
+                          "type": "string"
+                        },
+                        "player": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "qid": {
+                      "type": "object",
+                      "fields": {
+                        "qualifiers": {
+                          "type": "object",
+                          "fields": {
+                            "domain": {
+                              "type": "string"
+                            },
+                            "market": {
+                              "type": "string"
+                            },
+                            "period": {
+                              "type": "string"
+                            },
+                            "player": {
+                              "type": "string"
+                            },
+                            "side": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "domain",
+                            "market",
+                            "period",
+                            "topic"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "qualifiers"
+                      ]
+                    },
+                    "specifiers": {
+                      "type": "object",
+                      "fields": {
+                        "hcp": {
+                          "type": "string"
+                        },
+                        "total": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "id",
+                    "outcomes",
+                    "qid",
+                    "specifiers"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "_t",
+              "highlight",
+              "id",
+              "periods",
+              "seeds"
+            ]
+          }
+        },
+        "required": [
+          "betradar"
+        ]
+      },
+      "modified_at": {
+        "type": "date"
+      },
+      "period": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "fields": {
+            "contains": {
+              "type": "array"
+            },
+            "description": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "level": {
+              "type": "int"
+            },
+            "normal": {
+              "type": "bool"
+            }
+          },
+          "required": [
+            "contains",
+            "description",
+            "id",
+            "level",
+            "normal"
+          ]
+        }
+      },
+      "stateMachine": {
+        "type": "object",
+        "fields": {
+          "aliases": {
+            "type": "object",
+            "fields": {
+              "0": {
+                "type": "string"
+              },
+              "6": {
+                "type": "string"
+              },
+              "7": {
+                "type": "string"
+              },
+              "31": {
+                "type": "string"
+              },
+              "32": {
+                "type": "string"
+              },
+              "33": {
+                "type": "string"
+              },
+              "34": {
+                "type": "string"
+              },
+              "40": {
+                "type": "string"
+              },
+              "41": {
+                "type": "string"
+              },
+              "42": {
+                "type": "string"
+              },
+              "50": {
+                "type": "string"
+              },
+              "60": {
+                "type": "string"
+              },
+              "70": {
+                "type": "string"
+              },
+              "80": {
+                "type": "string"
+              },
+              "90": {
+                "type": "string"
+              },
+              "100": {
+                "type": "string"
+              },
+              "110": {
+                "type": "string"
+              },
+              "120": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "0",
+              "100",
+              "110",
+              "120",
+              "31",
+              "32",
+              "33",
+              "34",
+              "40",
+              "41",
+              "42",
+              "50",
+              "6",
+              "60",
+              "7",
+              "70",
+              "80",
+              "90"
+            ]
+          },
+          "inclusions": {
+            "type": "object",
+            "fields": {
+              "aet": {
+                "type": "object",
+                "fields": {
+                  "contains": {
+                    "type": "array"
+                  },
+                  "partition": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              },
+              "ft": {
+                "type": "object",
+                "fields": {
+                  "contains": {
+                    "type": "array"
+                  },
+                  "partition": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              },
+              "live": {
+                "type": "object",
+                "fields": {
+                  "contains": {
+                    "type": "array"
+                  },
+                  "partition": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              },
+              "overtime": {
+                "type": "object",
+                "fields": {
+                  "contains": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "partition": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "contains",
+                  "partition"
+                ]
+              }
+            },
+            "required": [
+              "aet",
+              "ft",
+              "live",
+              "overtime"
+            ]
+          },
+          "periods": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "fields": {
+                "description": {
+                  "type": "string"
+                },
+                "duration": {
+                  "type": "object",
+                  "fields": {
+                    "_t": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "time"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "level": {
+                  "type": "int"
+                },
+                "normal": {
+                  "type": "bool"
+                },
+                "progressRole": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "description",
+                "id",
+                "level",
+                "normal",
+                "progressRole"
+              ]
+            }
+          },
+          "transitions": {
+            "type": "object",
+            "fields": {
+              "exceptional": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "fields": {
+                    "_t": {
+                      "type": "string"
+                    },
+                    "fanOut": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "from": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "_t",
+                    "fanOut",
+                    "from"
+                  ]
+                }
+              },
+              "normal": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "fields": {
+                    "_t": {
+                      "type": "string"
+                    },
+                    "chain": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "_t"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "exceptional",
+              "normal"
+            ]
+          }
+        },
+        "required": [
+          "aliases",
+          "inclusions",
+          "periods",
+          "transitions"
+        ]
+      },
+      "topic": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "fields": {
+            "description": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "description",
+            "id"
+          ]
+        }
+      },
+      "typing": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "fields": {
+            "_t": {
+              "type": "string"
+            },
+            "computed": {
+              "type": "date"
+            },
+            "feed": {
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "markets": {
+              "type": "array"
+            },
+            "parameters": {
+              "type": "array"
+            },
+            "qid": {
+              "type": "object",
+              "fields": {
+                "domain": {
+                  "type": "string"
+                },
+                "period": {
+                  "type": "string"
+                },
+                "player": {
+                  "type": "string"
+                },
+                "side": {
+                  "type": "string"
+                },
+                "topic": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "domain",
+                "period",
+                "topic"
+              ]
+            },
+            "size": {
+              "type": "object",
+              "fields": {
+                "away": {
+                  "type": "int"
+                },
+                "home": {
+                  "type": "int"
+                }
+              },
+              "required": [
+                "away",
+                "home"
+              ]
+            }
+          },
+          "required": [
+            "_t",
+            "computed",
+            "feed",
+            "id",
+            "markets",
+            "parameters",
+            "qid",
+            "size"
+          ]
+        }
+      }
+    }
+  }
+]

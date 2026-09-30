@@ -1,0 +1,9 @@
+#!/opt/homebrew/bin/bash
+
+MONGOSHBINPATH=`which mongosh`
+export MONGOADMINUSR="mongoAdmin"
+export MONGOADMINPAS="tAvgBJTFY8EVBKf0SL3GEQ=="
+export ADMINDB="admin"
+export MONGOHOST="develrsgcss/devel-gcssmongodb01-node01.betika.private,devel-gcssmongodb01-node02.betika.private,devel-gcssmongodb01-node03.betika.private"
+
+${MONGOSHBINPATH} --host="${MONGOHOST}" --authenticationDatabase=${ADMINDB} -u ${MONGOADMINUSR} --password="${MONGOADMINPAS}" ${ADMINDB} 

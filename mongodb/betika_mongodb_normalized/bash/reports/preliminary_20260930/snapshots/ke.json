@@ -1,0 +1,1794 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "bash",
+  "instance": {
+    "name": "ke",
+    "alias": "ke",
+    "role": "source",
+    "conf_file": "conf//ke.conf",
+    "uri": "mongodb://ke-mongodbcluster01.betika.private:27017,ke-mongodbcluster02.betika.private:27017,ke-mongodbcluster03.betika.private:27017/?replicaSet=ke-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000"
+  },
+  "collected_at": "2026-09-30T17:15:02Z",
+  "status": "ok",
+  "error": null,
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5
+  },
+  "server": {
+    "version": "4.4.3",
+    "fcv": "4.4",
+    "set_name": "ke-mongodbcluster",
+    "storage_engine": "wiredTiger",
+    "topology": "replicaset"
+  },
+  "databases": [
+    {
+      "name": "betika_favorites",
+      "size_on_disk": 65536,
+      "empty": false,
+      "collections": [
+        {
+          "name": "favorites",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 3,
+            "size": 1309,
+            "storage_size": 32768,
+            "total_index_size": 32768,
+            "avg_obj_size": 436
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 3,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 3,
+                "types": {
+                  "string": 3
+                }
+              },
+              "markets": {
+                "count": 3,
+                "types": {
+                  "array": 3
+                }
+              },
+              "markets[]": {
+                "count": 3,
+                "types": {
+                  "object": 3
+                }
+              },
+              "markets[].name": {
+                "count": 3,
+                "types": {
+                  "string": 3
+                }
+              },
+              "markets[].sub_type_id": {
+                "count": 3,
+                "types": {
+                  "string": 3
+                }
+              }
+            }
+          },
+          "schema_error": null
+        }
+      ]
+    },
+    {
+      "name": "betika_help_center",
+      "size_on_disk": 10452992,
+      "empty": false,
+      "collections": [
+        {
+          "name": "kb",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 29,
+            "size": 78395,
+            "storage_size": 94208,
+            "total_index_size": 36864,
+            "avg_obj_size": 2703
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 29,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 29,
+                "types": {
+                  "objectId": 29
+                }
+              },
+              "kb_author": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_author_email": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_body": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_featured": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_keywords": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_last_update_user": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_last_updated": {
+                "count": 29,
+                "types": {
+                  "date": 29
+                }
+              },
+              "kb_password": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_permalink": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_published": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_published_date": {
+                "count": 29,
+                "types": {
+                  "date": 29
+                }
+              },
+              "kb_seo_description": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_seo_title": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_title": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_viewcount": {
+                "count": 28,
+                "types": {
+                  "int": 28
+                }
+              },
+              "kb_visible_state": {
+                "count": 29,
+                "types": {
+                  "string": 29
+                }
+              },
+              "kb_votes": {
+                "count": 28,
+                "types": {
+                  "int": 28
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "users",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 4,
+            "size": 774,
+            "storage_size": 32768,
+            "total_index_size": 32768,
+            "avg_obj_size": 193
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 4,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 4,
+                "types": {
+                  "objectId": 4
+                }
+              },
+              "is_admin": {
+                "count": 4,
+                "types": {
+                  "string": 4
+                }
+              },
+              "user_email": {
+                "count": 4,
+                "types": {
+                  "string": 4
+                }
+              },
+              "user_password": {
+                "count": 4,
+                "types": {
+                  "string": 4
+                }
+              },
+              "users_name": {
+                "count": 4,
+                "types": {
+                  "string": 4
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "votes",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 124802,
+            "size": 13478616,
+            "storage_size": 6889472,
+            "total_index_size": 3031040,
+            "avg_obj_size": 108
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 100,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 100,
+                "types": {
+                  "objectId": 100
+                }
+              },
+              "doc_id": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "session_id": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              }
+            }
+          },
+          "schema_error": null
+        }
+      ]
+    },
+    {
+      "name": "recon-engine",
+      "size_on_disk": 541392896,
+      "empty": false,
+      "collections": [
+        {
+          "name": "recon.config.doc.extension",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 2,
+            "size": 409,
+            "storage_size": 32768,
+            "total_index_size": 32768,
+            "avg_obj_size": 204
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 2,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 2,
+                "types": {
+                  "objectId": 2
+                }
+              },
+              "extensions": {
+                "count": 2,
+                "types": {
+                  "array": 2
+                }
+              },
+              "extensions[]": {
+                "count": 2,
+                "types": {
+                  "object": 2
+                }
+              },
+              "extensions[].name": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              },
+              "extensions[].suppored": {
+                "count": 2,
+                "types": {
+                  "bool": 2
+                }
+              },
+              "extensions[].type": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              },
+              "id": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              },
+              "typeid": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.doc.type",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 2,
+            "size": 146,
+            "storage_size": 32768,
+            "total_index_size": 32768,
+            "avg_obj_size": 73
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 2,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 2,
+                "types": {
+                  "objectId": 2
+                }
+              },
+              "id": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              },
+              "name": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.field",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 5,
+            "size": 461,
+            "storage_size": 36864,
+            "total_index_size": 36864,
+            "avg_obj_size": 92
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 5,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 5,
+                "types": {
+                  "objectId": 5
+                }
+              },
+              "default": {
+                "count": 5,
+                "types": {
+                  "bool": 5
+                }
+              },
+              "enabled": {
+                "count": 5,
+                "types": {
+                  "bool": 5
+                }
+              },
+              "id": {
+                "count": 5,
+                "types": {
+                  "string": 5
+                }
+              },
+              "name": {
+                "count": 5,
+                "types": {
+                  "string": 5
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.filter",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 7,
+            "size": 2930,
+            "storage_size": 36864,
+            "total_index_size": 36864,
+            "avg_obj_size": 418
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 7,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 7,
+                "types": {
+                  "objectId": 7
+                }
+              },
+              "columns": {
+                "count": 7,
+                "types": {
+                  "array": 7
+                }
+              },
+              "columns[]": {
+                "count": 7,
+                "types": {
+                  "object": 7
+                }
+              },
+              "columns[].filterkey": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "columns[].functions": {
+                "count": 7,
+                "types": {
+                  "array": 7
+                }
+              },
+              "columns[].functions[]": {
+                "count": 6,
+                "types": {
+                  "object": 6
+                }
+              },
+              "columns[].functions[].name": {
+                "count": 6,
+                "types": {
+                  "string": 6
+                }
+              },
+              "columns[].functions[].parameters": {
+                "count": 6,
+                "types": {
+                  "array": 6
+                }
+              },
+              "columns[].functions[].parameters[]": {
+                "count": 6,
+                "types": {
+                  "int": 1,
+                  "string": 6
+                }
+              },
+              "columns[].name": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "id": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "jobconfigid": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "name": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.job",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 8,
+            "size": 6959,
+            "storage_size": 36864,
+            "total_index_size": 36864,
+            "avg_obj_size": 869
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 8,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 8,
+                "types": {
+                  "objectId": 8
+                }
+              },
+              "createdby": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "createdon": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "documenttypeid": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "extensiondata": {
+                "count": 8,
+                "types": {
+                  "array": 8
+                }
+              },
+              "extensiondata[]": {
+                "count": 8,
+                "types": {
+                  "object": 8
+                }
+              },
+              "extensiondata[].key": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "extensiondata[].value": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "extensionindex": {
+                "count": 8,
+                "types": {
+                  "int": 8
+                }
+              },
+              "extensiontype": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "headers": {
+                "count": 8,
+                "types": {
+                  "array": 8
+                }
+              },
+              "headers[]": {
+                "count": 8,
+                "types": {
+                  "object": 8
+                }
+              },
+              "headers[].default": {
+                "count": 8,
+                "types": {
+                  "bool": 8
+                }
+              },
+              "headers[].key": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "headers[].value": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "id": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "index": {
+                "count": 8,
+                "types": {
+                  "object": 8
+                }
+              },
+              "index.start": {
+                "count": 8,
+                "types": {
+                  "int": 8
+                }
+              },
+              "index.stop": {
+                "count": 8,
+                "types": {
+                  "int": 8
+                }
+              },
+              "modifiedby": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "modifiedon": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "name": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "providerid": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "settlementappid": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "successstatuskey": {
+                "count": 8,
+                "types": {
+                  "array": 8
+                }
+              },
+              "successstatuskey[]": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              },
+              "transactiontypeid": {
+                "count": 8,
+                "types": {
+                  "string": 8
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.provider",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 7,
+            "size": 979,
+            "storage_size": 36864,
+            "total_index_size": 36864,
+            "avg_obj_size": 139
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 7,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 7,
+                "types": {
+                  "objectId": 7
+                }
+              },
+              "country": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "enabled": {
+                "count": 7,
+                "types": {
+                  "bool": 7
+                }
+              },
+              "id": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "platform": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "provider": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.settlement",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 7,
+            "size": 2325,
+            "storage_size": 36864,
+            "total_index_size": 36864,
+            "avg_obj_size": 332
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 7,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 7,
+                "types": {
+                  "objectId": 7
+                }
+              },
+              "callbackurl": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "clientid": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "clientsecret": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "concurrent": {
+                "count": 7,
+                "types": {
+                  "int": 7
+                }
+              },
+              "endpoint": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "id": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "name": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              },
+              "providerid": {
+                "count": 7,
+                "types": {
+                  "string": 7
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.transaction.type",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 2,
+            "size": 222,
+            "storage_size": 32768,
+            "total_index_size": 32768,
+            "avg_obj_size": 111
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 2,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 2,
+                "types": {
+                  "objectId": 2
+                }
+              },
+              "default": {
+                "count": 2,
+                "types": {
+                  "bool": 2
+                }
+              },
+              "enabled": {
+                "count": 2,
+                "types": {
+                  "bool": 2
+                }
+              },
+              "entry": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              },
+              "id": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              },
+              "type": {
+                "count": 2,
+                "types": {
+                  "string": 2
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.config.transfer.expiry",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 1,
+            "size": 67,
+            "storage_size": 32768,
+            "total_index_size": 32768,
+            "avg_obj_size": 67
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 1,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 1,
+                "types": {
+                  "objectId": 1
+                }
+              },
+              "expiry": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "id": {
+                "count": 1,
+                "types": {
+                  "string": 1
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.history",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 632,
+            "size": 114770,
+            "storage_size": 53248,
+            "total_index_size": 36864,
+            "avg_obj_size": 181
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 100,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 100,
+                "types": {
+                  "objectId": 100
+                }
+              },
+              "action": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "date": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "id": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "jobid": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "sourceip": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "type": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "user": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.job.entries",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 3347,
+            "size": 3409022725,
+            "storage_size": 538992640,
+            "total_index_size": 94208,
+            "avg_obj_size": 1018530
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 100,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 100,
+                "types": {
+                  "objectId": 100
+                }
+              },
+              "entries": {
+                "count": 100,
+                "types": {
+                  "array": 100
+                }
+              },
+              "entries[]": {
+                "count": 73,
+                "types": {
+                  "object": 73
+                }
+              },
+              "entries[].amount": {
+                "count": 73,
+                "types": {
+                  "double": 73
+                }
+              },
+              "entries[].date": {
+                "count": 73,
+                "types": {
+                  "string": 73
+                }
+              },
+              "entries[].desc": {
+                "count": 73,
+                "types": {
+                  "string": 73
+                }
+              },
+              "entries[].msisdn": {
+                "count": 73,
+                "types": {
+                  "string": 73
+                }
+              },
+              "entries[].reference": {
+                "count": 73,
+                "types": {
+                  "string": 73
+                }
+              },
+              "id": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "name": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "recon.job.info",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 1692,
+            "size": 3163462,
+            "storage_size": 675840,
+            "total_index_size": 77824,
+            "avg_obj_size": 1869
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 100,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 100,
+                "types": {
+                  "objectId": 100
+                }
+              },
+              "checksum": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "configid": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "country": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "created": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "ended": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "filename": {
+                "count": 97,
+                "types": {
+                  "string": 97
+                }
+              },
+              "id": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "results": {
+                "count": 100,
+                "types": {
+                  "object": 100
+                }
+              },
+              "results.cards": {
+                "count": 100,
+                "types": {
+                  "array": 97,
+                  "null": 3
+                }
+              },
+              "results.cards[]": {
+                "count": 97,
+                "types": {
+                  "object": 97
+                }
+              },
+              "results.cards[].amount": {
+                "count": 97,
+                "types": {
+                  "int": 97
+                }
+              },
+              "results.cards[].count": {
+                "count": 97,
+                "types": {
+                  "int": 97
+                }
+              },
+              "results.cards[].icon": {
+                "count": 97,
+                "types": {
+                  "string": 97
+                }
+              },
+              "results.cards[].id": {
+                "count": 97,
+                "types": {
+                  "int": 97
+                }
+              },
+              "results.cards[].listed": {
+                "count": 97,
+                "types": {
+                  "bool": 97
+                }
+              },
+              "results.cards[].name": {
+                "count": 97,
+                "types": {
+                  "string": 97
+                }
+              },
+              "results.errors": {
+                "count": 100,
+                "types": {
+                  "null": 3,
+                  "object": 97
+                }
+              },
+              "results.errors.Post \"http://ke-paymentgw-group-14083.betika.private/airtelke/recon/deposit\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)": {
+                "count": 2,
+                "types": {
+                  "int": 2
+                }
+              },
+              "results.errors.Post \"https://dev-wallet-cashia-mini.betika.private/api/v1/recon/deposit\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.Post \"https://wallet-cashia-mini.betika.private/api/v1/recon/deposit\": tls: failed to verify certificate: x509: certificate is valid for wallet-ambassador, wallet-cadence.betika.private, wallet-cadence, wallet-account.betika.private, wallet-account, ke-wallet-cadence.betika.private, ke-wallet-cadence, row-wallet-cadence.betika.private, row-wallet-cadence, ke-wallet-tax.betika.private, ke-wallet-tax, ug-wallet-tax.betika.private, ug-wallet-tax, gh-wallet-tax.betika.private, gh-wallet-tax, wallet-coroot.betika.private, wallet-coroot, cd-wallet-account.betika.private, cd-wallet-account, ke-wallet-account.betika.private, ke-wallet-account, ug-wallet-account.betika.private, ug-wallet-account, tz-wallet-account.betika.private, tz-wallet-account, gh-wallet-account.betika.private, gh-wallet-account, et-wallet-account.betika.private, et-wallet-account, zm-wallet-account.betika.private, zm-wallet-account, mz-wallet-account.betika.private, mz-wallet-account, mw-wallet-account.betika.private, mw-wallet-account, wallet-ambassador.betika.private, not wallet-cashia-mini.betika.private": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.could not connect to integration api http://ke-paymentgw-group-14083.betika.private/airtelke/recon/deposit: status: 504 Gateway Timeout": {
+                "count": 2,
+                "types": {
+                  "int": 2
+                }
+              },
+              "results.errors.manual deposit reconcilation complete, deposit successful": {
+                "count": 29,
+                "types": {
+                  "int": 29
+                }
+              },
+              "results.errors.manual deposit reconcilation failed": {
+                "count": 4,
+                "types": {
+                  "int": 4
+                }
+              },
+              "results.errors.manual deposit reconcilation failed, could not register customer 254780805137": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.manual deposit reconcilation failed, could not register customer 254null": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.manual deposit reconcilation skipped": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.manual reconcile deposit failed, duplicate transaction": {
+                "count": 2,
+                "types": {
+                  "int": 2
+                }
+              },
+              "results.errors.manual reconcile deposit success": {
+                "count": 6,
+                "types": {
+                  "int": 6
+                }
+              },
+              "results.errors.manual reconcile withdraw failed, duplicate transaction": {
+                "count": 85,
+                "types": {
+                  "int": 85
+                }
+              },
+              "results.errors.reconcile deposit failed, duplicate transaction": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` ": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,000": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,010": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,015": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,070": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,098": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,200": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,250": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,373": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,400": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,450": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,500": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 1,950": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 10,000": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 2,000": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 2,050": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 2,400": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 2,900": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 25,550": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 3,025": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 31,000": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 5,000": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` 9,950": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, couldn't convert `Amount` int": {
+                "count": 1,
+                "types": {
+                  "int": 1
+                }
+              },
+              "results.errors.record skipped, has zero `Amount`": {
+                "count": 23,
+                "types": {
+                  "int": 23
+                }
+              },
+              "results.errors.record skipped, invalid `Date`: unrecognized time format": {
+                "count": 3,
+                "types": {
+                  "int": 3
+                }
+              },
+              "results.id": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "results.transactiontype": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "state": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "stepindex": {
+                "count": 100,
+                "types": {
+                  "object": 100
+                }
+              },
+              "stepindex.curr": {
+                "count": 100,
+                "types": {
+                  "int": 100
+                }
+              },
+              "stepindex.next": {
+                "count": 100,
+                "types": {
+                  "int": 100
+                }
+              },
+              "stepindex.prev": {
+                "count": 100,
+                "types": {
+                  "int": 100
+                }
+              },
+              "steps": {
+                "count": 100,
+                "types": {
+                  "array": 100
+                }
+              },
+              "steps[]": {
+                "count": 100,
+                "types": {
+                  "object": 100
+                }
+              },
+              "steps[].attachments": {
+                "count": 100,
+                "types": {
+                  "array": 100
+                }
+              },
+              "steps[].attachments[]": {
+                "count": 100,
+                "types": {
+                  "object": 100
+                }
+              },
+              "steps[].attachments[].key": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "steps[].attachments[].value": {
+                "count": 100,
+                "types": {
+                  "int": 100,
+                  "string": 100
+                }
+              },
+              "steps[].created": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "steps[].ended": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "steps[].error": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "steps[].name": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "steps[].state": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              },
+              "username": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
+              }
+            }
+          },
+          "schema_error": null
+        },
+        {
+          "name": "test",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 0,
+            "size": 0,
+            "storage_size": 12288,
+            "total_index_size": 12288,
+            "avg_obj_size": 0
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 0,
+            "truncated": false,
+            "fields": {}
+          },
+          "schema_error": null
+        }
+      ]
+    }
+  ],
+  "security": null
+}

@@ -1,0 +1,34 @@
+[
+    {
+        "database": "airline",
+        "collection": "flights",
+        "operation": "find",
+        "filter": {
+            "flight_id": "<int>"
+        },
+        "projection": {
+            "flight_id": 1,
+            "origin": 1,
+            "destination": 1,
+            "gate": 1,
+            "_id": 0
+        },
+        "limit": 5
+    },
+    {
+        "database": "airline",
+        "collection": "flights",
+        "operation": "find",
+        "filter": {
+            "flight_id": "<int>"
+        },
+        "projection": {
+            "flight_id": 1,
+            "origin": 1,
+            "destination": 1,
+            "gate": 1,
+            "_id": 0
+        },
+        "limit": 5
+    }
+]

@@ -1,0 +1,23 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "fixture",
+  "instance": {
+    "name": "legacy03",
+    "alias": "legacy03",
+    "role": "source",
+    "conf_file": "conf/legacy03.conf",
+    "uri": "mongodb://legacy03-node01.betika.private,legacy03-node02.betika.private/?replicaSet=legacy03&authSource=admin"
+  },
+  "collected_at": "2026-09-30T10:00:00Z",
+  "status": "error",
+  "error": "ServerSelectionTimeoutError: legacy03-node01:27017: timed out",
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5
+  },
+  "server": {},
+  "databases": [],
+  "security": null
+}

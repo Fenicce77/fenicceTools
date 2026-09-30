@@ -1,0 +1,69 @@
+[
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "users",
+        "operation": "find",
+        "filter": {
+            "id": "<string>"
+        }
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "templates",
+        "operation": "find",
+        "filter": {
+            "meta.id": "<string>"
+        }
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "sport",
+        "operation": "find",
+        "filter": {
+            "id": "<string>"
+        }
+    },
+    {
+        "database": "dev_betbuilder_ug",
+        "collection": "games",
+        "operation": "aggregate",
+        "pipeline": [
+            {
+                "$match": {
+                "meta.id": {
+                  "$in": [
+                    "10"
+                  ]
+                }
+              }
+            },
+            {
+                "$skip": 0
+            },
+            {
+                "$limit": 20
+            },
+            {
+                "$lookup": {
+                "from": "features",
+                "localField": "meta.id",
+                "foreignField": "game",
+                "as": "features"
+              }
+            },
+            {
+              "$lookup": {
+                "from": "features",
+                "localField": "meta.id",
+                "foreignField": "game",
+                "as": "features"
+              }
+            },
+            {
+                "$sort": {
+                    "meta.timestamps.feed": 1
+                }
+            }
+        ]
+    }
+]

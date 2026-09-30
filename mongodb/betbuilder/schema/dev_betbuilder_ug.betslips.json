@@ -1,0 +1,68 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": [
+      "_id",
+      "bets",
+      "computed",
+      "created_at",
+      "game",
+      "modified_at",
+      "odds",
+      "signature"
+    ],
+    "properties": {
+      "_id": {
+        "bsonType": "objectId"
+      },
+      "bets": {
+        "bsonType": "array",
+        "items": {
+          "bsonType": "object",
+          "properties": {
+            "domain": {
+              "bsonType": "string"
+            },
+            "market": {
+              "bsonType": "string"
+            },
+            "period": {
+              "bsonType": "string"
+            },
+            "selection": {
+              "bsonType": "string"
+            },
+            "topic": {
+              "bsonType": "string"
+            }
+          },
+          "required": [
+            "domain",
+            "market",
+            "period",
+            "selection",
+            "topic"
+          ]
+        }
+      },
+      "computed": {
+        "bsonType": "date"
+      },
+      "created_at": {
+        "bsonType": "date"
+      },
+      "game": {
+        "bsonType": "string"
+      },
+      "modified_at": {
+        "bsonType": "date"
+      },
+      "odds": {
+        "bsonType": "double"
+      },
+      "signature": {
+        "bsonType": "int"
+      }
+    }
+  }
+}

@@ -1,0 +1,367 @@
+[
+  {
+    "database": "dev_betbuilder_ug",
+    "collection": "bb_feats",
+    "required": [
+      "_id",
+      "created_at",
+      "feature",
+      "game",
+      "modified_at",
+      "qid"
+    ],
+    "fields": {
+      "_id": {
+        "type": "objectId"
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "feature": {
+        "type": "object",
+        "fields": {
+          "_t": {
+            "type": "string"
+          },
+          "computed": {
+            "type": "date"
+          },
+          "feed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "fields": {
+                "_t": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "margin": {
+                  "type": "object",
+                  "fields": {
+                    "_t": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "type": "double"
+                    },
+                    "method": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "odds": {
+                  "type": "object",
+                  "fields": {
+                    "X100": {
+                      "type": "object",
+                      "fields": {
+                        "1": {
+                          "type": "double"
+                        },
+                        "2": {
+                          "type": "double"
+                        },
+                        "away": {
+                          "type": "double"
+                        },
+                        "home": {
+                          "type": "double"
+                        },
+                        "over": {
+                          "type": "double"
+                        },
+                        "under": {
+                          "type": "double"
+                        },
+                        "X": {
+                          "type": "double"
+                        }
+                      }
+                    }
+                  }
+                },
+                "qid": {
+                  "type": "object",
+                  "fields": {
+                    "qualifiers": {
+                      "type": "object",
+                      "fields": {}
+                    }
+                  }
+                },
+                "selections": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "_t": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "odds": {
+                        "type": "object",
+                        "fields": {
+                          "fit": {
+                            "type": "double"
+                          },
+                          "raw": {
+                            "type": "double"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "spread": {
+                  "type": "object",
+                  "fields": {
+                    "_t": {
+                      "type": "string"
+                    },
+                    "gross": {
+                      "type": "object",
+                      "fields": {
+                        "value": {
+                          "type": "double"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "markets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "fields": {
+                "_t": {
+                  "type": "string"
+                },
+                "blueprint": {
+                  "type": "object",
+                  "fields": {
+                    "fields": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "fields": {
+                          "_t": {
+                            "type": "string"
+                          },
+                          "absolute": {
+                            "type": "object",
+                            "fields": {
+                              "value": {
+                                "type": "double"
+                              }
+                            },
+                            "required": [
+                              "value"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "_t",
+                          "absolute"
+                        ]
+                      }
+                    },
+                    "statistics": {
+                      "type": "object",
+                      "fields": {}
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "description": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "odds": {
+                  "type": "object",
+                  "fields": {}
+                },
+                "qid": {
+                  "type": "object",
+                  "fields": {
+                    "qualifiers": {
+                      "type": "object",
+                      "fields": {}
+                    }
+                  }
+                },
+                "selections": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "_t": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "odds": {
+                        "type": "object",
+                        "fields": {
+                          "fit": {
+                            "type": "double"
+                          },
+                          "raw": {
+                            "type": "double"
+                          }
+                        }
+                      },
+                      "probability": {
+                        "type": "double"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "fields": {
+                "_t": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "object",
+                  "fields": {
+                    "bias": {
+                      "type": "double"
+                    },
+                    "fit": {
+                      "type": "double"
+                    },
+                    "lock": {
+                      "type": "object",
+                      "fields": {
+                        "_t": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "object",
+                          "fields": {
+                            "domain": {
+                              "type": "string"
+                            },
+                            "period": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "value": {
+                          "type": "double"
+                        },
+                        "weight": {
+                          "type": "double"
+                        }
+                      }
+                    },
+                    "maximum": {
+                      "type": "object",
+                      "fields": {
+                        "_t": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "double"
+                        }
+                      }
+                    },
+                    "minimum": {
+                      "type": "object",
+                      "fields": {
+                        "_t": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "double"
+                        }
+                      }
+                    },
+                    "raw": {
+                      "type": "double"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "qid": {
+            "type": "object",
+            "fields": {
+              "domain": {
+                "type": "string"
+              },
+              "period": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            }
+          },
+          "size": {
+            "type": "object",
+            "fields": {
+              "away": {
+                "type": "int"
+              },
+              "home": {
+                "type": "int"
+              }
+            }
+          }
+        }
+      },
+      "game": {
+        "type": "string"
+      },
+      "modified_at": {
+        "type": "date"
+      },
+      "qid": {
+        "type": "object",
+        "fields": {
+          "domain": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+]

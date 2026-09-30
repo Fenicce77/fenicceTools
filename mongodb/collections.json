@@ -1,0 +1,1366 @@
+{
+  _id: 'ObjectId',
+  created_at: 'Date',
+  feature: {
+    type: 'Object',
+    properties: {
+      _t: 'string',
+      computed: 'Date',
+      feed: {
+        type: 'Array',
+        items: 'Empty'
+      },
+      id: 'string',
+      markets: {
+        type: 'Array',
+        items: {
+          _t: 'string',
+          blueprint: {
+            type: 'Object',
+            properties: {
+              properties: {
+                type: 'Array',
+                items: 'Empty'
+              },
+              statistics: {
+                type: 'Object',
+                properties: {}
+              },
+              type: 'string'
+            }
+          },
+          id: 'string',
+          odds: {
+            type: 'Object',
+            properties: {}
+          },
+          qid: {
+            type: 'Object',
+            properties: {
+              qualifiers: {
+                type: 'Object',
+                properties: {}
+              }
+            }
+          },
+          selections: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              id: 'string',
+              odds: {
+                type: 'Object',
+                properties: {
+                  fit: 'Number',
+                  raw: 'Number'
+                }
+              },
+              probability: 'Number'
+            }
+          }
+        }
+      },
+      parameters: {
+        type: 'Array',
+        items: {
+          _t: 'string',
+          id: 'string',
+          value: {
+            type: 'Object',
+            properties: {
+              fit: 'Number',
+              lock: {
+                type: 'Object',
+                properties: {
+                  _t: 'string',
+                  to: {
+                    type: 'Object',
+                    properties: {
+                      domain: 'string',
+                      period: 'string',
+                      topic: 'string'
+                    }
+                  },
+                  weight: 'Number'
+                }
+              },
+              raw: 'Number'
+            }
+          }
+        }
+      },
+      qid: {
+        type: 'Object',
+        properties: {
+          domain: 'string',
+          period: 'string',
+          topic: 'string'
+        }
+      },
+      size: {
+        type: 'Object',
+        properties: {
+          away: 'Number',
+          home: 'Number'
+        }
+      }
+    }
+  },
+  game: 'string',
+  modified_at: 'Date',
+  qid: {
+    type: 'Object',
+    properties: {
+      domain: 'string',
+      period: 'string',
+      topic: 'string'
+    }
+  }
+}
+{
+  _id: 'ObjectId',
+  created_at: 'Date',
+  meta: {
+    type: 'Object',
+    properties: {
+      description: 'string',
+      fixture: {
+        type: 'Object',
+        properties: {
+          _t: 'string',
+          partakers: {
+            type: 'Array',
+            items: 'Empty'
+          }
+        }
+      },
+      id: 'string',
+      management: {
+        type: 'Object',
+        properties: {
+          spawnTemplate: 'string'
+        }
+      },
+      progress: {
+        type: 'Object',
+        properties: {
+          currentPeriod: 'string',
+          live: {
+            type: 'Object',
+            properties: {
+              id: 'string',
+              score: {
+                type: 'Object',
+                properties: {}
+              },
+              time: {
+                type: 'Object',
+                properties: {
+                  _t: 'string',
+                  elapsed: 'string',
+                  stoppage: 'string'
+                }
+              }
+            }
+          },
+          periods: {
+            type: 'Object',
+            properties: {
+              '1x': {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              '2x': {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              abandoned: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              ap: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              awet: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              awp: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              cancelled: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              ended: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              ht: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              htb: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              interrupted: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              pe: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              postponed: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              pregame: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              sh: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              xht: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      timestamps: {
+        type: 'Object',
+        properties: {
+          _t: 'string',
+          computed: 'Date',
+          feed: 'Date',
+          fetched: 'Date'
+        }
+      }
+    }
+  },
+  modified_at: 'Date'
+}
+La colección está vacía.
+{
+  _id: 'ObjectId',
+  created_at: 'Date',
+  feature: {
+    type: 'Object',
+    properties: {
+      _t: 'string',
+      computed: 'Date',
+      feed: {
+        type: 'Array',
+        items: 'Empty'
+      },
+      id: 'string',
+      markets: {
+        type: 'Array',
+        items: {
+          _t: 'string',
+          blueprint: {
+            type: 'Object',
+            properties: {
+              properties: {
+                type: 'Array',
+                items: 'Empty'
+              },
+              statistics: {
+                type: 'Object',
+                properties: {}
+              },
+              type: 'string'
+            }
+          },
+          enabled: 'Boolean',
+          id: 'string',
+          odds: {
+            type: 'Object',
+            properties: {}
+          },
+          qid: {
+            type: 'Object',
+            properties: {
+              qualifiers: {
+                type: 'Object',
+                properties: {}
+              }
+            }
+          },
+          selections: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              id: 'string',
+              odds: {
+                type: 'Object',
+                properties: {
+                  fit: 'Number',
+                  raw: 'Number'
+                }
+              },
+              probability: 'Number'
+            }
+          }
+        }
+      },
+      parameters: {
+        type: 'Array',
+        items: {
+          _t: 'string',
+          id: 'string',
+          value: {
+            type: 'Object',
+            properties: {
+              fit: 'Number',
+              lock: {
+                type: 'Object',
+                properties: {
+                  _t: 'string',
+                  to: {
+                    type: 'Object',
+                    properties: {
+                      domain: 'string',
+                      period: 'string',
+                      topic: 'string'
+                    }
+                  },
+                  weight: 'Number'
+                }
+              },
+              raw: 'Number'
+            }
+          }
+        }
+      },
+      qid: {
+        type: 'Object',
+        properties: {
+          domain: 'string',
+          period: 'string',
+          topic: 'string'
+        }
+      },
+      size: {
+        type: 'Object',
+        properties: {
+          away: 'Number',
+          home: 'Number'
+        }
+      }
+    }
+  },
+  game: 'string',
+  modified_at: 'Date',
+  qid: {
+    type: 'Object',
+    properties: {
+      domain: 'string',
+      period: 'string',
+      topic: 'string'
+    }
+  }
+}
+{
+  _id: 'ObjectId',
+  created_at: 'Date',
+  meta: {
+    type: 'Object',
+    properties: {
+      description: 'string',
+      fixture: {
+        type: 'Object',
+        properties: {
+          _t: 'string',
+          partakers: {
+            type: 'Array',
+            items: 'Empty'
+          },
+          sport: {
+            type: 'Object',
+            properties: {
+              description: 'string',
+              id: 'string'
+            }
+          }
+        }
+      },
+      id: 'string',
+      management: {
+        type: 'Object',
+        properties: {
+          spawnTemplate: 'string'
+        }
+      },
+      progress: {
+        type: 'Object',
+        properties: {
+          currentPeriod: 'string',
+          live: {
+            type: 'Object',
+            properties: {
+              id: 'string',
+              score: {
+                type: 'Object',
+                properties: {}
+              },
+              time: {
+                type: 'Object',
+                properties: {
+                  _t: 'string',
+                  elapsed: 'string',
+                  stoppage: 'string'
+                }
+              }
+            }
+          },
+          periods: {
+            type: 'Object',
+            properties: {
+              '1x': {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              '2x': {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              abandoned: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              ap: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              awet: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              awp: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              cancelled: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              ended: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              ht: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              htb: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              interrupted: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              pe: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              postponed: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              pregame: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              sh: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              },
+              xht: {
+                type: 'Object',
+                properties: {
+                  id: 'string',
+                  score: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  time: {
+                    type: 'Object',
+                    properties: {
+                      _t: 'string',
+                      elapsed: 'string',
+                      stoppage: 'string'
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      timestamps: {
+        type: 'Object',
+        properties: {
+          _t: 'string',
+          computed: 'Date',
+          fetched: 'Date',
+          received: 'Date'
+        }
+      }
+    }
+  },
+  modified_at: 'Date'
+}
+{
+  _id: 'ObjectId',
+  created_at: 'Date',
+  description: 'string',
+  domain: {
+    type: 'Array',
+    items: {
+      description: 'string',
+      id: 'string'
+    }
+  },
+  id: 'string',
+  mapping: {
+    type: 'Object',
+    properties: {
+      betradar: {
+        type: 'Object',
+        properties: {
+          _t: 'string',
+          highlight: {
+            type: 'Object',
+            properties: {}
+          },
+          id: 'string',
+          periods: {
+            type: 'Object',
+            properties: {}
+          },
+          seeds: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              id: 'string',
+              outcomes: {
+                type: 'Object',
+                properties: {
+                  '1': 'string',
+                  '2': 'string',
+                  '3': 'string'
+                }
+              },
+              qid: {
+                type: 'Object',
+                properties: {
+                  qualifiers: {
+                    type: 'Object',
+                    properties: {
+                      domain: 'string',
+                      market: 'string',
+                      period: 'string',
+                      topic: 'string'
+                    }
+                  }
+                }
+              },
+              specifiers: {
+                type: 'Object',
+                properties: {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  modified_at: 'Date',
+  period: {
+    type: 'Array',
+    items: {
+      contains: {
+        type: 'Array',
+        items: 'Empty'
+      },
+      description: 'string',
+      id: 'string',
+      level: 'Number',
+      normal: 'Boolean'
+    }
+  },
+  stateMachine: {
+    type: 'Object',
+    properties: {
+      aliases: {
+        type: 'Object',
+        properties: {
+          '0': 'string',
+          '6': 'string',
+          '7': 'string',
+          '31': 'string',
+          '32': 'string',
+          '33': 'string',
+          '34': 'string',
+          '40': 'string',
+          '41': 'string',
+          '42': 'string',
+          '50': 'string',
+          '60': 'string',
+          '70': 'string',
+          '80': 'string',
+          '90': 'string',
+          '100': 'string',
+          '110': 'string',
+          '120': 'string'
+        }
+      },
+      inclusions: {
+        type: 'Object',
+        properties: {
+          aet: {
+            type: 'Object',
+            properties: {
+              contains: {
+                type: 'Array',
+                items: 'Empty'
+              },
+              partition: {
+                type: 'Array',
+                items: 'string'
+              }
+            }
+          },
+          ft: {
+            type: 'Object',
+            properties: {
+              contains: {
+                type: 'Array',
+                items: 'Empty'
+              },
+              partition: {
+                type: 'Array',
+                items: 'string'
+              }
+            }
+          },
+          live: {
+            type: 'Object',
+            properties: {
+              contains: {
+                type: 'Array',
+                items: 'Empty'
+              },
+              partition: {
+                type: 'Array',
+                items: 'string'
+              }
+            }
+          },
+          overtime: {
+            type: 'Object',
+            properties: {
+              contains: {
+                type: 'Array',
+                items: 'string'
+              },
+              partition: {
+                type: 'Array',
+                items: 'string'
+              }
+            }
+          }
+        }
+      },
+      periods: {
+        type: 'Array',
+        items: {
+          description: 'string',
+          id: 'string',
+          level: 'Number',
+          normal: 'Boolean',
+          progressRole: 'string'
+        }
+      },
+      transitions: {
+        type: 'Object',
+        properties: {
+          exceptional: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              fanOut: {
+                type: 'Array',
+                items: 'string'
+              },
+              from: 'string'
+            }
+          },
+          normal: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              chain: {
+                type: 'Array',
+                items: 'string'
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  topic: {
+    type: 'Array',
+    items: {
+      description: 'string',
+      id: 'string'
+    }
+  },
+  typing: {
+    type: 'Array',
+    items: {
+      _t: 'string',
+      computed: 'Date',
+      feed: {
+        type: 'Array',
+        items: 'Empty'
+      },
+      id: 'string',
+      markets: {
+        type: 'Array',
+        items: 'Empty'
+      },
+      parameters: {
+        type: 'Array',
+        items: 'Empty'
+      },
+      qid: {
+        type: 'Object',
+        properties: {
+          domain: 'string',
+          period: 'string',
+          player: 'string',
+          side: 'string',
+          topic: 'string'
+        }
+      },
+      size: {
+        type: 'Object',
+        properties: {
+          away: 'Number',
+          home: 'Number'
+        }
+      }
+    }
+  }
+}
+{
+  _id: 'ObjectId',
+  confidentiality: 'Number',
+  created_at: 'Date',
+  id: 'string',
+  modified_at: 'Date',
+  psw: {
+    type: 'Array',
+    items: 'Number'
+  }
+}
+{
+  _id: 'ObjectId',
+  created_at: 'Date',
+  data: {
+    type: 'Object',
+    properties: {
+      features: {
+        type: 'Array',
+        items: {
+          _t: 'string',
+          computed: 'Date',
+          feed: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              id: 'string',
+              margin: {
+                type: 'Object',
+                properties: {
+                  _t: 'string',
+                  method: 'string'
+                }
+              },
+              odds: {
+                type: 'Object',
+                properties: {}
+              },
+              qid: {
+                type: 'Object',
+                properties: {
+                  qualifiers: {
+                    type: 'Object',
+                    properties: {}
+                  }
+                }
+              },
+              selections: {
+                type: 'Array',
+                items: {
+                  _t: 'string',
+                  id: 'string',
+                  odds: {
+                    type: 'Object',
+                    properties: {
+                      fit: 'Number',
+                      raw: 'Number'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          id: 'string',
+          markets: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              blueprint: {
+                type: 'Object',
+                properties: {
+                  properties: {
+                    type: 'Array',
+                    items: {
+                      _t: 'string',
+                      after: 'Number'
+                    }
+                  },
+                  statistics: {
+                    type: 'Object',
+                    properties: {}
+                  },
+                  type: 'string'
+                }
+              },
+              description: 'string',
+              id: 'string',
+              odds: {
+                type: 'Object',
+                properties: {}
+              },
+              qid: {
+                type: 'Object',
+                properties: {
+                  qualifiers: {
+                    type: 'Object',
+                    properties: {}
+                  }
+                }
+              },
+              selections: {
+                type: 'Array',
+                items: 'Empty'
+              }
+            }
+          },
+          parameters: {
+            type: 'Array',
+            items: {
+              _t: 'string',
+              id: 'string',
+              value: {
+                type: 'Object',
+                properties: {
+                  bias: 'Number',
+                  fit: 'Number',
+                  raw: 'Number'
+                }
+              }
+            }
+          },
+          qid: {
+            type: 'Object',
+            properties: {
+              domain: 'string',
+              period: 'string',
+              player: 'string',
+              side: 'string',
+              topic: 'string'
+            }
+          },
+          size: {
+            type: 'Object',
+            properties: {
+              away: 'Number',
+              home: 'Number'
+            }
+          }
+        }
+      },
+      markets: {
+        type: 'Object',
+        properties: {}
+      },
+      meta: {
+        type: 'Object',
+        properties: {
+          description: 'string',
+          id: 'string'
+        }
+      }
+    }
+  },
+  meta: {
+    type: 'Object',
+    properties: {
+      description: 'string',
+      id: 'string',
+      metaVersion: 'string',
+      operation: 'string',
+      tags: 'string',
+      version: 'string'
+    }
+  },
+  modified_at: 'Date'
+}

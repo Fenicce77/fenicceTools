@@ -1,0 +1,4 @@
+ opid: '694495831e51c0deac90a5fd'
+ name: '2025-12-19T00:00:03Z'
+ node: 'gcss-mongodbcluster01-node03.betika.private:27017'
+ ack: 'gcss-mongodbcluster01-node03.betika.private:27017'

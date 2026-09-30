@@ -1,0 +1,102 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "fixture",
+  "instance": {
+    "name": "central01",
+    "alias": "central",
+    "role": "target",
+    "conf_file": "conf/central01.conf",
+    "uri": "mongodb://central01-node01.betika.private,central01-node02.betika.private/?replicaSet=central01&authSource=admin"
+  },
+  "collected_at": "2026-09-30T10:00:00Z",
+  "status": "ok",
+  "error": null,
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5
+  },
+  "server": {
+    "version": "6.0.19",
+    "fcv": "6.0",
+    "topology": "replicaset",
+    "set_name": "central01",
+    "storage_engine": "wiredTiger"
+  },
+  "databases": [
+    {
+      "name": "orders",
+      "size_on_disk": 100000,
+      "empty": false,
+      "collections": [
+        {
+          "name": "customers",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 10,
+            "size": 5000,
+            "storage_size": 20000,
+            "total_index_size": 20000,
+            "avg_obj_size": 500
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 0,
+            "truncated": false,
+            "fields": {}
+          },
+          "schema_error": null
+        }
+      ]
+    },
+    {
+      "name": "reporting",
+      "size_on_disk": 50000,
+      "empty": false,
+      "collections": [
+        {
+          "name": "daily",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 365,
+            "size": 100000,
+            "storage_size": 50000,
+            "total_index_size": 20000,
+            "avg_obj_size": 273
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 0,
+            "truncated": false,
+            "fields": {}
+          },
+          "schema_error": null
+        }
+      ]
+    }
+  ],
+  "security": null
+}

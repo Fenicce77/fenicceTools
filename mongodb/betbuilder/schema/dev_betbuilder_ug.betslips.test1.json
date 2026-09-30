@@ -1,0 +1,69 @@
+[
+  {
+    "database": "dev_betbuilder_ug",
+    "collection": "betslips",
+      "required": [
+        "_id",
+        "bets",
+        "computed",
+        "created_at",
+        "game",
+        "modified_at",
+        "odds",
+        "signature"
+      ],
+      "fields": {
+        "_id": {
+          "type": "objectId"
+        },
+        "bets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "fields": {
+              "domain": {
+                "type": "string"
+              },
+              "market": {
+                "type": "string"
+              },
+              "period": {
+                "type": "string"
+              },
+              "selection": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "domain",
+              "market",
+              "period",
+              "selection",
+              "topic"
+            ]
+          }
+        },
+        "computed": {
+          "type": "date"
+        },
+        "created_at": {
+          "type": "date"
+        },
+        "game": {
+          "type": "string"
+        },
+        "modified_at": {
+          "type": "date"
+        },
+        "odds": {
+          "type": "double"
+        },
+        "signature": {
+          "type": "int"
+        }
+      }
+  }
+]
