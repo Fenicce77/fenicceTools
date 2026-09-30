@@ -10,7 +10,7 @@
     "conf_file": "conf//ug.conf",
     "uri": "mongodb://ug-mongodbcluster01-node01.betika.private:27017,ug-mongodbcluster01-node02.betika.private:27017,ug-mongodbcluster01-node03.betika.private:27017/?replicaSet=ug-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000"
   },
-  "collected_at": "2026-09-30T17:49:27Z",
+  "collected_at": "2026-09-30T18:25:31Z",
   "status": "ok",
   "error": null,
   "params": {

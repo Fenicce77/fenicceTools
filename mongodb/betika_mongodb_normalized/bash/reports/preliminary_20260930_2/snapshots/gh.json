@@ -10,7 +10,7 @@
     "conf_file": "conf//gh.conf",
     "uri": "mongodb://gh-mongodbcluster01.betika.private:27017,gh-mongodbcluster02.betika.private:27017,gh-mongodbcluster03.betika.private:27017/?replicaSet=gh-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000"
   },
-  "collected_at": "2026-09-30T17:47:40Z",
+  "collected_at": "2026-09-30T18:25:31Z",
   "status": "ok",
   "error": null,
   "params": {

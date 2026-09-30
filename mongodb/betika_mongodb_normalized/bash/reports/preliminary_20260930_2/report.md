@@ -1,6 +1,6 @@
 # MongoDB Schema Analysis Report
 
-- Generated at: `2026-09-30T17:49:28Z` (bash implementation)
+- Generated at: `2026-09-30T18:27:36Z` (bash implementation)
 - Naming strategy: `auto` (separator `_`, mapping entries: 0)
 - Target instance: _not defined_
 - Findings: **0** errors, **4** warnings, **2** info
@@ -9,9 +9,9 @@
 
 | Instance | Alias | Role | Status | Version | FCV | Topology | DBs | Collections | Views | Documents | Data | Storage | Indexes |
 |---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| cd | cd | source | ok | 4.4.15 | 4.4 | replicaset | 1 | 19 | 0 | 52299 | 30.13 GiB | 4.67 GiB | 1.42 MiB |
+| cd | cd | source | ok | 4.4.15 | 4.4 | replicaset | 1 | 19 | 0 | 52302 | 30.13 GiB | 4.67 GiB | 1.41 MiB |
 | gh | gh | source | ok | 4.4.29 | 4.4 | replicaset | 1 | 1 | 0 | 1 | 52 B | 32.00 KiB | 32.00 KiB |
-| ke | ke | source | ok | 4.4.3 | 4.4 | replicaset | 3 | 17 | 0 | 130550 | 3.19 GiB | 522.03 MiB | 3.51 MiB |
+| ke | ke | source | ok | 4.4.3 | 4.4 | replicaset | 3 | 17 | 0 | 130550 | 3.19 GiB | 521.68 MiB | 3.51 MiB |
 | mw | mw | source | ok | 4.4.13 | 4.4 | replicaset | 0 | 0 | 0 | 0 | 0 B | 0 B | 0 B |
 | tz | tz | source | ok | 4.4.22 | 4.4 | replicaset | 0 | 0 | 0 | 0 | 0 B | 0 B | 0 B |
 | ug | ug | source | ok | 4.4.25 | 4.4 | replicaset | 0 | 0 | 0 | 0 | 0 B | 0 B | 0 B |
@@ -61,8 +61,8 @@ _None._
 | betika_cd | recon.config.transfer.expiry | collection | 1 | 67 B | 20.00 KiB | 1 | 20.00 KiB | no | - | 0 |
 | betika_cd | recon.history | collection | 16766 | 2.88 MiB | 788.00 KiB | 1 | 284.00 KiB | no | - | 0 |
 | betika_cd | recon.job | collection | 39 | 26.05 KiB | 44.00 KiB | 1 | 36.00 KiB | no | - | 0 |
-| betika_cd | recon.job.entries | collection | 23138 | 29.13 GiB | 4.47 GiB | 1 | 372.00 KiB | no | - | 0 |
-| betika_cd | recon.job.info | collection | 12083 | 1.00 GiB | 201.06 MiB | 1 | 268.00 KiB | no | - | 1 |
+| betika_cd | recon.job.entries | collection | 23140 | 29.13 GiB | 4.47 GiB | 1 | 360.00 KiB | no | - | 0 |
+| betika_cd | recon.job.info | collection | 12084 | 1.00 GiB | 202.18 MiB | 1 | 272.00 KiB | no | - | 1 |
 | betika_cd | recon.notification | collection | 13 | 6.54 KiB | 36.00 KiB | 1 | 36.00 KiB | no | - | 0 |
 | betika_cd | recon.progress | collection | 66 | 77.17 KiB | 56.00 KiB | 1 | 36.00 KiB | no | - | 0 |
 | betika_cd | recon.provider | collection | 4 | 514 B | 36.00 KiB | 1 | 36.00 KiB | no | - | 0 |
@@ -84,7 +84,7 @@ _None._
 | betika_help_center | kb | collection | 29 | 76.56 KiB | 92.00 KiB | 1 | 32.00 KiB | no | - | 0 |
 | betika_help_center | users | collection | 4 | 774 B | 32.00 KiB | 1 | 32.00 KiB | no | - | 0 |
 | betika_help_center | votes | collection | 124802 | 12.85 MiB | 6.86 MiB | 1 | 2.90 MiB | no | - | 0 |
-| recon-engine | recon.config.doc.extension | collection | 2 | 409 B | 32.00 KiB | 1 | 32.00 KiB | no | - | 0 |
+| recon-engine | recon.config.doc.extension | collection | 2 | 409 B | 36.00 KiB | 1 | 32.00 KiB | no | - | 0 |
 | recon-engine | recon.config.doc.type | collection | 2 | 146 B | 32.00 KiB | 1 | 32.00 KiB | no | - | 0 |
 | recon-engine | recon.config.field | collection | 5 | 461 B | 36.00 KiB | 1 | 36.00 KiB | no | - | 0 |
 | recon-engine | recon.config.filter | collection | 7 | 2.86 KiB | 36.00 KiB | 1 | 36.00 KiB | no | - | 1 |
@@ -94,7 +94,7 @@ _None._
 | recon-engine | recon.config.transaction.type | collection | 2 | 222 B | 32.00 KiB | 1 | 32.00 KiB | no | - | 0 |
 | recon-engine | recon.config.transfer.expiry | collection | 1 | 67 B | 32.00 KiB | 1 | 32.00 KiB | no | - | 0 |
 | recon-engine | recon.history | collection | 632 | 112.08 KiB | 52.00 KiB | 1 | 40.00 KiB | no | - | 0 |
-| recon-engine | recon.job.entries | collection | 3347 | 3.17 GiB | 514.02 MiB | 1 | 92.00 KiB | no | - | 0 |
+| recon-engine | recon.job.entries | collection | 3347 | 3.17 GiB | 513.67 MiB | 1 | 92.00 KiB | no | - | 0 |
 | recon-engine | recon.job.info | collection | 1692 | 3.02 MiB | 648.00 KiB | 1 | 76.00 KiB | no | - | 1 |
 | recon-engine | test | collection | 0 | 0 B | 12.00 KiB | 1 | 12.00 KiB | no | - | 0 |
 

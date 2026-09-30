@@ -2,7 +2,7 @@
   "tool": "betika_mongodb_normalized",
   "analysis_format": 1,
   "implementation": "bash",
-  "generated_at": "2026-09-30T17:49:28Z",
+  "generated_at": "2026-09-30T18:27:36Z",
   "params": {
     "naming_strategy": "auto",
     "prefix_sep": "_",
@@ -24,10 +24,10 @@
       "databases": 1,
       "collections": 19,
       "views": 0,
-      "documents": 52299,
-      "data_size": 32354239890,
-      "storage_size": 5009252352,
-      "index_size": 1486848
+      "documents": 52302,
+      "data_size": 32354242223,
+      "storage_size": 5009702912,
+      "index_size": 1478656
     },
     {
       "name": "gh",
@@ -62,7 +62,7 @@
       "views": 0,
       "documents": 130550,
       "data_size": 3425874549,
-      "storage_size": 547385344,
+      "storage_size": 547016704,
       "index_size": 3678208
     },
     {
@@ -129,10 +129,10 @@
       "reason": "keep",
       "collections": 19,
       "views": 0,
-      "documents": 52299,
-      "data_size": 32354239890,
-      "storage_size": 5009252352,
-      "index_size": 1486848
+      "documents": 52302,
+      "data_size": 32354242223,
+      "storage_size": 5009702912,
+      "index_size": 1478656
     },
     {
       "instance": "gh",
@@ -183,7 +183,7 @@
       "views": 0,
       "documents": 5712,
       "data_size": 3412315455,
-      "storage_size": 540037120,
+      "storage_size": 539668480,
       "index_size": 540672
     }
   ],
@@ -476,10 +476,10 @@
     "per_instance": [
       {
         "instance": "cd",
-        "documents": 52299,
-        "data_size": 32354239890,
-        "storage_size": 5009252352,
-        "index_size": 1486848
+        "documents": 52302,
+        "data_size": 32354242223,
+        "storage_size": 5009702912,
+        "index_size": 1478656
       },
       {
         "instance": "gh",
@@ -492,7 +492,7 @@
         "instance": "ke",
         "documents": 130550,
         "data_size": 3425874549,
-        "storage_size": 547385344,
+        "storage_size": 547016704,
         "index_size": 3678208
       },
       {
@@ -518,10 +518,10 @@
       }
     ],
     "total": {
-      "documents": 182850,
-      "data_size": 35780114491,
-      "storage_size": 5556670464,
-      "index_size": 5197824
+      "documents": 182853,
+      "data_size": 35780116824,
+      "storage_size": 5556752384,
+      "index_size": 5189632
     },
     "target_existing": null
   },
