@@ -1,0 +1,27 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+# at 4
+#260929 11:09:59 server id 10  end_log_pos 78 CRC32 0x00000000  GTID last_committed=0 sequence_number=82 rbr_only=yes
+SET @@SESSION.GTID_NEXT= '24bc7856-9a3b-11ef-9abc-0242ac120002:82'/*!*/;
+# at 78
+#260929 11:10:00 server id 10  end_log_pos 126 CRC32 0x00000000  Table_map: `sales`.`orders` mapped to number 101
+# at 126
+#260929 11:10:00 server id 10  end_log_pos 240 CRC32 0x00000000  Write_rows: table id 101 flags: STMT_END_F
+### INSERT INTO `decoded_wrong`.`wrong_table`
+### SET
+###   @1=1
+### INSERT INTO `decoded_wrong`.`wrong_table`
+### SET
+###   @1=2
+#Q> ### INSERT INTO `context_only`.`must_not_count`
+# at 240
+#260929 11:10:01 server id 10  end_log_pos 360 CRC32 0x00000000  Update_rows: table id 999 flags: STMT_END_F
+### UPDATE `fallback`.`accounts`
+### WHERE
+###   @1=7
+### SET
+###   @2='active'
+# at 360
+#260929 11:10:02 server id 10  end_log_pos 445 CRC32 0x00000000  Delete_rows: table id 101 flags: STMT_END_F
+# at 445
+#260929 11:10:03 server id 10  end_log_pos 500 CRC32 0x00000000  Xid = 9082
+COMMIT/*!*/;

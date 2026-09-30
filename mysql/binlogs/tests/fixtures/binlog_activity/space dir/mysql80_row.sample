@@ -1,0 +1,25 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+# at 4
+#260929 11:00:00 server id 2  end_log_pos 126 CRC32 0x00000000  Table_map: `sales`.`orders` mapped to number 42
+# at 126
+#260929 11:00:00 server id 2  end_log_pos 240 CRC32 0x00000000  Write_rows: table id 42 flags: STMT_END_F
+### INSERT INTO `sales`.`orders`
+### SET
+###   @1=2
+###   @2='paid'
+# at 240
+#260929 11:00:01 server id 2  end_log_pos 360 CRC32 0x00000000  Update_rows: table id 42 flags: STMT_END_F
+### UPDATE `sales`.`orders`
+### WHERE
+###   @1=2
+### SET
+###   @2='shipped'
+# at 360
+#260929 11:00:02 server id 2  end_log_pos 445 CRC32 0x00000000  Delete_rows: table id 42 flags: STMT_END_F
+### DELETE FROM `sales`.`orders`
+### WHERE
+###   @1=2
+###   @2='shipped'
+# at 445
+#260929 11:00:03 server id 2  end_log_pos 500 CRC32 0x00000000  Xid = 9001
+COMMIT/*!*/;

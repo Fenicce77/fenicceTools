@@ -1,0 +1,22 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+# at 4
+#260929 10:00:00 server id 1  end_log_pos 123 CRC32 0x00000000  Query thread_id=10 exec_time=0 error_code=0
+SET TIMESTAMP=1790676000/*!*/;
+BEGIN
+/*!*/;
+# at 123
+#260929 10:00:01 server id 1  end_log_pos 280 CRC32 0x00000000  Query thread_id=10 exec_time=0 error_code=0
+use `sales`/*!*/;
+SET TIMESTAMP=1790676001/*!*/;
+INSERT INTO `orders`
+    (`id`, `status`)
+VALUES
+    (1, 'new')
+/*!*/;
+# at 280
+#260929 10:00:02 server id 1  end_log_pos 410 CRC32 0x00000000  Query thread_id=10 exec_time=0 error_code=0
+SET TIMESTAMP=1790676002/*!*/;
+ALTER TABLE `orders`
+    ADD COLUMN `processed_at` DATETIME NULL
+/*!*/;
+COMMIT/*!*/;

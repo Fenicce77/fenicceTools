@@ -1,0 +1,18 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+# at 100
+#260929 10:10:00 server id 8  end_log_pos 200 CRC32 0x00000000  Query thread_id=18 exec_time=0 error_code=0
+CREATE INDEX `idx_created_at`
+    ON `sales`.`orders` (`created_at`)
+/*!*/;
+# at 200
+#260929 10:10:01 server id 8  end_log_pos 300 CRC32 0x00000000  Query thread_id=18 exec_time=0 error_code=0
+CREATE UNIQUE INDEX `uq_customer_email` ON `sales`.`customers` (`email`)
+/*!*/;
+# at 300
+#260929 10:10:02 server id 8  end_log_pos 400 CRC32 0x00000000  Query thread_id=18 exec_time=0 error_code=0
+CREATE FULLTEXT INDEX `ft_product_description` ON `catalog`.`products` (`description`)
+/*!*/;
+# at 400
+#260929 10:10:03 server id 8  end_log_pos 500 CRC32 0x00000000  Query thread_id=18 exec_time=0 error_code=0
+CREATE SPATIAL INDEX `sp_place_location` ON `geo`.`places` (`location`)
+/*!*/;

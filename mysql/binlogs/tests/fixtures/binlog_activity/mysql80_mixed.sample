@@ -1,0 +1,23 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+# at 4
+#260929 12:00:00 server id 3  end_log_pos 78 CRC32 0x00000000  GTID last_committed=0 sequence_number=1 rbr_only=yes
+SET @@SESSION.GTID_NEXT= '24bc7856-9a3b-11ef-9abc-0242ac120002:71'/*!*/;
+# at 78
+#260929 12:00:00 server id 3  end_log_pos 126 CRC32 0x00000000  Table_map: `sales`.`orders` mapped to number 91
+# at 126
+#260929 12:00:00 server id 3  end_log_pos 220 CRC32 0x00000000  Write_rows: table id 91 flags: STMT_END_F
+### INSERT INTO `sales`.`orders`
+### SET
+###   @1=71
+###   @2='mixed'
+# at 220
+#260929 12:00:00 server id 3  end_log_pos 260 CRC32 0x00000000  Xid = 771
+COMMIT/*!*/;
+# at 260
+#260929 12:00:01 server id 3  end_log_pos 410 CRC32 0x00000000  Query thread_id=12 exec_time=0 error_code=0
+use `sales`/*!*/;
+SET TIMESTAMP=1790683201/*!*/;
+CREATE TABLE `sales`.`order_archive`
+    (`id` BIGINT NOT NULL,
+     `created_at` DATETIME NOT NULL)
+/*!*/;

@@ -1,0 +1,25 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+# at 4
+#260929 14:00:00 server id 5  end_log_pos 55 CRC32 0x00000000  GTID 0-1-1201 trans
+# at 55
+#260929 14:00:00 server id 5  end_log_pos 95 CRC32 0x00000000  Annotate_rows:
+#Q> UPDATE `warehouse,west`.`quoted"items` SET `quantity` = 9 WHERE `id` = 21
+# at 95
+#260929 14:00:00 server id 5  end_log_pos 145 CRC32 0x00000000  Table_map: `warehouse,west`.`quoted"items` mapped to number 51 (flags: 0x0)
+# at 145
+#260929 14:00:00 server id 5  end_log_pos 220 CRC32 0x00000000  Update_rows_compressed_v1: table id 51 flags: STMT_END_F
+### UPDATE `warehouse,west`.`quoted"items`
+### WHERE
+###   @1=21
+### SET
+###   @2=9
+# at 220
+#260929 14:00:00 server id 5  end_log_pos 250 CRC32 0x00000000  Xid = 2201
+COMMIT/*!*/;
+# at 250
+#260929 14:00:01 server id 5  end_log_pos 410 CRC32 0x00000000  Query thread_id=15 exec_time=0 error_code=0
+use `warehouse,west`/*!*/;
+SET TIMESTAMP=1790690401/*!*/;
+CREATE TABLE `warehouse,west`.`archive,2026`
+    (`id` BIGINT NOT NULL)
+/*!*/;
