@@ -439,6 +439,7 @@ function analyze(snapshots, params) {
   }
 
   const securityPlan = security(sources, dbMapping, F);
+  const [activity, users] = analyzeActivity(sources, F, params.stale_days);
 
   const capacity = { per_instance: [], total: { documents: 0, data_size: 0, storage_size: 0, index_size: 0 }, target_existing: null };
   for (const s of sources) {
@@ -478,7 +479,10 @@ function analyze(snapshots, params) {
     analysis_format: ANALYSIS_FORMAT,
     implementation: params.implementation,
     generated_at: params.generated_at,
-    params: { naming_strategy: params.naming_strategy, prefix_sep: params.prefix_sep, target: targetName || null, mapping_entries: params.mappings.length },
+    params: {
+      naming_strategy: params.naming_strategy, prefix_sep: params.prefix_sep, target: targetName || null,
+      mapping_entries: params.mappings.length, stale_days: params.stale_days,
+    },
     target: targetInfo,
     instances,
     db_mapping: dbMapping,
@@ -486,6 +490,8 @@ function analyze(snapshots, params) {
     drift,
     findings,
     normalization,
+    activity,
+    users,
     security_plan: securityPlan,
     capacity,
     summary,
@@ -558,6 +564,176 @@ function security(sources, dbMapping, F) {
     planRoles.push({ role: e.role, db: e.db, privileges: chosen.privileges, roles: chosen.roles.map(splitRole), sources: srcs });
   }
   return { users: planUsers, roles: planRoles };
+}
+
+// ------------------------------------------------------------------ activity / users
+const ANY_DB_ROLES = new Set(['readAnyDatabase', 'readWriteAnyDatabase', 'dbAdminAnyDatabase',
+  'userAdminAnyDatabase', 'root', '__system', 'backup', 'restore']);
+const DB_ROLES = new Set(['read', 'readWrite', 'dbAdmin', 'dbOwner', 'userAdmin']);
+
+function effectiveAccess(roleRefs, custom) {
+  const out = new Set();
+  const seen = new Set();
+  const stack = roleRefs.slice();
+  while (stack.length) {
+    const ref = stack.pop();
+    const key = `${ref.role}@${ref.db}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (ANY_DB_ROLES.has(ref.role)) out.add('*');
+    else if (DB_ROLES.has(ref.role)) out.add(ref.db || '*');
+    else if (has(custom, key)) {
+      for (const priv of custom[key].privileges || []) {
+        const res = priv.resource || {};
+        if (has(res, 'db')) out.add(res.db || '*');
+        else if (res.anyResource) out.add('*');
+      }
+      stack.push(...(custom[key].roles || []));
+    }
+  }
+  return sortStr([...out]);
+}
+
+const topUsers = (users, limit = 3) => Object.entries(users).sort(byCountThenName).slice(0, limit).map(([u, n]) => `${u} (${n})`);
+const sortedCounts = (obj) => {
+  const out = {};
+  for (const k of sortStr(Object.keys(obj))) out[k] = obj[k];
+  return out;
+};
+
+const daysBetween = (newer, older) => Math.floor((Date.parse(newer) - Date.parse(older)) / 86400000);
+
+function analyzeActivity(sources, F, staleDays) {
+  const activityOut = [];
+  const usersOut = [];
+  for (const s of sources) {
+    const iname = sName(s);
+    const act = s.activity || null;
+    const sec = s.security || null;
+    if (!act && !sec) continue;
+    const oplog = act ? (act.oplog || null) : null;
+    const sampling = act ? (act.sampling || null) : null;
+    const oplogOk = !!oplog && !oplog.error;
+    const attributed = oplogOk || !!sampling;
+    const userStats = {};
+    const ustat = (name) => {
+      if (!has(userStats, name)) userStats[name] = { oplog_writes: 0, sampled_ops: 0, namespaces: new Set(), sources: new Set(), apps: {}, clients: {} };
+      return userStats[name];
+    };
+    const collections = [];
+    if (act) {
+      for (const m of act.members || []) if (m.error) F.add('WARN', 'ACTIVITY_ERROR', iname, '', `member ${m.host}: ${m.error}`);
+      if (oplog && oplog.error) F.add('WARN', 'ACTIVITY_ERROR', iname, '', `oplog: ${oplog.error}`);
+      if (sampling && sampling.error) F.add('WARN', 'ACTIVITY_ERROR', iname, '', `sampling: ${sampling.error}`);
+      const uidMap = act.uid_map || {};
+      if (uidMap.error) F.add('WARN', 'ACTIVITY_ERROR', iname, '', `session user resolution: ${uidMap.error}`);
+      if (oplogOk && oplog.oplog_first && oplog.requested_from && oplog.oplog_first > oplog.requested_from) {
+        F.add('INFO', 'OPLOG_WINDOW_SHORT', iname, '', `oplog only covers writes since ${oplog.oplog_first} (requested since ${oplog.requested_from})`);
+      }
+      for (const d of sDbs(s)) {
+        for (const c of sColls(d)) {
+          const ca = c.activity;
+          if (!ca) continue;
+          const ns = `${d.name}.${c.name}`;
+          const co = ca.oplog || null;
+          const cs = ca.sampled || null;
+          const ct = ca.top || null;
+          const users = {};
+          if (co) {
+            for (const [u, n] of Object.entries(co.users || {})) {
+              if (!has(users, u)) users[u] = { oplog: 0, sampled: 0 };
+              users[u].oplog += num(n);
+              if (!u.startsWith('(')) {
+                const st = ustat(u);
+                st.oplog_writes += num(n);
+                st.namespaces.add(ns);
+                st.sources.add('oplog');
+              }
+            }
+          }
+          if (cs) {
+            for (const [u, n] of Object.entries(cs.users || {})) {
+              if (!has(users, u)) users[u] = { oplog: 0, sampled: 0 };
+              users[u].sampled += num(n);
+            }
+          }
+          const writes = co ? co.inserts + co.updates + co.deletes + co.commands : null;
+          const modified = ca.modified || [];
+          const nn = (v) => (v === undefined ? null : v);
+          for (const m of modified) if (m.error) F.add('WARN', 'ACTIVITY_ERROR', iname, ns, `modified field ${m.path}: ${m.error}`);
+          const method = nn(ca.last_modified_method);
+          if (method === 'sample') {
+            F.add('INFO', 'MODIFIED_FROM_SAMPLE', iname, ns, `last modification of '${ca.last_modified_field}' is a lower bound taken from the sample (${ca.last_modified}); index the field or use --modified-scan for an exact value`);
+          }
+          const exactModified = (method === 'index' || method === 'scan') ? ca.last_modified : null;
+          const uncertain = modified.some((m) => m.method === 'sample' || m.method === 'none' || !!m.error);
+          const dates = [ca.last_insert, exactModified].filter((d) => d);
+          const newest = dates.length ? dates.sort(strcmp)[dates.length - 1] : '';
+          const collectedAt = s.collected_at || '';
+          if (staleDays > 0 && newest && collectedAt && !uncertain && (c.type || 'collection') === 'collection') {
+            const age = daysBetween(collectedAt, newest);
+            if (age >= staleDays) {
+              const scope = exactModified ? 'inserts or modifications' : 'inserts (no *modified* date field: updates are not visible)';
+              F.add('INFO', 'STALE_COLLECTION', iname, ns, `no ${scope} since ${newest} (${age} days before the collection date)`);
+            }
+          }
+          collections.push({
+            namespace: ns, type: c.type || 'collection',
+            first_insert: ca.first_insert === undefined ? null : ca.first_insert,
+            last_insert: ca.last_insert === undefined ? null : ca.last_insert,
+            id_type: ca.id_type === undefined ? null : ca.id_type,
+            last_modified: nn(ca.last_modified),
+            last_modified_field: nn(ca.last_modified_field),
+            last_modified_method: method,
+            modified_fields: modified.map((m) => ({ path: nn(m.path), method: nn(m.method), value: nn(m.value) })),
+            created_at: co ? co.created_at : null, last_write: co ? co.last : null,
+            oplog: co ? { inserts: co.inserts, updates: co.updates, deletes: co.deletes, commands: co.commands } : null,
+            top: ct, sampled_ops: cs ? cs.ops : null,
+            users: sortStr(Object.keys(users)).map((u) => ({ user: u, oplog: users[u].oplog, sampled: users[u].sampled })),
+          });
+          const idleTop = ct === null || (num(ct.reads) + num(ct.writes)) === 0;
+          const idleSample = cs === null || !cs.ops;
+          if (oplogOk && writes === 0 && idleTop && idleSample) {
+            F.add('INFO', 'NO_RECENT_ACTIVITY', iname, ns, `no writes since ${oplog.from} (oplog) and no reads/writes since ${(ct && ct.since) || '-'}: candidate for archiving instead of migrating`);
+          }
+        }
+      }
+      for (const [u, data] of Object.entries(act.users || {})) {
+        const st = ustat(u);
+        st.sampled_ops += num(data.sampled_ops);
+        for (const ns of Object.keys(data.namespaces || {})) st.namespaces.add(ns);
+        st.sources.add('sampling');
+        for (const [k, v] of Object.entries(data.apps || {})) st.apps[k] = (st.apps[k] || 0) + num(v);
+        for (const [k, v] of Object.entries(data.clients || {})) st.clients[k] = (st.clients[k] || 0) + num(v);
+      }
+      activityOut.push({ instance: iname, members: act.members || [], oplog, sampling, collections });
+    }
+    const defined = {};
+    const custom = {};
+    if (sec) {
+      for (const u of sec.users || []) defined[`${u.user}@${u.db}`] = u.roles || [];
+      for (const r of sec.roles || []) custom[`${r.role}@${r.db}`] = r;
+    }
+    for (const name of sortStr([...new Set(Object.keys(defined).concat(Object.keys(userStats)))])) {
+      const st = userStats[name] || { oplog_writes: 0, sampled_ops: 0, namespaces: new Set(), sources: new Set(), apps: {}, clients: {} };
+      const observed = !!(st.oplog_writes || st.sampled_ops);
+      const recommendation = observed ? 'migrate' : (attributed ? 'review' : 'unknown');
+      const at = name.lastIndexOf('@');
+      usersOut.push({
+        instance: iname, user: at > 0 ? name.slice(0, at) : name, db: at > 0 ? name.slice(at + 1) : '',
+        defined: has(defined, name), access: effectiveAccess(defined[name] || [], custom),
+        observed, sources: sortStr([...st.sources]), oplog_writes: st.oplog_writes, sampled_ops: st.sampled_ops,
+        namespaces: sortStr([...st.namespaces]), apps: sortedCounts(st.apps), clients: sortedCounts(st.clients),
+        recommendation,
+      });
+      if (name.startsWith('uid:')) {
+        F.add('INFO', 'USER_UNRESOLVED', iname, name, 'oplog writes from a session user that could not be resolved (dropped user or missing viewUser privilege)');
+      } else if (recommendation === 'review') {
+        F.add('INFO', 'USER_NO_ACTIVITY', iname, name, 'user has access but no activity was observed (oplog/sampling)');
+      }
+    }
+  }
+  return [activityOut, usersOut];
 }
 
 // ------------------------------------------------------------------ renderers
@@ -690,7 +866,92 @@ function renderReport(an, snapshots) {
     }
     L.push('');
   }
+  L.push(...activitySection(an), ...usersSection(an));
   return `${L.join('\n').replace(/\n+$/, '')}\n`;
+}
+
+const dash = (v) => (v === null || v === undefined ? '-' : String(v));
+const limitList = (items, limit) => (items.length ? items.slice(0, limit).join(', ') + (items.length > limit ? ` +${items.length - limit}` : '') : '-');
+
+function modifiedCell(c) {
+  if (!c.last_modified) return '-';
+  return (c.last_modified_method === 'sample' ? '≥ ' : '') + c.last_modified;
+}
+
+function modifiedFieldCell(c) {
+  if (!c.last_modified_field) return '-';
+  const others = c.modified_fields.filter((m) => m.value && m.path !== c.last_modified_field).length;
+  return `${c.last_modified_field} (${c.last_modified_method})${others ? ` +${others}` : ''}`;
+}
+
+function activitySection(an) {
+  const L = ['## 8. Activity', ''];
+  if (!an.activity.length) return L.concat(['_Activity not collected._', '']);
+  L.push('`~` dates come from ObjectId `_id` values (inserts only, client clock). *Last modified* comes from'
+    + ' date fields matching the modified pattern: exact through an index or `--modified-scan`; `≥` is a'
+    + ' lower bound taken from the sampled documents.', '');
+  for (const a of an.activity) {
+    L.push(`### Instance \`${a.instance}\``, '');
+    const o = a.oplog;
+    const sp = a.sampling;
+    const hasTop = a.collections.some((c) => c.top);
+    const hasOplog = o !== null && !o.error;
+    const hasUsers = hasOplog || sp !== null;
+    const notes = [];
+    if (a.members.length) {
+      const members = a.members.map((m) => `${m.host} (${m.state || 'unreachable'}${m.started_at ? `, up since ${m.started_at}` : ''})`);
+      notes.push(`- Members: ${md(members.join(', '))}`);
+    }
+    if (o !== null) {
+      notes.push(o.error ? `- Oplog: **error** ${md(o.error)}`
+        : `- Oplog: ${o.window_hours} h requested on ${md(dash(o.member))}; analyzed from ${o.from} to ${o.oplog_last}`);
+    }
+    if (sp !== null) notes.push(`- Live sampling: ${sp.samples} round(s) every ${sp.interval_s} s on ${sp.members} member(s), ${sp.started_at} - ${dash(sp.finished_at)}`);
+    if (notes.length) L.push(...notes, '');
+    if (!a.collections.length) {
+      L.push('_No collections._', '');
+      continue;
+    }
+    const head = ['Namespace', '_id', 'First insert ~', 'Last insert ~', 'Last modified', 'Modified field'];
+    const align = ['---', '---', '---', '---', '---', '---'];
+    if (hasTop) { head.push('Reads since restart', 'Writes since restart'); align.push('---:', '---:'); }
+    if (hasOplog) { head.push('Created (oplog)', 'Last write (oplog)', 'Oplog i/u/d/c'); align.push('---', '---', '---'); }
+    if (sp !== null) { head.push('Sampled ops'); align.push('---:'); }
+    if (hasUsers) { head.push('Users'); align.push('---'); }
+    L.push(`| ${head.join(' | ')} |`, `|${align.join('|')}|`);
+    for (const c of a.collections) {
+      const row = [md(c.namespace), dash(c.id_type), dash(c.first_insert), dash(c.last_insert), modifiedCell(c), md(modifiedFieldCell(c))];
+      const t = c.top;
+      if (hasTop) row.push(dash(t ? t.reads : null), dash(t ? t.writes : null));
+      const op = c.oplog;
+      if (hasOplog) row.push(dash(c.created_at), dash(c.last_write), op ? `${op.inserts}/${op.updates}/${op.deletes}/${op.commands}` : '-');
+      if (sp !== null) row.push(dash(c.sampled_ops));
+      if (hasUsers) {
+        const users = {};
+        for (const u of c.users) users[u.user] = u.oplog + u.sampled;
+        row.push(md(limitList(topUsers(users, 3), 3)));
+      }
+      L.push(`| ${row.join(' | ')} |`);
+    }
+    L.push('');
+  }
+  return L;
+}
+
+function usersSection(an) {
+  const L = ['## 9. Users', ''];
+  if (!an.users.length) return L.concat(['_No user information (collect with --include-security and/or --oplog-window / --activity-samples)._', '']);
+  L.push('| Instance | User | Defined | Access (source DBs) | Observed via | Oplog writes | Sampled ops | Namespaces | Applications | Clients | Recommendation |',
+    '|---|---|---|---|---|---:|---:|---|---|---|---|');
+  for (const u of an.users) {
+    const name = u.db ? `${u.user}@${u.db}` : u.user;
+    const apps = Object.entries(u.apps).sort(byCountThenName).map((e) => e[0]);
+    const clients = Object.entries(u.clients).sort(byCountThenName).map((e) => e[0]);
+    L.push(`| ${md(u.instance)} | ${md(name)} | ${u.defined ? 'yes' : 'no'} | ${md(u.access.join(', ') || '-')} | ${u.sources.join(', ') || '-'}`
+      + ` | ${u.oplog_writes} | ${u.sampled_ops} | ${md(limitList(u.namespaces, 5))} | ${md(limitList(apps, 3))} | ${md(limitList(clients, 3))} | **${u.recommendation}** |`);
+  }
+  L.push('');
+  return L;
 }
 
 function renderPlan(an) {
@@ -763,6 +1024,18 @@ function renderPlan(an) {
     L.push(`${sp.users.length} user(s) and ${sp.roles.length} custom role(s) will be created by the`
       + ' `security` bootstrap phase (passwords are prompted, never exported).');
     for (const f of an.findings) if (f.code === 'USER_CONFLICT' || f.code === 'ROLE_CONFLICT') L.push(...findingLines(f));
+  }
+  if (an.users.length) {
+    for (const [title, rec] of [['Users to migrate (activity observed)', 'migrate'],
+      ['Users to review (access granted, no activity observed)', 'review'],
+      ['Users without activity data (no oplog window or sampling)', 'unknown']]) {
+      const items = an.users.filter((u) => u.recommendation === rec);
+      L.push('', `**${title}:** ${items.length}`);
+      for (const u of items) {
+        const name = u.db ? `${u.user}@${u.db}` : u.user;
+        L.push(`- \`${md(u.instance)}\` \`${md(name)}\` - access: ${md(u.access.join(', ') || '-')}; namespaces: ${md(limitList(u.namespaces, 5))}`);
+      }
+    }
   }
 
   L.push('', '## 4. Execution runbook', '',
@@ -943,6 +1216,7 @@ function main() {
     mappings,
     generated_at: env.BMN_GENERATED_AT || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     implementation: env.BMN_IMPLEMENTATION || 'bash',
+    stale_days: env.BMN_STALE_DAYS === undefined || env.BMN_STALE_DAYS === '' ? 180 : parseInt(env.BMN_STALE_DAYS, 10),
   });
   fs.mkdirSync(outDir, { recursive: true });
   const artifacts = [

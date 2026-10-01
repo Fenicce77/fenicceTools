@@ -66,10 +66,12 @@ Do not use `root`/`admin` accounts. Create a dedicated user on every instance:
 db.getSiblingDB("admin").createRole({
   role: "bmnSchemaAuditor",
   privileges: [
-    { resource: { cluster: true }, actions: ["listDatabases", "serverStatus", "getParameter"] },
+    { resource: { cluster: true }, actions: ["listDatabases", "serverStatus", "getParameter", "top", "inprog"] },
     { resource: { db: "", collection: "" }, actions: ["listCollections", "listIndexes", "collStats", "find"] },
     { resource: { db: "config", collection: "collections" }, actions: ["find"] },
-    // only for --include-security:
+    // --oplog-window:
+    { resource: { db: "local", collection: "oplog.rs" }, actions: ["find"] },
+    // --include-security and session user resolution of --oplog-window:
     { resource: { db: "", collection: "" }, actions: ["viewUser", "viewRole"] }
   ],
   roles: []
@@ -81,7 +83,9 @@ db.getSiblingDB("admin").createUser({
 });
 ```
 
-`find` is required by `$sample`. Snapshots store field paths and BSON type histograms
+`find` is required by `$sample`, the `_id` bounds and the *modified* fields, `top` by
+`--member-stats` and `inprog` by `--activity-samples`. With `--member-stats`, `--oplog-window`
+or `--activity-samples` the user must be valid on every replica set member (direct connections). Snapshots store field paths and BSON type histograms
 only, never document values (validators, partial filters and view pipelines are metadata
 and are kept as defined).
 
@@ -131,6 +135,33 @@ to `--max-depth`, array elements as `path[]`). Optionally users and custom roles
 Reads use `readPreference=secondaryPreferred` and `appName=betika_mongodb_normalized`
 (easy to spot in `currentOp`/PMM).
 
+## Activity and users
+
+MongoDB stores neither creation/modification dates nor per-user access history, so the
+tool combines several sources and labels each one:
+
+| Data | Source | Default | Cost | Caveats |
+|---|---|---|---|---|
+| First / last insert (`~`) | min/max ObjectId `_id` (2 index seeks) | on | negligible | ObjectId `_id` only; client clock; inserts only |
+| Last modified | max of date fields whose name matches `--modified-pattern` (default `modif`: `modifiedAt`, `lastModified`, `date_modified`...) | on | index seek if the field leads a non-partial index; otherwise none (sample max) | without index the value is a lower bound (`≥`) from the sample; `--modified-scan` makes it exact with a COLLSCAN |
+| Reads / writes since restart | `top` on every member (direct connection) | `--member-stats` | negligible | per-node counters reset on restart |
+| Created, last write, i/u/d/c counts | oplog of a secondary, last `--oplog-window` hours | off | ∝ oplog volume in the window | creation only if inside the window |
+| Users per collection (writes) | oplog `lsid.uid` = SHA-256 of `user@authDB`, matched against `usersInfo` | with oplog | none extra | only retryable writes and transactions carry `lsid` (`(no session)` otherwise) |
+| Users, apps, clients (reads and writes) | `$currentOp` sampling on every member | off | N rounds × members | statistical: short operations can be missed |
+
+`STALE_COLLECTION` (INFO) flags collections whose newest insert/modification is older than
+`--stale-days` (default 180, `0` disables). It is only raised when the dates are exact (no
+sample-based or failed *modified* field), so it is safe to use as an archiving shortlist.
+
+The report adds section 8 (activity per collection) and section 9 (users: defined, effective
+access, observed activity, applications, client hosts). The plan classifies users as
+**migrate** (activity observed), **review** (access granted, nothing observed) or
+**unknown** (no oplog window nor sampling collected). Typical run for user discovery:
+
+```bash
+mongo_schema_normalizer.sh run --include-security --oplog-window 24 --activity-samples 30 --activity-interval 10
+```
+
 ## Generated artifacts
 
 | File                           | Content                                                                 |
@@ -173,6 +204,12 @@ database-tools YAML files (`uri: ...`, `chmod 600`) in
 | WARN | `VERSION_DOWNGRADE` | source newer than target |
 | WARN | `SHARD_KEY_LOST`, `TIMESERIES_RENAME`, `TARGET_DB_EXISTS` | sharding / time-series remap / existing target database |
 | WARN | `USER_CONFLICT`, `ROLE_CONFLICT`, `OPTION_LEGACY`, `STATS_ERROR`, `SAMPLE_ERROR` | security conflicts, legacy options, partial collection |
+| WARN | `ACTIVITY_ERROR` | unreachable member, oplog/sampling/user-resolution failure |
+| INFO | `NO_RECENT_ACTIVITY` | no writes in the oplog window nor reads/writes since restart: archiving candidate |
+| INFO | `OPLOG_WINDOW_SHORT` | the oplog covers less than the requested window |
+| INFO | `STALE_COLLECTION` | no inserts/modifications for `--stale-days` (exact dates only) |
+| INFO | `MODIFIED_FROM_SAMPLE` | last modification is a lower bound from the sample (field not indexed) |
+| INFO | `USER_NO_ACTIVITY`, `USER_UNRESOLVED` | user with access but no observed activity / session user not resolvable |
 | INFO | `DB_MERGE`, `NUMERIC_TYPE_MIXED`, `TTL_INDEX`, `CAPPED`, `VIEW`, `SHARD_KEY`, `INDEX_LEGACY_OPTION`, `MIXED_VERSIONS`, `NO_TARGET`, `SCHEMA_TRUNCATED`, `USER_DUPLICATE`, `ROLE_DUPLICATE` | informational |
 
 ## Limitations

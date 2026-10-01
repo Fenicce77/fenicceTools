@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List
 
+from .activity_analysis import top_users
 from .common import (
     INDEX_STRIP_KEYS, TEMPLATES_DIR, canon, classify_types, dump_pretty, human_bytes, md, sh_single_quote,
 )
@@ -138,7 +139,119 @@ def render_report(an: dict, snapshots: List[dict]) -> str:
         else:
             L.append("- Field types: consistent")
         L.append("")
+    L += _activity_section(an)
+    L += _users_section(an)
     return "\n".join(L).rstrip("\n") + "\n"
+
+
+def _dash(value) -> str:
+    return "-" if value is None else str(value)
+
+
+def _limit(items: List[str], limit: int) -> str:
+    if not items:
+        return "-"
+    extra = f" +{len(items) - limit}" if len(items) > limit else ""
+    return ", ".join(items[:limit]) + extra
+
+
+def _modified_cell(c: dict) -> str:
+    if not c["last_modified"]:
+        return "-"
+    return ("≥ " if c["last_modified_method"] == "sample" else "") + c["last_modified"]
+
+
+def _modified_field_cell(c: dict) -> str:
+    if not c["last_modified_field"]:
+        return "-"
+    others = sum(1 for m in c["modified_fields"] if m["value"] and m["path"] != c["last_modified_field"])
+    return f"{c['last_modified_field']} ({c['last_modified_method']})" + (f" +{others}" if others else "")
+
+
+def _activity_section(an: dict) -> List[str]:
+    L = ["## 8. Activity", ""]
+    if not an["activity"]:
+        L += ["_Activity not collected._", ""]
+        return L
+    L += ["`~` dates come from ObjectId `_id` values (inserts only, client clock). *Last modified* comes from"
+          " date fields matching the modified pattern: exact through an index or `--modified-scan`; `≥` is a"
+          " lower bound taken from the sampled documents.", ""]
+    for a in an["activity"]:
+        L += [f"### Instance `{a['instance']}`", ""]
+        o, sp = a["oplog"], a["sampling"]
+        has_top = any(c["top"] for c in a["collections"])
+        has_oplog = o is not None and not o.get("error")
+        has_users = has_oplog or sp is not None
+        notes = []
+        if a["members"]:
+            members = [f"{m['host']} ({m['state'] or 'unreachable'}"
+                       + (f", up since {m['started_at']}" if m["started_at"] else "") + ")" for m in a["members"]]
+            notes.append(f"- Members: {md(', '.join(members))}")
+        if o is not None:
+            notes.append(f"- Oplog: **error** {md(o['error'])}" if o.get("error") else
+                         f"- Oplog: {o['window_hours']} h requested on {md(_dash(o['member']))};"
+                         f" analyzed from {o['from']} to {o['oplog_last']}")
+        if sp is not None:
+            notes.append(f"- Live sampling: {sp['samples']} round(s) every {sp['interval_s']} s on {sp['members']}"
+                         f" member(s), {sp['started_at']} - {_dash(sp['finished_at'])}")
+        if notes:
+            L += notes + [""]
+        if not a["collections"]:
+            L += ["_No collections._", ""]
+            continue
+        head = ["Namespace", "_id", "First insert ~", "Last insert ~", "Last modified", "Modified field"]
+        align = ["---", "---", "---", "---", "---", "---"]
+        if has_top:
+            head += ["Reads since restart", "Writes since restart"]
+            align += ["---:", "---:"]
+        if has_oplog:
+            head += ["Created (oplog)", "Last write (oplog)", "Oplog i/u/d/c"]
+            align += ["---", "---", "---"]
+        if sp is not None:
+            head += ["Sampled ops"]
+            align += ["---:"]
+        if has_users:
+            head += ["Users"]
+            align += ["---"]
+        L += ["| " + " | ".join(head) + " |", "|" + "|".join(align) + "|"]
+        for c in a["collections"]:
+            row = [md(c["namespace"]), _dash(c["id_type"]), _dash(c["first_insert"]), _dash(c["last_insert"]),
+                   _modified_cell(c), md(_modified_field_cell(c))]
+            t = c["top"]
+            if has_top:
+                row += [_dash(t["reads"] if t else None), _dash(t["writes"] if t else None)]
+            op = c["oplog"]
+            if has_oplog:
+                row += [_dash(c["created_at"]), _dash(c["last_write"]),
+                        f"{op['inserts']}/{op['updates']}/{op['deletes']}/{op['commands']}" if op else "-"]
+            if sp is not None:
+                row += [_dash(c["sampled_ops"])]
+            if has_users:
+                users = {u["user"]: u["oplog"] + u["sampled"] for u in c["users"]}
+                row += [md(_limit(top_users(users, 3), 3))]
+            L.append("| " + " | ".join(row) + " |")
+        L.append("")
+    return L
+
+
+def _users_section(an: dict) -> List[str]:
+    L = ["## 9. Users", ""]
+    if not an["users"]:
+        L += ["_No user information (collect with --include-security and/or --oplog-window / --activity-samples)._", ""]
+        return L
+    L += ["| Instance | User | Defined | Access (source DBs) | Observed via | Oplog writes | Sampled ops"
+          " | Namespaces | Applications | Clients | Recommendation |",
+          "|---|---|---|---|---|---:|---:|---|---|---|---|"]
+    for u in an["users"]:
+        name = f"{u['user']}@{u['db']}" if u["db"] else u["user"]
+        apps = [k for k, _ in sorted(u["apps"].items(), key=lambda kv: (-kv[1], kv[0]))]
+        clients = [k for k, _ in sorted(u["clients"].items(), key=lambda kv: (-kv[1], kv[0]))]
+        L.append(f"| {md(u['instance'])} | {md(name)} | {'yes' if u['defined'] else 'no'}"
+                 f" | {md(', '.join(u['access']) or '-')} | {', '.join(u['sources']) or '-'}"
+                 f" | {u['oplog_writes']} | {u['sampled_ops']} | {md(_limit(u['namespaces'], 5))}"
+                 f" | {md(_limit(apps, 3))} | {md(_limit(clients, 3))} | **{u['recommendation']}** |")
+    L.append("")
+    return L
 
 
 def render_plan(an: dict) -> str:
@@ -223,6 +336,16 @@ def render_plan(an: dict) -> str:
         for f in an["findings"]:
             if f["code"] in ("USER_CONFLICT", "ROLE_CONFLICT"):
                 L += _finding_lines(f)
+    if an["users"]:
+        for title, rec in (("Users to migrate (activity observed)", "migrate"),
+                           ("Users to review (access granted, no activity observed)", "review"),
+                           ("Users without activity data (no oplog window or sampling)", "unknown")):
+            items = [u for u in an["users"] if u["recommendation"] == rec]
+            L += ["", f"**{title}:** {len(items)}"]
+            for u in items:
+                name = f"{u['user']}@{u['db']}" if u["db"] else u["user"]
+                L.append(f"- `{md(u['instance'])}` `{md(name)}` - access: {md(', '.join(u['access']) or '-')}"
+                         f"; namespaces: {md(_limit(u['namespaces'], 5))}")
 
     L += ["", "## 4. Execution runbook", "",
           "1. Resolve every blocking issue and re-run the analysis until the status is READY.",

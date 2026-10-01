@@ -120,31 +120,49 @@ function bsonType(v) {
 }
 const isPlainObject = (v) => bsonType(v) === 'object' && !(v && v._bsontype);
 
-function walk(doc, prefix, depth, maxDepth, seen) {
+function dateIso(v) {
+  if (v instanceof Date) return v.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  if (v && v._bsontype === 'Timestamp') {
+    const secs = typeof v.getHighBits === 'function' ? v.getHighBits() >>> 0 : v.t;
+    return new Date(secs * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  return null;
+}
+
+function trackModified(p, t, value, modifiedRe, track) {
+  if (!track || !modifiedRe || (t !== 'date' && t !== 'timestamp') || p.includes('[]')) return;
+  if (!modifiedRe.test(p.split('.').pop())) return;
+  const stamp = dateIso(value);
+  if (stamp && (!(p in track) || stamp > track[p])) track[p] = stamp;
+}
+
+function walk(doc, prefix, depth, maxDepth, seen, modifiedRe, track) {
   for (const key of Object.keys(doc)) {
     const value = doc[key];
     const p = prefix ? `${prefix}.${key}` : key;
     const t = bsonType(value);
     seen.set(`${p}\u0000${t}`, [p, t]);
+    trackModified(p, t, value, modifiedRe, track);
     if (t === 'object' && isPlainObject(value) && depth < maxDepth) {
-      walk(value, p, depth + 1, maxDepth, seen);
+      walk(value, p, depth + 1, maxDepth, seen, modifiedRe, track);
     } else if (t === 'array') {
       const ap = `${p}[]`;
       for (const elem of value.slice(0, MAX_ARRAY_ELEMENTS)) {
         const et = bsonType(elem);
         seen.set(`${ap}\u0000${et}`, [ap, et]);
-        if (et === 'object' && isPlainObject(elem) && depth < maxDepth) walk(elem, ap, depth + 1, maxDepth, seen);
+        if (et === 'object' && isPlainObject(elem) && depth < maxDepth) walk(elem, ap, depth + 1, maxDepth, seen, modifiedRe, track);
       }
     }
   }
 }
 
-function inferSchema(docs, maxDepth) {
+function inferSchema(docs, maxDepth, modifiedRe) {
   const fields = new Map();
+  const modifiedMax = {};
   let truncated = false;
   for (const doc of docs) {
     const seen = new Map();
-    walk(doc, '', 1, maxDepth, seen);
+    walk(doc, '', 1, maxDepth, seen, modifiedRe || null, modifiedMax);
     const counted = new Set();
     for (const [p, t] of seen.values()) {
       if (!fields.has(p)) {
@@ -169,7 +187,9 @@ function inferSchema(docs, maxDepth) {
     for (const t of Object.keys(e.types).sort(strcmp)) types[t] = e.types[t];
     ordered[p] = { count: e.count, types };
   }
-  return { sampled: docs.length, truncated, fields: ordered };
+  const modMax = {};
+  for (const p of Object.keys(modifiedMax).sort(strcmp)) modMax[p] = modifiedMax[p];
+  return { sampled: docs.length, truncated, fields: ordered, modified_max: modMax };
 }
 
 // ------------------------------------------------------------------ collection
@@ -179,14 +199,18 @@ function run(dbh, cmd) {
   return res;
 }
 
+function collectHello(conn) {
+  const admin = conn.getDB('admin');
+  try {
+    return run(admin, { hello: 1 });
+  } catch (e) {
+    return run(admin, { isMaster: 1 });
+  }
+}
+
 function collectServer(conn) {
   const admin = conn.getDB('admin');
-  let hello;
-  try {
-    hello = run(admin, { hello: 1 });
-  } catch (e) {
-    hello = run(admin, { isMaster: 1 });
-  }
+  const hello = collectHello(conn);
   const build = run(admin, { buildInfo: 1 });
   const server = { version: build.version, fcv: null, set_name: hello.setName || null, storage_engine: null };
   if (hello.msg === 'isdbgrid') server.topology = 'sharded';
@@ -215,7 +239,7 @@ function collectDb(conn, info, shardKeys, opts) {
     const coll = dbh.getCollection(cname);
     const entry = {
       name: cname, type: ctype, options: ci.options || {}, stats: null, stats_error: null, indexes: [],
-      shard_key: null, shard_key_unique: false, schema: null, schema_error: null,
+      shard_key: null, shard_key_unique: false, schema: null, schema_error: null, activity: null,
     };
     const ns = `${info.name}.${cname}`;
     if (shardKeys[ns]) [entry.shard_key, entry.shard_key_unique] = shardKeys[ns];
@@ -244,15 +268,25 @@ function collectDb(conn, info, shardKeys, opts) {
       } catch (e) {
         entry.stats_error = errText(e);
       }
+      if (opts.activity.enabled && ctype === 'collection') {
+        try {
+          entry._id_bounds = idBounds(coll, opts.opTimeoutMs);
+        } catch (e) {
+          entry._id_bounds = { first_insert: null, last_insert: null, id_type: `error: ${errText(e)}` };
+        }
+      } else if (opts.activity.enabled) {
+        entry._id_bounds = { first_insert: null, last_insert: null, id_type: 'n/a' };
+      }
       if (opts.sampleSize > 0) {
         try {
           const docs = coll.aggregate([{ $sample: { size: opts.sampleSize } }],
             { maxTimeMS: opts.opTimeoutMs, promoteValues: false }).toArray();
-          entry.schema = inferSchema(docs, opts.maxDepth);
+          entry.schema = inferSchema(docs, opts.maxDepth, opts.activity.modifiedRe);
         } catch (e) {
           entry.schema_error = errText(e);
         }
       }
+      if (opts.activity.enabled) entry._modified = modifiedDates(coll, entry.schema, entry.indexes, opts.activity, opts.opTimeoutMs);
     }
     out.collections.push(entry);
   }
@@ -283,6 +317,325 @@ function collectSecurity(conn, dbNames) {
   return { users, roles, errors };
 }
 
+// ------------------------------------------------------------------ activity
+// Mirror of python/bmn/activity.py (see that module for the snapshot structures).
+const NO_SESSION = '(no session)';
+const NO_AUTH = '(no auth)';
+const sleepMs = (ms) => (typeof sleep === 'function' ? sleep(ms) : Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
+const isoOf = (v) => {
+  if (v === null || v === undefined) return null;
+  const d = typeof v === 'number' ? new Date(v * 1000) : v;
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+};
+const isObjectId = (v) => !!v && (v._bsontype === 'ObjectId' || v._bsontype === 'ObjectID');
+const tsSeconds = (ts) => {
+  if (ts && typeof ts.getHighBits === 'function') return ts.getHighBits() >>> 0;
+  if (ts && typeof ts.t === 'number') return ts.t;
+  return EJSON.serialize({ v: ts }).v.$timestamp.t;
+};
+const makeTimestamp = (secs) => EJSON.deserialize({ v: { $timestamp: { t: secs, i: 0 } } }).v;
+const uidHash = (name) => require('crypto').createHash('sha256').update(name, 'utf8').digest('hex');
+const bump = (obj, key, n = 1) => { obj[key] = (obj[key] || 0) + n; };
+const sortNested = (v) => {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return v;
+  const out = {};
+  for (const k of Object.keys(v).sort(strcmp)) out[k] = sortNested(v[k]);
+  return out;
+};
+
+function memberUri(uri, host) {
+  const qpos = uri.indexOf('?');
+  const head = qpos >= 0 ? uri.slice(0, qpos) : uri;
+  const query = qpos >= 0 ? uri.slice(qpos + 1) : '';
+  const scheme = head.slice(0, head.indexOf('://'));
+  const rest = head.slice(head.indexOf('://') + 3);
+  const path = rest.includes('/') ? rest.slice(rest.indexOf('/') + 1) : '';
+  const params = query.split('&').filter((p) => p && !['replicaset', 'directconnection'].includes(p.split('=')[0].toLowerCase()));
+  const names = new Set(params.map((p) => p.split('=')[0].toLowerCase()));
+  if (scheme === 'mongodb+srv' && !names.has('tls') && !names.has('ssl')) params.push('tls=true');
+  params.push('directConnection=true');
+  return `mongodb://${host}/${path}?${params.join('&')}`;
+}
+
+function idBounds(coll, timeoutMs) {
+  const out = { first_insert: null, last_insert: null, id_type: 'empty' };
+  const lo = coll.find({}, { _id: 1 }).sort({ _id: 1 }).limit(1).maxTimeMS(timeoutMs).toArray();
+  if (!lo.length) return out;
+  const hi = coll.find({}, { _id: 1 }).sort({ _id: -1 }).limit(1).maxTimeMS(timeoutMs).toArray();
+  const loId = lo[0]._id;
+  const hiId = hi.length ? hi[0]._id : null;
+  const loOk = isObjectId(loId);
+  const hiOk = isObjectId(hiId);
+  if (loOk) out.first_insert = isoOf(loId.getTimestamp());
+  if (hiOk) out.last_insert = isoOf(hiId.getTimestamp());
+  out.id_type = loOk && hiOk ? 'objectId' : (loOk || hiOk ? 'mixed' : 'other');
+  return out;
+}
+
+const oplogPipeline = (fromTs) => [
+  { $match: { ts: { $gte: fromTs }, op: { $in: ['i', 'u', 'd', 'c'] } } },
+  { $project: { ts: 1, uid: '$lsid.uid', entries: { $cond: [{ $isArray: '$o.applyOps' }, '$o.applyOps', [{ op: '$op', ns: '$ns', o: '$o' }]] } } },
+  { $unwind: '$entries' },
+  { $project: { ts: 1, uid: 1, op: '$entries.op', ns: '$entries.ns', cmd: { $cond: [{ $eq: ['$entries.op', 'c'] }, { $arrayElemAt: [{ $objectToArray: '$entries.o' }, 0] }, null] } } },
+  { $group: { _id: { ns: '$ns', op: '$op', uid: '$uid', cmd: '$cmd.k', target: '$cmd.v' }, n: { $sum: 1 }, first: { $min: '$ts' }, last: { $max: '$ts' } } },
+  { $project: { n: 1, first: { $toDate: '$first' }, last: { $toDate: '$last' } } },
+];
+
+function resolveUid(uid, uidMap) {
+  if (uid === null || uid === undefined) return NO_SESSION;
+  const hex = uid._bsontype === 'Binary' ? uid.toString('hex') : Buffer.from(uid).toString('hex');
+  return uidMap[hex] || `uid:${hex.slice(0, 12)}`;
+}
+
+const emptyOplogEntry = () => ({ inserts: 0, updates: 0, deletes: 0, commands: 0, first: null, last: null, created_at: null, users: {} });
+
+function foldOplogRows(rows, uidMap) {
+  const perNs = {};
+  for (const row of rows) {
+    const key = row._id || {};
+    const op = key.op;
+    let ns;
+    if (op === 'i' || op === 'u' || op === 'd') {
+      ns = key.ns || '';
+    } else if (op === 'c') {
+      if (typeof key.target !== 'string') continue;
+      ns = key.cmd === 'renameCollection' ? key.target : `${(key.ns || '').split('.')[0]}.${key.target}`;
+    } else {
+      continue;
+    }
+    if (!ns || SYSTEM_DBS.has(ns.split('.')[0])) continue;
+    if (!perNs[ns]) perNs[ns] = emptyOplogEntry();
+    const e = perNs[ns];
+    const n = toNum(row.n);
+    e[{ i: 'inserts', u: 'updates', d: 'deletes', c: 'commands' }[op]] += n;
+    const first = isoOf(row.first);
+    const last = isoOf(row.last);
+    if (first && (e.first === null || first < e.first)) e.first = first;
+    if (last && (e.last === null || last > e.last)) e.last = last;
+    if (op === 'c' && key.cmd === 'create' && last && (e.created_at === null || last > e.created_at)) e.created_at = last;
+    bump(e.users, resolveUid(key.uid, uidMap), n);
+  }
+  for (const e of Object.values(perNs)) e.users = sortNested(e.users);
+  return perNs;
+}
+
+function sampleOps(ops, sampled, users) {
+  for (const op of ops) {
+    const effective = op.effectiveUsers || [];
+    if (!effective.length) continue; // internal operations (replication, TTL monitor...)
+    const ns = op.ns || '';
+    const dot = ns.indexOf('.');
+    const db = dot >= 0 ? ns.slice(0, dot) : ns;
+    let coll = dot >= 0 ? ns.slice(dot + 1) : '';
+    if (!db || SYSTEM_DBS.has(db)) continue;
+    if (!coll || coll === '$cmd') {
+      const command = op.command || {};
+      const keys = Object.keys(command);
+      const first = keys.length ? command[keys[0]] : null;
+      coll = typeof first === 'string' ? first : '';
+    }
+    const full = coll ? `${db}.${coll}` : db;
+    const user = `${effective[0].user}@${effective[0].db}`;
+    if (!sampled[full]) sampled[full] = { ops: 0, users: {} };
+    sampled[full].ops += 1;
+    bump(sampled[full].users, user);
+    if (!users[user]) users[user] = { sampled_ops: 0, namespaces: {}, apps: {}, clients: {} };
+    const u = users[user];
+    u.sampled_ops += 1;
+    bump(u.namespaces, full);
+    if (op.appName) bump(u.apps, String(op.appName));
+    if (op.client) {
+      const c = String(op.client);
+      bump(u.clients, c.includes(':') ? c.slice(0, c.lastIndexOf(':')) : c);
+    }
+  }
+}
+
+function collectActivity(conn, uri, hello, dbNames, aopts, opTimeoutMs) {
+  const activity = { members: [], oplog: null, sampling: null, uid_map: null, users: {} };
+  const hosts = (hello.hosts || []).concat(hello.passives || []);
+  const members = [];
+  const top = {};
+  const starts = [];
+  for (const host of (aopts.needsMembers ? (hosts.length ? hosts : [hello.me || 'self']) : [])) {
+    const info = { host, state: null, started_at: null, error: null };
+    try {
+      const mc = hosts.length ? new Mongo(withCredentials(memberUri(uri, host))) : conn;
+      const adm = mc.getDB('admin');
+      const h = hosts.length ? run(adm, { hello: 1 }) : hello;
+      info.state = (h.isWritablePrimary || h.ismaster) ? 'PRIMARY' : (h.secondary ? 'SECONDARY' : 'OTHER');
+      if (aopts.memberStats) {
+        const st = run(adm, { serverStatus: 1, repl: 0, metrics: 0, locks: 0 });
+        info.started_at = isoOf(Math.floor(Date.now() / 1000) - Math.floor(toNum(st.uptime)));
+        starts.push(info.started_at);
+        const totals = run(adm, { top: 1 }).totals || {};
+        for (const [ns, counters] of Object.entries(totals)) {
+          if (ns === 'note' || !counters || typeof counters !== 'object') continue;
+          const cnt = (k) => toNum((counters[k] || {}).count);
+          if (!top[ns]) top[ns] = [0, 0];
+          top[ns][0] += cnt('queries') + cnt('getmore');
+          top[ns][1] += cnt('insert') + cnt('update') + cnt('remove');
+        }
+      }
+      members.push([host, mc, info.state]);
+    } catch (e) {
+      info.error = errText(e);
+    }
+    activity.members.push(info);
+  }
+  const topSince = starts.length ? starts.slice().sort(strcmp)[starts.length - 1] : null;
+
+  const uidMap = {};
+  let oplogByNs = {};
+  if (aopts.oplogHours > 0) {
+    uidMap[uidHash('')] = NO_AUTH;
+    let resolved = 0;
+    let uidErr = null;
+    for (const name of ['admin'].concat(dbNames)) {
+      try {
+        for (const u of run(conn.getDB(name), { usersInfo: 1 }).users || []) {
+          uidMap[uidHash(`${u.user}@${u.db}`)] = `${u.user}@${u.db}`;
+          resolved += 1;
+        }
+      } catch (e) {
+        uidErr = uidErr || errText(e);
+      }
+    }
+    activity.uid_map = { resolved, error: uidErr };
+    const chosen = members.find((m) => m[2] === 'SECONDARY') || members[0] || null;
+    const now = Math.floor(Date.now() / 1000);
+    const olog = {
+      member: chosen ? chosen[0] : null, window_hours: aopts.oplogHours,
+      requested_from: isoOf(now - aopts.oplogHours * 3600), oplog_first: null, oplog_last: null, from: null, error: null,
+    };
+    try {
+      if (!chosen) throw new Error('no reachable replica set member');
+      const oplog = chosen[1].getDB('local').getCollection('oplog.rs');
+      const first = oplog.find({}, { ts: 1 }).sort({ $natural: 1 }).limit(1).toArray();
+      const last = oplog.find({}, { ts: 1 }).sort({ $natural: -1 }).limit(1).toArray();
+      if (!first.length) throw new Error('oplog is empty or not readable');
+      const firstSecs = tsSeconds(first[0].ts);
+      olog.oplog_first = isoOf(firstSecs);
+      olog.oplog_last = isoOf(tsSeconds(last[0].ts));
+      const fromSecs = Math.max(now - aopts.oplogHours * 3600, firstSecs);
+      olog.from = isoOf(fromSecs);
+      const rows = oplog.aggregate(oplogPipeline(makeTimestamp(fromSecs)), { allowDiskUse: true, maxTimeMS: aopts.oplogTimeoutMs }).toArray();
+      oplogByNs = foldOplogRows(rows, uidMap);
+    } catch (e) {
+      olog.error = errText(e);
+    }
+    activity.oplog = olog;
+  }
+
+  const sampled = {};
+  if (aopts.samples > 0) {
+    const samp = { samples: aopts.samples, interval_s: aopts.interval, members: members.length, started_at: isoOf(new Date()), finished_at: null, error: null };
+    const pipeline = [
+      { $currentOp: { allUsers: true, idleConnections: false } },
+      { $match: { active: true, appName: { $ne: TOOL_NAME } } },
+      { $project: { ns: 1, op: 1, command: 1, effectiveUsers: 1, appName: 1, client: 1 } },
+    ];
+    for (let rnd = 0; rnd < aopts.samples; rnd += 1) {
+      for (const [host, mc] of members) {
+        try {
+          sampleOps(mc.getDB('admin').aggregate(pipeline, { maxTimeMS: opTimeoutMs }).toArray(), sampled, activity.users);
+        } catch (e) {
+          samp.error = samp.error || `${host}: ${errText(e)}`;
+        }
+      }
+      if (rnd < aopts.samples - 1) sleepMs(aopts.interval * 1000);
+    }
+    samp.finished_at = isoOf(new Date());
+    activity.sampling = samp;
+    activity.users = sortNested(activity.users);
+  }
+  for (const [, mc] of members) {
+    if (mc !== conn) {
+      try { mc.close(); } catch (e) { /* ignore */ }
+    }
+  }
+  const sortedSampled = {};
+  for (const [k, v] of Object.entries(sampled)) sortedSampled[k] = sortNested(v);
+  return { activity, top, oplogByNs, topSince, sampled: sortedSampled };
+}
+
+const DATE_TYPES = ['date', 'timestamp'];
+const getPath = (doc, p) => p.split('.').reduce((v, k) => (v && typeof v === 'object' && !Array.isArray(v) ? v[k] : undefined), doc);
+
+function modifiedDates(coll, schema, indexes, aopts, timeoutMs) {
+  const rx = aopts.modifiedRe;
+  if (!rx) return [];
+  const sch = schema || {};
+  const lastSeg = (p) => p.split('.').pop();
+  const candidates = {};
+  for (const [p, info] of Object.entries(sch.fields || {})) {
+    if (p.includes('[]') || !rx.test(lastSeg(p))) continue;
+    candidates[p] = Object.keys(info.types || {}).filter((t) => t !== 'null' && t !== 'undefined').sort(strcmp);
+  }
+  const indexed = {};
+  for (const ix of indexes || []) {
+    if (ix.partialFilterExpression || ix.name === '_id_') continue;
+    const keys = Object.entries(ix.key || {});
+    if (keys.length && (keys[0][1] === 1 || keys[0][1] === -1) && !(keys[0][0] in indexed)) indexed[keys[0][0]] = ix.name;
+  }
+  for (const p of Object.keys(indexed)) {
+    if (!p.includes('[]') && rx.test(lastSeg(p)) && !(p in candidates)) candidates[p] = [];
+  }
+  const sampleMax = sch.modified_max || {};
+  const out = [];
+  for (const p of Object.keys(candidates).sort(strcmp)) {
+    const types = candidates[p];
+    const entry = { path: p, types, method: 'none', index: null, value: null, error: null };
+    if (types.length && !types.some((t) => DATE_TYPES.includes(t))) {
+      entry.method = 'ignored';
+      out.push(entry);
+      continue;
+    }
+    const query = { [p]: { $type: DATE_TYPES } };
+    try {
+      if (p in indexed) {
+        entry.method = 'index';
+        entry.index = indexed[p];
+        const docs = coll.find(query, { [p]: 1, _id: 0 }).sort({ [p]: -1 }).hint(indexed[p]).limit(1).maxTimeMS(timeoutMs).toArray();
+        entry.value = docs.length ? dateIso(getPath(docs[0], p)) : null;
+      } else if (aopts.modifiedScan) {
+        entry.method = 'scan';
+        const rows = coll.aggregate([{ $match: query }, { $group: { _id: null, m: { $max: `$${p}` } } }], { maxTimeMS: timeoutMs }).toArray();
+        entry.value = rows.length ? dateIso(rows[0].m) : null;
+      } else if (p in sampleMax) {
+        entry.method = 'sample';
+        entry.value = sampleMax[p];
+      }
+    } catch (e) {
+      entry.error = errText(e);
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+function collectionActivity(ns, bounds, modified, ctx) {
+  let best = null;
+  for (const e of modified) if (e.value && (best === null || e.value > best.value)) best = e;
+  const t = ctx.top[ns];
+  const oplogOk = ctx.activity.oplog !== null && !ctx.activity.oplog.error;
+  let topOut = null;
+  if (t) topOut = { reads: t[0], writes: t[1], since: ctx.topSince };
+  else if (ctx.topSince) topOut = { reads: 0, writes: 0, since: ctx.topSince };
+  return {
+    first_insert: bounds.first_insert === undefined ? null : bounds.first_insert,
+    last_insert: bounds.last_insert === undefined ? null : bounds.last_insert,
+    id_type: bounds.id_type === undefined ? null : bounds.id_type,
+    modified,
+    last_modified: best ? best.value : null,
+    last_modified_field: best ? best.path : null,
+    last_modified_method: best ? best.method : null,
+    top: topOut,
+    oplog: oplogOk ? (ctx.oplogByNs[ns] || emptyOplogEntry()) : null,
+    sampled: ctx.activity.sampling ? (ctx.sampled[ns] || { ops: 0, users: {} }) : null,
+  };
+}
+
 function writeSnapshot(file, snap) {
   const text = typeof EJSON !== 'undefined'
     ? EJSON.stringify(snap, null, 2, { relaxed: true })
@@ -305,7 +658,19 @@ function main() {
     includeRe: env.BMN_INCLUDE_DBS ? new RegExp(env.BMN_INCLUDE_DBS) : null,
     excludeRe: env.BMN_EXCLUDE_DBS ? new RegExp(env.BMN_EXCLUDE_DBS) : null,
     security: truthy(env.BMN_INCLUDE_SECURITY),
+    activity: {
+      enabled: env.BMN_ACTIVITY === undefined ? true : truthy(env.BMN_ACTIVITY),
+      oplogHours: intEnv('BMN_OPLOG_WINDOW', 0),
+      oplogTimeoutMs: intEnv('BMN_OPLOG_TIMEOUT', 600) * 1000,
+      samples: intEnv('BMN_ACTIVITY_SAMPLES', 0),
+      interval: intEnv('BMN_ACTIVITY_INTERVAL', 10),
+      memberStats: truthy(env.BMN_MEMBER_STATS),
+      modifiedPattern: env.BMN_MODIFIED_PATTERN === undefined ? 'modif' : env.BMN_MODIFIED_PATTERN,
+      modifiedScan: truthy(env.BMN_MODIFIED_SCAN),
+    },
   };
+  opts.activity.modifiedRe = opts.activity.modifiedPattern ? new RegExp(opts.activity.modifiedPattern, 'i') : null;
+  opts.activity.needsMembers = opts.activity.memberStats || opts.activity.oplogHours > 0 || opts.activity.samples > 0;
   const snap = {
     tool: TOOL_NAME, tool_version: TOOL_VERSION, snapshot_format: 1, collector: 'bash',
     instance: {
@@ -313,8 +678,12 @@ function main() {
       role: env.BMN_INSTANCE_ROLE || 'source', conf_file: env.BMN_CONF_FILE || '', uri: redact(uri),
     },
     collected_at: nowIso(), status: 'error', error: null,
-    params: { sample_size: opts.sampleSize, max_depth: opts.maxDepth },
-    server: {}, databases: [], security: null,
+    params: {
+      sample_size: opts.sampleSize, max_depth: opts.maxDepth, activity: opts.activity.enabled,
+      member_stats: opts.activity.memberStats, modified_pattern: opts.activity.modifiedPattern, modified_scan: opts.activity.modifiedScan,
+      oplog_window_hours: opts.activity.oplogHours, activity_samples: opts.activity.samples, activity_interval_s: opts.activity.interval,
+    },
+    server: {}, databases: [], security: null, activity: null,
   };
 
   let conn = null;
@@ -342,6 +711,21 @@ function main() {
       snap.databases.push(collectDb(conn, info, shardKeys, opts));
     }
     if (opts.security) snap.security = collectSecurity(conn, ['admin'].concat(snap.databases.map((d) => d.name)));
+    if (opts.activity.enabled) {
+      const hello = collectHello(conn);
+      const ctx = collectActivity(conn, uri, hello, snap.databases.map((d) => d.name), opts.activity, opts.opTimeoutMs);
+      for (const d of snap.databases) {
+        for (const c of d.collections) {
+          const bounds = c._id_bounds || {};
+          const modified = c._modified || [];
+          delete c._id_bounds;
+          delete c._modified;
+          if (c.type === 'view') continue;
+          c.activity = collectionActivity(`${d.name}.${c.name}`, bounds, modified, ctx);
+        }
+      }
+      snap.activity = ctx.activity;
+    }
     snap.status = 'ok';
   } catch (e) {
     snap.error = errText(e);

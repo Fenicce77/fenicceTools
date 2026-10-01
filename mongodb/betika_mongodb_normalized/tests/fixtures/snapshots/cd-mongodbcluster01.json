@@ -15,7 +15,14 @@
   "error": null,
   "params": {
     "sample_size": 100,
-    "max_depth": 5
+    "max_depth": 5,
+    "activity": true,
+    "oplog_window_hours": 72,
+    "activity_samples": 30,
+    "activity_interval_s": 10,
+    "member_stats": true,
+    "modified_pattern": "modif",
+    "modified_scan": false
   },
   "server": {
     "version": "6.0.19",
@@ -72,9 +79,38 @@
                   "string": 100
                 }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2020-01-10T00:00:00Z",
+            "last_insert": "2024-11-30T23:59:00Z",
+            "id_type": "objectId",
+            "top": {
+              "reads": 0,
+              "writes": 0,
+              "since": "2026-09-03T03:00:00Z"
+            },
+            "oplog": {
+              "inserts": 0,
+              "updates": 0,
+              "deletes": 0,
+              "commands": 0,
+              "first": null,
+              "last": null,
+              "created_at": null,
+              "users": {}
+            },
+            "sampled": {
+              "ops": 0,
+              "users": {}
+            },
+            "modified": [],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null
+          }
         },
         {
           "name": "invoices",
@@ -153,10 +189,70 @@
                 "types": {
                   "string": 100
                 }
+              },
+              "audit": {
+                "count": 100,
+                "types": {
+                  "object": 100
+                }
+              },
+              "audit.lastModified": {
+                "count": 90,
+                "types": {
+                  "date": 90,
+                  "null": 10
+                }
               }
+            },
+            "modified_max": {
+              "audit.lastModified": "2026-09-29T18:00:00Z"
             }
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2019-03-14T08:12:00Z",
+            "last_insert": "2026-09-30T09:41:10Z",
+            "id_type": "objectId",
+            "top": {
+              "reads": 120344,
+              "writes": 20511,
+              "since": "2026-09-03T03:00:00Z"
+            },
+            "oplog": {
+              "inserts": 410,
+              "updates": 55,
+              "deletes": 0,
+              "commands": 0,
+              "first": "2026-09-28T10:02:11Z",
+              "last": "2026-09-30T09:41:10Z",
+              "created_at": null,
+              "users": {
+                "(no session)": 55,
+                "orders_app@admin": 410
+              }
+            },
+            "sampled": {
+              "ops": 3,
+              "users": {
+                "bi_reader@admin": 3
+              }
+            },
+            "modified": [
+              {
+                "path": "audit.lastModified",
+                "types": [
+                  "date"
+                ],
+                "method": "sample",
+                "index": null,
+                "value": "2026-09-29T18:00:00Z",
+                "error": null
+              }
+            ],
+            "last_modified": "2026-09-29T18:00:00Z",
+            "last_modified_field": "audit.lastModified",
+            "last_modified_method": "sample"
+          }
         }
       ]
     },
@@ -217,9 +313,38 @@
                   "double": 50
                 }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": null,
+            "last_insert": null,
+            "id_type": "other",
+            "top": {
+              "reads": 0,
+              "writes": 0,
+              "since": "2026-09-03T03:00:00Z"
+            },
+            "oplog": {
+              "inserts": 0,
+              "updates": 0,
+              "deletes": 0,
+              "commands": 0,
+              "first": null,
+              "last": null,
+              "created_at": null,
+              "users": {}
+            },
+            "sampled": {
+              "ops": 0,
+              "users": {}
+            },
+            "modified": [],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null
+          }
         }
       ]
     },
@@ -288,6 +413,12 @@
               "name": "created_at_ttl",
               "expireAfterSeconds": 31536000,
               "background": true
+            },
+            {
+              "key": {
+                "modifiedAt": -1
+              },
+              "name": "modifiedAt_-1"
             }
           ],
           "shard_key": null,
@@ -347,10 +478,80 @@
                   "int": 60,
                   "double": 40
                 }
+              },
+              "modifiedAt": {
+                "count": 100,
+                "types": {
+                  "date": 100
+                }
+              },
+              "modifiedBy": {
+                "count": 100,
+                "types": {
+                  "string": 100
+                }
               }
+            },
+            "modified_max": {
+              "modifiedAt": "2026-09-30T09:58:00Z"
             }
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2018-11-02T10:00:00Z",
+            "last_insert": "2026-09-30T09:59:01Z",
+            "id_type": "objectId",
+            "top": {
+              "reads": 3401222,
+              "writes": 88123,
+              "since": "2026-09-03T03:00:00Z"
+            },
+            "oplog": {
+              "inserts": 1200,
+              "updates": 8000,
+              "deletes": 3,
+              "commands": 1,
+              "first": "2026-09-28T10:00:05Z",
+              "last": "2026-09-30T09:59:01Z",
+              "created_at": null,
+              "users": {
+                "(no session)": 3,
+                "orders_app@admin": 9200,
+                "uid:4f1c9a0b2e7d": 1
+              }
+            },
+            "sampled": {
+              "ops": 12,
+              "users": {
+                "orders_app@admin": 12
+              }
+            },
+            "modified": [
+              {
+                "path": "modifiedAt",
+                "types": [
+                  "date"
+                ],
+                "method": "index",
+                "index": "modifiedAt_-1",
+                "value": "2026-09-30T09:59:40Z",
+                "error": null
+              },
+              {
+                "path": "modifiedBy",
+                "types": [
+                  "string"
+                ],
+                "method": "ignored",
+                "index": null,
+                "value": null,
+                "error": null
+              }
+            ],
+            "last_modified": "2026-09-30T09:59:40Z",
+            "last_modified_field": "modifiedAt",
+            "last_modified_method": "index"
+          }
         },
         {
           "name": "orders",
@@ -429,9 +630,42 @@
                   "double": 100
                 }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2018-11-02T10:05:00Z",
+            "last_insert": "2026-09-30T09:59:58Z",
+            "id_type": "objectId",
+            "top": {
+              "reads": 9123001,
+              "writes": 712334,
+              "since": "2026-09-03T03:00:00Z"
+            },
+            "oplog": {
+              "inserts": 50000,
+              "updates": 120000,
+              "deletes": 0,
+              "commands": 2,
+              "first": "2026-09-28T10:00:00Z",
+              "last": "2026-09-30T09:59:58Z",
+              "created_at": "2026-09-29T02:00:00Z",
+              "users": {
+                "orders_app@admin": 170002
+              }
+            },
+            "sampled": {
+              "ops": 29,
+              "users": {
+                "orders_app@admin": 29
+              }
+            },
+            "modified": [],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null
+          }
         }
       ]
     }
@@ -483,5 +717,76 @@
       }
     ],
     "errors": []
+  },
+  "activity": {
+    "members": [
+      {
+        "host": "cd-mongodbcluster01-node01.betika.private:27017",
+        "state": "PRIMARY",
+        "started_at": "2026-09-01T03:00:00Z",
+        "error": null
+      },
+      {
+        "host": "cd-mongodbcluster01-node02.betika.private:27017",
+        "state": "SECONDARY",
+        "started_at": "2026-09-02T03:00:00Z",
+        "error": null
+      },
+      {
+        "host": "cd-mongodbcluster01-node03.betika.private:27017",
+        "state": "SECONDARY",
+        "started_at": "2026-09-03T03:00:00Z",
+        "error": null
+      }
+    ],
+    "oplog": {
+      "member": "cd-mongodbcluster01-node02.betika.private:27017",
+      "window_hours": 72,
+      "requested_from": "2026-09-27T10:00:00Z",
+      "oplog_first": "2026-09-28T10:00:00Z",
+      "oplog_last": "2026-09-30T09:59:58Z",
+      "from": "2026-09-28T10:00:00Z",
+      "error": null
+    },
+    "sampling": {
+      "samples": 30,
+      "interval_s": 10,
+      "members": 3,
+      "started_at": "2026-09-30T10:00:00Z",
+      "finished_at": "2026-09-30T10:04:50Z",
+      "error": null
+    },
+    "uid_map": {
+      "resolved": 2,
+      "error": null
+    },
+    "users": {
+      "orders_app@admin": {
+        "sampled_ops": 41,
+        "namespaces": {
+          "orders.customers": 12,
+          "orders.orders": 29
+        },
+        "apps": {
+          "orders-api": 41
+        },
+        "clients": {
+          "10.20.0.11": 30,
+          "10.20.0.12": 11
+        }
+      },
+      "bi_reader@admin": {
+        "sampled_ops": 3,
+        "namespaces": {
+          "billing.invoices": 3
+        },
+        "apps": {
+          "metabase": 3
+        },
+        "clients": {
+          "10.30.0.5": 3
+        }
+      }
+    }
   }
 }

@@ -15,7 +15,14 @@
   "error": null,
   "params": {
     "sample_size": 100,
-    "max_depth": 5
+    "max_depth": 5,
+    "activity": true,
+    "oplog_window_hours": 0,
+    "activity_samples": 0,
+    "activity_interval_s": 10,
+    "member_stats": false,
+    "modified_pattern": "modif",
+    "modified_scan": true
   },
   "server": {
     "version": "7.0.14",
@@ -88,9 +95,22 @@
                   "string": 100
                 }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2021-01-01T00:00:00Z",
+            "last_insert": "2026-09-29T00:00:00Z",
+            "id_type": "objectId",
+            "top": null,
+            "oplog": null,
+            "sampled": null,
+            "modified": [],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null
+          }
         },
         {
           "name": "metrics",
@@ -145,9 +165,22 @@
                   "double": 100
                 }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": null,
+            "last_insert": null,
+            "id_type": "n/a",
+            "top": null,
+            "oplog": null,
+            "sampled": null,
+            "modified": [],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null
+          }
         }
       ]
     },
@@ -254,9 +287,22 @@
                   "long": 100
                 }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2021-01-01T00:00:00Z",
+            "last_insert": "2026-09-29T00:00:00Z",
+            "id_type": "objectId",
+            "top": null,
+            "oplog": null,
+            "sampled": null,
+            "modified": [],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null
+          }
         },
         {
           "name": "returns",
@@ -310,10 +356,40 @@
                 "types": {
                   "string": 100
                 }
+              },
+              "date_modified": {
+                "count": 100,
+                "types": {
+                  "date": 100
+                }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2021-01-01T00:00:00Z",
+            "last_insert": "2024-12-01T00:00:00Z",
+            "id_type": "objectId",
+            "top": null,
+            "oplog": null,
+            "sampled": null,
+            "modified": [
+              {
+                "path": "date_modified",
+                "types": [
+                  "date"
+                ],
+                "method": "scan",
+                "index": null,
+                "value": "2025-01-15T08:00:00Z",
+                "error": null
+              }
+            ],
+            "last_modified": "2025-01-15T08:00:00Z",
+            "last_modified_field": "date_modified",
+            "last_modified_method": "scan"
+          }
         }
       ]
     },
@@ -375,9 +451,33 @@
                   "binData": 10
                 }
               }
-            }
+            },
+            "modified_max": {}
           },
-          "schema_error": null
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2021-01-01T00:00:00Z",
+            "last_insert": "2026-09-29T00:00:00Z",
+            "id_type": "objectId",
+            "top": null,
+            "oplog": null,
+            "sampled": null,
+            "modified": [
+              {
+                "path": "modified_on",
+                "types": [
+                  "date"
+                ],
+                "method": "scan",
+                "index": null,
+                "value": null,
+                "error": "MongoServerError: operation exceeded time limit"
+              }
+            ],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null
+          }
         }
       ]
     }
@@ -429,5 +529,12 @@
       }
     ],
     "errors": []
+  },
+  "activity": {
+    "members": [],
+    "oplog": null,
+    "sampling": null,
+    "uid_map": null,
+    "users": {}
   }
 }

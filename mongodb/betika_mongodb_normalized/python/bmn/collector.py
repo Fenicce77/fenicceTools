@@ -12,6 +12,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from .common import SNAPSHOT_FORMAT, SYSTEM_DBS, TOOL_NAME, TOOL_VERSION
+from .activity import ActivityOptions, collect_activity, collection_activity, id_bounds, modified_dates
 from .config import InstanceConfig, redact_uri
 
 MAX_ARRAY_ELEMENTS = 100
@@ -82,28 +83,54 @@ def bson_type(value: Any) -> str:
     return type(value).__name__
 
 
-def _walk(doc: dict, prefix: str, depth: int, max_depth: int, seen: Dict[Tuple[str, str], None]) -> None:
+def date_iso(value: Any) -> Optional[str]:
+    """BSON date/timestamp -> ISO-8601 UTC (seconds precision)."""
+    from bson.timestamp import Timestamp
+
+    if isinstance(value, Timestamp):
+        value = dt.datetime.fromtimestamp(value.time, tz=dt.timezone.utc)
+    if not isinstance(value, dt.datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _track_modified(path: str, vtype: str, value: Any, modified_re, track: Optional[Dict[str, str]]) -> None:
+    if track is None or modified_re is None or vtype not in ("date", "timestamp") or "[]" in path:
+        return
+    if not modified_re.search(path.rsplit(".", 1)[-1]):
+        return
+    stamp = date_iso(value)
+    if stamp and (path not in track or stamp > track[path]):
+        track[path] = stamp
+
+
+def _walk(doc: dict, prefix: str, depth: int, max_depth: int, seen: Dict[Tuple[str, str], None],
+          modified_re=None, track: Optional[Dict[str, str]] = None) -> None:
     for key, value in doc.items():
         path = f"{prefix}.{key}" if prefix else key
         vtype = bson_type(value)
         seen[(path, vtype)] = None
+        _track_modified(path, vtype, value, modified_re, track)
         if vtype == "object" and isinstance(value, dict) and depth < max_depth:
-            _walk(value, path, depth + 1, max_depth, seen)
+            _walk(value, path, depth + 1, max_depth, seen, modified_re, track)
         elif vtype == "array":
             apath = f"{path}[]"
             for elem in value[:MAX_ARRAY_ELEMENTS]:
                 etype = bson_type(elem)
                 seen[(apath, etype)] = None
                 if etype == "object" and isinstance(elem, dict) and depth < max_depth:
-                    _walk(elem, apath, depth + 1, max_depth, seen)
+                    _walk(elem, apath, depth + 1, max_depth, seen, modified_re, track)
 
 
-def infer_schema(docs: List[dict], max_depth: int) -> dict:
+def infer_schema(docs: List[dict], max_depth: int, modified_re=None) -> dict:
     fields: Dict[str, dict] = {}
+    modified_max: Dict[str, str] = {}
     truncated = False
     for doc in docs:
         seen: Dict[Tuple[str, str], None] = {}
-        _walk(doc, "", 1, max_depth, seen)
+        _walk(doc, "", 1, max_depth, seen, modified_re, modified_max)
         counted = set()
         for path, vtype in seen:
             if path not in fields:
@@ -118,13 +145,14 @@ def infer_schema(docs: List[dict], max_depth: int) -> dict:
                 counted.add(path)
     ordered = {p: {"count": fields[p]["count"], "types": dict(sorted(fields[p]["types"].items()))}
                for p in sorted(fields)}
-    return {"sampled": len(docs), "truncated": truncated, "fields": ordered}
+    return {"sampled": len(docs), "truncated": truncated, "fields": ordered,
+            "modified_max": {p: modified_max[p] for p in sorted(modified_max)}}
 
 
 class CollectOptions:
     def __init__(self, sample_size: int = 100, max_depth: int = 5, timeout: int = 15, op_timeout: int = 120,
                  include_dbs: Optional[str] = None, exclude_dbs: Optional[str] = None,
-                 include_security: bool = False) -> None:
+                 include_security: bool = False, activity: Optional[ActivityOptions] = None) -> None:
         self.sample_size = sample_size
         self.max_depth = max_depth
         self.timeout = timeout
@@ -132,6 +160,7 @@ class CollectOptions:
         self.include_re = re.compile(include_dbs) if include_dbs else None
         self.exclude_re = re.compile(exclude_dbs) if exclude_dbs else None
         self.include_security = include_security
+        self.activity = activity or ActivityOptions()
 
 
 def _now() -> str:
@@ -149,8 +178,12 @@ def base_snapshot(cfg: InstanceConfig, uri: str, collector: str, opts: CollectOp
         "instance": {"name": cfg.name, "alias": cfg.alias, "role": cfg.role, "conf_file": str(cfg.path),
                      "uri": redact_uri(uri)},
         "collected_at": _now(), "status": "error", "error": None,
-        "params": {"sample_size": opts.sample_size, "max_depth": opts.max_depth},
-        "server": {}, "databases": [], "security": None,
+        "params": {"sample_size": opts.sample_size, "max_depth": opts.max_depth,
+                   "activity": opts.activity.enabled, "member_stats": opts.activity.member_stats,
+                   "modified_pattern": opts.activity.modified_pattern, "modified_scan": opts.activity.modified_scan,
+                   "oplog_window_hours": opts.activity.oplog_hours,
+                   "activity_samples": opts.activity.samples, "activity_interval_s": opts.activity.interval},
+        "server": {}, "databases": [], "security": None, "activity": None,
     }
 
 
@@ -167,7 +200,7 @@ def collect_instance(cfg: InstanceConfig, opts: CollectOptions) -> dict:
         password = cfg.resolve_password()
         client = MongoClient(uri, username=cfg.user or None, password=password)
         try:
-            _collect(client, snap, opts, OperationFailure)
+            _collect(client, snap, opts, OperationFailure, uri, cfg.user, password)
             snap["status"] = "ok"
         finally:
             client.close()
@@ -178,7 +211,8 @@ def collect_instance(cfg: InstanceConfig, opts: CollectOptions) -> dict:
     return snap
 
 
-def _collect(client, snap: dict, opts: CollectOptions, OperationFailure) -> None:  # noqa: N803
+def _collect(client, snap: dict, opts: CollectOptions, OperationFailure,  # noqa: N803
+             uri: str = "", user: Optional[str] = None, password: Optional[str] = None) -> None:
     admin = client.admin
     try:
         hello = admin.command("hello")
@@ -226,6 +260,20 @@ def _collect(client, snap: dict, opts: CollectOptions, OperationFailure) -> None
     if opts.include_security:
         snap["security"] = _collect_security(client, ["admin"] + [d["name"] for d in databases])
 
+    if opts.activity.enabled:
+        activity, top, oplog_by_ns, since = collect_activity(
+            client, uri, user, password, hello, [d["name"] for d in databases], opts.activity, opts.op_timeout_ms)
+        for db in databases:
+            for coll in db["collections"]:
+                bounds = coll.pop("_id_bounds", None)
+                modified = coll.pop("_modified", None)
+                if coll["type"] == "view":
+                    continue
+                coll["activity"] = collection_activity(f"{db['name']}.{coll['name']}", bounds or {}, modified or [],
+                                                       activity, top, oplog_by_ns, since)
+        activity.pop("_sampled", None)
+        snap["activity"] = activity
+
 
 def _collect_db(db, info: dict, shard_keys: dict, opts: CollectOptions, OperationFailure) -> dict:  # noqa: N803
     out = {"name": db.name, "size_on_disk": int(info.get("sizeOnDisk") or 0), "empty": bool(info.get("empty")),
@@ -239,7 +287,8 @@ def _collect_db(db, info: dict, shard_keys: dict, opts: CollectOptions, Operatio
         coll = db[cname]
         entry: Dict[str, Any] = {"name": cname, "type": ctype, "options": to_plain(cinfo.get("options") or {}),
                                  "stats": None, "stats_error": None, "indexes": [], "shard_key": None,
-                                 "shard_key_unique": False, "schema": None, "schema_error": None}
+                                 "shard_key_unique": False, "schema": None, "schema_error": None,
+                                 "activity": None}
         ns = f"{db.name}.{cname}"
         if ns in shard_keys:
             entry["shard_key"], entry["shard_key_unique"] = shard_keys[ns]
@@ -262,13 +311,23 @@ def _collect_db(db, info: dict, shard_keys: dict, opts: CollectOptions, Operatio
                 entry["stats"] = total
             except OperationFailure as exc:
                 entry["stats_error"] = _err(exc)
+            if opts.activity.enabled and ctype == "collection":
+                try:
+                    entry["_id_bounds"] = id_bounds(coll, opts.op_timeout_ms)
+                except OperationFailure as exc:
+                    entry["_id_bounds"] = {"first_insert": None, "last_insert": None, "id_type": f"error: {_err(exc)}"}
+            elif opts.activity.enabled:
+                entry["_id_bounds"] = {"first_insert": None, "last_insert": None, "id_type": "n/a"}
             if opts.sample_size > 0:
                 try:
                     docs = list(coll.aggregate([{"$sample": {"size": opts.sample_size}}],
                                                maxTimeMS=opts.op_timeout_ms))
-                    entry["schema"] = infer_schema(docs, opts.max_depth)
+                    entry["schema"] = infer_schema(docs, opts.max_depth, opts.activity.modified_re)
                 except OperationFailure as exc:
                     entry["schema_error"] = _err(exc)
+            if opts.activity.enabled:
+                entry["_modified"] = modified_dates(coll, entry["schema"], entry["indexes"], opts.activity,
+                                                    opts.op_timeout_ms)
         out["collections"].append(entry)
     return out
 

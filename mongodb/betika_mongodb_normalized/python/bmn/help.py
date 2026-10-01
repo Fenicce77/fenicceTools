@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 
 from .common import PROJECT_HOME, TOOL_VERSION
 
-FLAGS_WIDTH = 27
+FLAGS_WIDTH = 31
 DESC_WIDTH = 50
 
 # (flags, argument, description, tag) - tag: ("req", cmd) | ("def", value) | ("opt", "") | None
@@ -42,6 +42,17 @@ SECTIONS: List[Tuple[str, str, List[Option]]] = [
         ("    --timeout", "SEC", "Connection timeout", ("def", "15")),
         ("    --op-timeout", "SEC", "Per-operation maxTimeMS", ("def", "120")),
     ]),
+    ("ACTIVITY OPTIONS", "run, collect  (--stale-days: run, analyze)", [
+        ("    --no-activity", "", "Skip _id and *modified* field dates", ("opt", "")),
+        ("    --modified-pattern", "REGEX", "Last-modification date fields (case-insens.)", ("def", "modif")),
+        ("    --modified-scan", "", "Exact max of unindexed fields (COLLSCAN)", ("opt", "")),
+        ("    --stale-days", "N", "Flag collections idle for N days, 0 disables", ("def", "180")),
+        ("    --member-stats", "", "Per-member reads/writes since restart (top)", ("opt", "")),
+        ("    --oplog-window", "HOURS", "Analyze the last HOURS of oplog (writes, users)", ("def", "0 = disabled")),
+        ("    --oplog-timeout", "SEC", "maxTimeMS of the oplog aggregation", ("def", "600")),
+        ("    --activity-samples", "N", "Live $currentOp sampling rounds", ("def", "0 = disabled")),
+        ("    --activity-interval", "SEC", "Seconds between sampling rounds", ("def", "10")),
+    ]),
     ("CHECK OPTIONS", "check", [
         ("    --connect", "", "Also test connectivity with every instance", ("opt", "")),
     ]),
@@ -52,6 +63,8 @@ EXAMPLES = [
     ("preliminary report with low impact on the instances", "run --sample-size 100 --op-timeout 30 --parallel 2"),
     ("metadata only: no document reads", "run --sample-size 0 --parallel 1"),
     ("plan against the central instance, including users and roles", "run --target central01 --include-security"),
+    ("users to migrate: 24 h of oplog + 30 live samples (5 min)",
+     "run --include-security --oplog-window 24 --activity-samples 30 --activity-interval 10"),
     ("re-analyze existing snapshots with another strategy (no DB access)",
      "analyze -s ./reports/20260930T101500Z/snapshots -n prefix"),
 ]

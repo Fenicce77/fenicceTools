@@ -5,12 +5,14 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
 
 from . import __version__
+from .activity import ActivityOptions
 from .analyzer import AnalysisParams, analyze
 from .collector import CollectOptions, base_snapshot, collect_instance
 from .common import PROJECT_HOME, TOOL_NAME, human_bytes
@@ -57,6 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=15, help="connection timeout in seconds (default: 15)")
     p.add_argument("--op-timeout", type=int, default=120, help="per-operation maxTimeMS in seconds (default: 120)")
     p.add_argument("--connect", action="store_true", help="check: also test connectivity")
+    p.add_argument("--no-activity", action="store_true", help="skip activity collection")
+    p.add_argument("--oplog-window", type=int, default=0, help="hours of oplog to analyze, 0 disables")
+    p.add_argument("--oplog-timeout", type=int, default=600, help="oplog aggregation maxTimeMS in seconds")
+    p.add_argument("--activity-samples", type=int, default=0, help="$currentOp sampling rounds, 0 disables")
+    p.add_argument("--activity-interval", type=int, default=10, help="seconds between sampling rounds")
+    p.add_argument("--member-stats", action="store_true", help="per-member top counters")
+    p.add_argument("--modified-pattern", default="modif", help="regex for last-modification date fields")
+    p.add_argument("--modified-scan", action="store_true", help="exact max of unindexed modified fields")
+    p.add_argument("--stale-days", type=int, default=180, help="STALE_COLLECTION threshold, 0 disables")
     p.add_argument("--no-color", action="store_true", help="disable colored output")
     p.add_argument("-v", "--verbose", action="store_true", help="verbose output")
     p.add_argument("-V", "--version", action="version", version=f"{TOOL_NAME} {__version__}")
@@ -114,8 +125,20 @@ def cmd_collect(args: argparse.Namespace, out_dir: Path) -> int:
     configs = _load(args)
     snap_dir = out_dir / "snapshots"
     snap_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("sample_size", "max_depth", "parallel", "timeout", "op_timeout", "oplog_window", "oplog_timeout",
+                 "activity_samples", "activity_interval"):
+        if getattr(args, name) < 0:
+            raise ConfigError(f"--{name.replace('_', '-')} must be a non-negative integer")
+    if args.no_activity and (args.oplog_window or args.activity_samples or args.member_stats or args.modified_scan):
+        raise ConfigError("--no-activity cannot be combined with other activity options")
+    try:
+        activity = ActivityOptions(not args.no_activity, args.oplog_window, args.oplog_timeout,
+                                   args.activity_samples, args.activity_interval, args.member_stats,
+                                   args.modified_pattern, args.modified_scan)
+    except re.error as exc:
+        raise ConfigError(f"invalid --modified-pattern: {exc}") from exc
     opts = CollectOptions(args.sample_size, args.max_depth, args.timeout, args.op_timeout,
-                          args.include_dbs, args.exclude_dbs, args.include_security)
+                          args.include_dbs, args.exclude_dbs, args.include_security, activity)
     Log.title(f"collecting {len(configs)} instance(s) -> {snap_dir}")
     failures = 0
 
@@ -158,7 +181,10 @@ def cmd_analyze(args: argparse.Namespace, snap_dir: Path, out_dir: Path) -> int:
     params = AnalysisParams(
         naming_strategy=args.naming_strategy, prefix_sep=args.prefix_sep, target=args.target or "",
         mappings=load_mappings(args.mapping_file),
-        generated_at=os.environ.get("BMN_GENERATED_AT") or _utc_iso(), implementation="python")
+        generated_at=os.environ.get("BMN_GENERATED_AT") or _utc_iso(), implementation="python",
+        stale_days=args.stale_days)
+    if args.stale_days < 0:
+        raise ConfigError("--stale-days must be a non-negative integer")
     Log.title(f"analyzing {len(snapshots)} snapshot(s) from {snap_dir}")
     an = analyze(snapshots, params)
     written = write_artifacts(an, snapshots, out_dir)

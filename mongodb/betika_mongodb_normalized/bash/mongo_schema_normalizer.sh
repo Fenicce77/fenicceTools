@@ -38,6 +38,15 @@ PARALLEL=4
 TIMEOUT=15
 OP_TIMEOUT=120
 CONNECT=0
+ACTIVITY=1
+OPLOG_WINDOW=0
+OPLOG_TIMEOUT=600
+ACTIVITY_SAMPLES=0
+ACTIVITY_INTERVAL=10
+MEMBER_STATS=0
+MODIFIED_PATTERN="modif"
+MODIFIED_SCAN=0
+STALE_DAYS=180
 VERBOSE=0
 MONGOSH_BIN="${MONGOSH_BIN:-}"
 TMP_DIR=""
@@ -93,7 +102,7 @@ h_cmd() { # h_cmd <name> <description> [tag]
 }
 h_opt() { # h_opt <flags> <arg> <description> <tag>
   local plain="$1${2:+ $2}" pad
-  pad=$((27 - ${#plain}))
+  pad=$((31 - ${#plain}))
   [[ "${pad}" -lt 1 ]] && pad=1
   printf '  %s%s%s%s%s%s%s%*s' "${H_OPT}" "$1" "${H_OFF}" "${2:+ }" "${H_ARG}" "$2" "${H_OFF}" "${pad}" ""
   if [[ -n "${4:-}" ]]; then printf '%-50s %s\n' "$3" "$4"; else printf '%s\n' "$3"; fi
@@ -147,6 +156,17 @@ usage() {
   h_opt "    --timeout" "SEC" "Connection timeout" "$(h_def '15')"
   h_opt "    --op-timeout" "SEC" "Per-operation maxTimeMS" "$(h_def '120')"
 
+  h_section "ACTIVITY OPTIONS" "run, collect  (--stale-days: run, analyze)"
+  h_opt "    --no-activity" "" "Skip _id and *modified* field dates" "$(h_optnl)"
+  h_opt "    --modified-pattern" "REGEX" "Last-modification date fields (case-insens.)" "$(h_def 'modif')"
+  h_opt "    --modified-scan" "" "Exact max of unindexed fields (COLLSCAN)" "$(h_optnl)"
+  h_opt "    --stale-days" "N" "Flag collections idle for N days, 0 disables" "$(h_def '180')"
+  h_opt "    --member-stats" "" "Per-member reads/writes since restart (top)" "$(h_optnl)"
+  h_opt "    --oplog-window" "HOURS" "Analyze the last HOURS of oplog (writes, users)" "$(h_def '0 = disabled')"
+  h_opt "    --oplog-timeout" "SEC" "maxTimeMS of the oplog aggregation" "$(h_def '600')"
+  h_opt "    --activity-samples" "N" "Live \$currentOp sampling rounds" "$(h_def '0 = disabled')"
+  h_opt "    --activity-interval" "SEC" "Seconds between sampling rounds" "$(h_def '10')"
+
   h_section "CHECK OPTIONS" "check"
   h_opt "    --connect" "" "Also test connectivity with every instance" "$(h_optnl)"
 
@@ -164,6 +184,8 @@ usage() {
   printf '  %s run --sample-size 0 --parallel 1\n' "${SCRIPT_NAME}"
   printf '  %s# plan against the central instance, including users and roles%s\n' "${H_DIM}" "${H_OFF}"
   printf '  %s run --target central01 --include-security\n' "${SCRIPT_NAME}"
+  printf '  %s# users to migrate: 24 h of oplog + 30 live samples (5 min)%s\n' "${H_DIM}" "${H_OFF}"
+  printf '  %s run --include-security --oplog-window 24 --activity-samples 30 --activity-interval 10\n' "${SCRIPT_NAME}"
   printf '  %s# re-analyze existing snapshots with another strategy (no DB access)%s\n' "${H_DIM}" "${H_OFF}"
   printf '  %s analyze -s ./reports/20260930T101500Z/snapshots -n prefix\n' "${SCRIPT_NAME}"
 
@@ -243,6 +265,15 @@ parse_args() {
       --timeout) TIMEOUT="${2:?$1 requires a value}"; shift ;;
       --op-timeout) OP_TIMEOUT="${2:?$1 requires a value}"; shift ;;
       --connect) CONNECT=1 ;;
+      --no-activity) ACTIVITY=0 ;;
+      --oplog-window) OPLOG_WINDOW="${2:?$1 requires a value}"; shift ;;
+      --oplog-timeout) OPLOG_TIMEOUT="${2:?$1 requires a value}"; shift ;;
+      --activity-samples) ACTIVITY_SAMPLES="${2:?$1 requires a value}"; shift ;;
+      --activity-interval) ACTIVITY_INTERVAL="${2:?$1 requires a value}"; shift ;;
+      --member-stats) MEMBER_STATS=1 ;;
+      --modified-pattern) MODIFIED_PATTERN="${2?$1 requires a value}"; shift ;;
+      --modified-scan) MODIFIED_SCAN=1 ;;
+      --stale-days) STALE_DAYS="${2:?$1 requires a value}"; shift ;;
       --no-color) disable_colors ;;
       -v|--verbose) VERBOSE=1 ;;
       -V|--version) echo "betika_mongodb_normalized ${VERSION}"; exit 0 ;;
@@ -258,6 +289,15 @@ parse_args() {
   require_int --parallel "${PARALLEL}"
   require_int --timeout "${TIMEOUT}"
   require_int --op-timeout "${OP_TIMEOUT}"
+  require_int --oplog-window "${OPLOG_WINDOW}"
+  require_int --oplog-timeout "${OPLOG_TIMEOUT}"
+  require_int --activity-samples "${ACTIVITY_SAMPLES}"
+  require_int --activity-interval "${ACTIVITY_INTERVAL}"
+  require_int --stale-days "${STALE_DAYS}"
+  if [[ "${ACTIVITY}" -eq 0 && ( "${OPLOG_WINDOW}" -gt 0 || "${ACTIVITY_SAMPLES}" -gt 0 \
+        || "${MEMBER_STATS}" -eq 1 || "${MODIFIED_SCAN}" -eq 1 ) ]]; then
+    die "--no-activity cannot be combined with other activity options"
+  fi
   [[ "${PARALLEL}" -ge 1 ]] || PARALLEL=1
   [[ -z "${MAPPING_FILE}" || -r "${MAPPING_FILE}" ]] || die "mapping file not readable: ${MAPPING_FILE}"
 }
@@ -494,6 +534,9 @@ launch_collector() {
     export BMN_TIMEOUT="${TIMEOUT}" BMN_OP_TIMEOUT="${OP_TIMEOUT}"
     export BMN_SAMPLE_SIZE="${SAMPLE_SIZE}" BMN_MAX_DEPTH="${MAX_DEPTH}"
     export BMN_INCLUDE_DBS="${INCLUDE_DBS}" BMN_EXCLUDE_DBS="${EXCLUDE_DBS}" BMN_INCLUDE_SECURITY="${INCLUDE_SECURITY}"
+    export BMN_ACTIVITY="${ACTIVITY}" BMN_OPLOG_WINDOW="${OPLOG_WINDOW}" BMN_OPLOG_TIMEOUT="${OPLOG_TIMEOUT}"
+    export BMN_ACTIVITY_SAMPLES="${ACTIVITY_SAMPLES}" BMN_ACTIVITY_INTERVAL="${ACTIVITY_INTERVAL}"
+    export BMN_MEMBER_STATS="${MEMBER_STATS}" BMN_MODIFIED_PATTERN="${MODIFIED_PATTERN}" BMN_MODIFIED_SCAN="${MODIFIED_SCAN}"
     exec "${MONGOSH_BIN}" --nodb --quiet --norc --file "${LIB_DIR}/collector.js"
   ) >"${log}" 2>&1 &
   LAST_PID=$!
@@ -576,7 +619,7 @@ cmd_analyze() {
   BMN_SNAPSHOT_DIR="${snap_dir}" BMN_OUTPUT_DIR="${out_dir}" BMN_TEMPLATES_DIR="${TEMPLATES_DIR}" \
   BMN_NAMING_STRATEGY="${NAMING_STRATEGY}" BMN_PREFIX_SEP="${PREFIX_SEP}" BMN_TARGET="${TARGET}" \
   BMN_MAPPING_FILE="${MAPPING_FILE}" BMN_GENERATED_AT="${BMN_GENERATED_AT:-$(utc_iso)}" \
-  BMN_IMPLEMENTATION="${BMN_IMPLEMENTATION:-bash}" \
+  BMN_IMPLEMENTATION="${BMN_IMPLEMENTATION:-bash}" BMN_STALE_DAYS="${STALE_DAYS}" \
     run_js "${LIB_DIR}/analyzer.js" || rc=$?
   return "${rc}"
 }

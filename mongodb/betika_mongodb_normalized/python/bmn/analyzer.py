@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from .activity_analysis import analyze_activity
 from .common import (
     ANALYSIS_FORMAT, CONVERTIBLE_TYPES, NULLISH_TYPES, NUMERIC_TYPES, SEV_RANK, TOOL_NAME,
     canon, classify_types, fmt_types, fmt_value, index_signature, invalid_db_name, parse_version,
@@ -22,6 +23,7 @@ class AnalysisParams:
     mappings: List[Dict[str, str]] = field(default_factory=list)
     generated_at: str = ""
     implementation: str = "python"
+    stale_days: int = 180
 
 
 class Findings:
@@ -415,6 +417,7 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                    for t in type_conflicts])
 
     security_plan = _security(sources, db_mapping, F)
+    activity, users = analyze_activity(sources, F, params.stale_days)
 
     capacity = {
         "per_instance": [], "total": {"documents": 0, "data_size": 0, "storage_size": 0, "index_size": 0},
@@ -458,7 +461,8 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
         "implementation": params.implementation,
         "generated_at": params.generated_at,
         "params": {"naming_strategy": params.naming_strategy, "prefix_sep": params.prefix_sep,
-                   "target": target_name or None, "mapping_entries": len(params.mappings)},
+                   "target": target_name or None, "mapping_entries": len(params.mappings),
+                   "stale_days": params.stale_days},
         "target": target_info,
         "instances": instances,
         "db_mapping": db_mapping,
@@ -466,6 +470,8 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
         "drift": drift,
         "findings": findings,
         "normalization": normalization,
+        "activity": activity,
+        "users": users,
         "security_plan": security_plan,
         "capacity": capacity,
         "summary": summary,
