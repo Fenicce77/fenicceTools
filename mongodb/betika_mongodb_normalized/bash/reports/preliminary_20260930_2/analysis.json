@@ -1,0 +1,543 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "analysis_format": 1,
+  "implementation": "bash",
+  "generated_at": "2026-09-30T18:27:36Z",
+  "params": {
+    "naming_strategy": "auto",
+    "prefix_sep": "_",
+    "target": null,
+    "mapping_entries": 0
+  },
+  "target": null,
+  "instances": [
+    {
+      "name": "cd",
+      "alias": "cd",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://cd-mongodbcluster01-node01.betika.private:27017,cd-mongodbcluster01-node02.betika.private:27017,cd-mongodbcluster01-node03.betika.private:27017/?replicaSet=cd-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.15",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 1,
+      "collections": 19,
+      "views": 0,
+      "documents": 52302,
+      "data_size": 32354242223,
+      "storage_size": 5009702912,
+      "index_size": 1478656
+    },
+    {
+      "name": "gh",
+      "alias": "gh",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://gh-mongodbcluster01.betika.private:27017,gh-mongodbcluster02.betika.private:27017,gh-mongodbcluster03.betika.private:27017/?replicaSet=gh-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.29",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 1,
+      "collections": 1,
+      "views": 0,
+      "documents": 1,
+      "data_size": 52,
+      "storage_size": 32768,
+      "index_size": 32768
+    },
+    {
+      "name": "ke",
+      "alias": "ke",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://ke-mongodbcluster01.betika.private:27017,ke-mongodbcluster02.betika.private:27017,ke-mongodbcluster03.betika.private:27017/?replicaSet=ke-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.3",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 3,
+      "collections": 17,
+      "views": 0,
+      "documents": 130550,
+      "data_size": 3425874549,
+      "storage_size": 547016704,
+      "index_size": 3678208
+    },
+    {
+      "name": "mw",
+      "alias": "mw",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://mw-mongodbcluster01.betika.private:27017,mw-mongodbcluster02.betika.private:27017,mw-mongodbcluster03.betika.private:27017/?replicaSet=mw-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.13",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 0,
+      "collections": 0,
+      "views": 0,
+      "documents": 0,
+      "data_size": 0,
+      "storage_size": 0,
+      "index_size": 0
+    },
+    {
+      "name": "tz",
+      "alias": "tz",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://tz-mongodbcluster01-node01.betika.private:27017,tz-mongodbcluster01-node02.betika.private:27017,tz-mongodbcluster01-node03.betika.private:27017/?replicaSet=tz-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.22",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 0,
+      "collections": 0,
+      "views": 0,
+      "documents": 0,
+      "data_size": 0,
+      "storage_size": 0,
+      "index_size": 0
+    },
+    {
+      "name": "ug",
+      "alias": "ug",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://ug-mongodbcluster01-node01.betika.private:27017,ug-mongodbcluster01-node02.betika.private:27017,ug-mongodbcluster01-node03.betika.private:27017/?replicaSet=ug-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.25",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 0,
+      "collections": 0,
+      "views": 0,
+      "documents": 0,
+      "data_size": 0,
+      "storage_size": 0,
+      "index_size": 0
+    }
+  ],
+  "db_mapping": [
+    {
+      "instance": "cd",
+      "alias": "cd",
+      "source_db": "betika_cd",
+      "target_db": "betika_cd",
+      "reason": "keep",
+      "collections": 19,
+      "views": 0,
+      "documents": 52302,
+      "data_size": 32354242223,
+      "storage_size": 5009702912,
+      "index_size": 1478656
+    },
+    {
+      "instance": "gh",
+      "alias": "gh",
+      "source_db": "betika_gh",
+      "target_db": "betika_gh",
+      "reason": "keep",
+      "collections": 1,
+      "views": 0,
+      "documents": 1,
+      "data_size": 52,
+      "storage_size": 32768,
+      "index_size": 32768
+    },
+    {
+      "instance": "ke",
+      "alias": "ke",
+      "source_db": "betika_favorites",
+      "target_db": "betika_favorites",
+      "reason": "keep",
+      "collections": 1,
+      "views": 0,
+      "documents": 3,
+      "data_size": 1309,
+      "storage_size": 32768,
+      "index_size": 32768
+    },
+    {
+      "instance": "ke",
+      "alias": "ke",
+      "source_db": "betika_help_center",
+      "target_db": "betika_help_center",
+      "reason": "keep",
+      "collections": 3,
+      "views": 0,
+      "documents": 124835,
+      "data_size": 13557785,
+      "storage_size": 7315456,
+      "index_size": 3104768
+    },
+    {
+      "instance": "ke",
+      "alias": "ke",
+      "source_db": "recon-engine",
+      "target_db": "recon-engine",
+      "reason": "keep",
+      "collections": 13,
+      "views": 0,
+      "documents": 5712,
+      "data_size": 3412315455,
+      "storage_size": 539668480,
+      "index_size": 540672
+    }
+  ],
+  "ns_mapping": [
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.doc.extension",
+      "target_ns": "betika_cd.recon.config.doc.extension",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.doc.type",
+      "target_ns": "betika_cd.recon.config.doc.type",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.field",
+      "target_ns": "betika_cd.recon.config.field",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.filter",
+      "target_ns": "betika_cd.recon.config.filter",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.job",
+      "target_ns": "betika_cd.recon.config.job",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.provider",
+      "target_ns": "betika_cd.recon.config.provider",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.settlement",
+      "target_ns": "betika_cd.recon.config.settlement",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.transaction.type",
+      "target_ns": "betika_cd.recon.config.transaction.type",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.transfer.expiry",
+      "target_ns": "betika_cd.recon.config.transfer.expiry",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.history",
+      "target_ns": "betika_cd.recon.history",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.job",
+      "target_ns": "betika_cd.recon.job",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.job.entries",
+      "target_ns": "betika_cd.recon.job.entries",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.job.info",
+      "target_ns": "betika_cd.recon.job.info",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.notification",
+      "target_ns": "betika_cd.recon.notification",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.progress",
+      "target_ns": "betika_cd.recon.progress",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.provider",
+      "target_ns": "betika_cd.recon.provider",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.provider.query",
+      "target_ns": "betika_cd.recon.provider.query",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.stage",
+      "target_ns": "betika_cd.recon.stage",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.transfer",
+      "target_ns": "betika_cd.recon.transfer",
+      "type": "collection"
+    },
+    {
+      "instance": "gh",
+      "source_ns": "betika_gh.user",
+      "target_ns": "betika_gh.user",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_favorites.favorites",
+      "target_ns": "betika_favorites.favorites",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_help_center.kb",
+      "target_ns": "betika_help_center.kb",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_help_center.users",
+      "target_ns": "betika_help_center.users",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_help_center.votes",
+      "target_ns": "betika_help_center.votes",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.doc.extension",
+      "target_ns": "recon-engine.recon.config.doc.extension",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.doc.type",
+      "target_ns": "recon-engine.recon.config.doc.type",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.field",
+      "target_ns": "recon-engine.recon.config.field",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.filter",
+      "target_ns": "recon-engine.recon.config.filter",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.job",
+      "target_ns": "recon-engine.recon.config.job",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.provider",
+      "target_ns": "recon-engine.recon.config.provider",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.settlement",
+      "target_ns": "recon-engine.recon.config.settlement",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.transaction.type",
+      "target_ns": "recon-engine.recon.config.transaction.type",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.transfer.expiry",
+      "target_ns": "recon-engine.recon.config.transfer.expiry",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.history",
+      "target_ns": "recon-engine.recon.history",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.job.entries",
+      "target_ns": "recon-engine.recon.job.entries",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.job.info",
+      "target_ns": "recon-engine.recon.job.info",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.test",
+      "target_ns": "recon-engine.test",
+      "type": "collection"
+    }
+  ],
+  "drift": [],
+  "findings": [
+    {
+      "severity": "WARN",
+      "code": "FIELD_TYPE_MIXED",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.filter",
+      "message": "1 field(s) with inconsistent BSON types in a sample of 18 document(s)",
+      "details": [
+        "columns[].functions[].parameters[]: string=12, double=1"
+      ]
+    },
+    {
+      "severity": "WARN",
+      "code": "FIELD_TYPE_MIXED",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.job.info",
+      "message": "1 field(s) with inconsistent BSON types in a sample of 100 document(s)",
+      "details": [
+        "steps[].attachments[].value: int=100, string=100"
+      ]
+    },
+    {
+      "severity": "WARN",
+      "code": "FIELD_TYPE_MIXED",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.filter",
+      "message": "1 field(s) with inconsistent BSON types in a sample of 7 document(s)",
+      "details": [
+        "columns[].functions[].parameters[]: string=6, int=1"
+      ]
+    },
+    {
+      "severity": "WARN",
+      "code": "FIELD_TYPE_MIXED",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.job.info",
+      "message": "1 field(s) with inconsistent BSON types in a sample of 100 document(s)",
+      "details": [
+        "steps[].attachments[].value: int=100, string=100"
+      ]
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_TARGET",
+      "instance": "",
+      "namespace": "",
+      "message": "no target instance defined; the central instance should run MongoDB >= 4.4",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "SCHEMA_TRUNCATED",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.job.info",
+      "message": "field path limit reached while sampling (dynamic keys?); schema is partial",
+      "details": []
+    }
+  ],
+  "normalization": [],
+  "security_plan": null,
+  "capacity": {
+    "per_instance": [
+      {
+        "instance": "cd",
+        "documents": 52302,
+        "data_size": 32354242223,
+        "storage_size": 5009702912,
+        "index_size": 1478656
+      },
+      {
+        "instance": "gh",
+        "documents": 1,
+        "data_size": 52,
+        "storage_size": 32768,
+        "index_size": 32768
+      },
+      {
+        "instance": "ke",
+        "documents": 130550,
+        "data_size": 3425874549,
+        "storage_size": 547016704,
+        "index_size": 3678208
+      },
+      {
+        "instance": "mw",
+        "documents": 0,
+        "data_size": 0,
+        "storage_size": 0,
+        "index_size": 0
+      },
+      {
+        "instance": "tz",
+        "documents": 0,
+        "data_size": 0,
+        "storage_size": 0,
+        "index_size": 0
+      },
+      {
+        "instance": "ug",
+        "documents": 0,
+        "data_size": 0,
+        "storage_size": 0,
+        "index_size": 0
+      }
+    ],
+    "total": {
+      "documents": 182853,
+      "data_size": 35780116824,
+      "storage_size": 5556752384,
+      "index_size": 5189632
+    },
+    "target_existing": null
+  },
+  "summary": {
+    "errors": 0,
+    "warnings": 4,
+    "info": 2,
+    "by_code": {
+      "FIELD_TYPE_MIXED": 4,
+      "NO_TARGET": 1,
+      "SCHEMA_TRUNCATED": 1
+    },
+    "sources": 6,
+    "source_databases": 5,
+    "source_collections": 37,
+    "source_views": 0,
+    "target_databases": 5
+  }
+}
