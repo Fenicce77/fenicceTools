@@ -52,7 +52,11 @@ pbm-backup checks afterwards and warns if it differs. Keep the primary lowest.
 
 ## Install
 
-On **every** member:
+Full deployment guide (package build, configuration, validation, switch-over
+from the old units, upgrade, rollback, automation): [INSTALL.md](INSTALL.md).
+Build the deployable package with `packaging/build-dist.sh`.
+
+Quick version, on **every** member:
 
 ```bash
 sudo ./install.sh --dry-run                    # see what it does
