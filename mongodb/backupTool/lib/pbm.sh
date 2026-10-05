@@ -78,31 +78,38 @@ pbm_snapshots_json() {
     printf '%s\n' "$out" | jq -c '.backups.snapshot // []'
 }
 
-# last_done_backup_json base|incr
+# last_done_backup_json base|incr|logical
 #   Print one compact JSON line describing the newest backup in status "done":
-#     base -> incremental base (type "incremental", empty src)
-#     incr -> incremental on top of a previous backup (non-empty src)
+#     base    -> incremental base (type "incremental", empty src)
+#     incr    -> incremental on top of a previous backup (non-empty src)
+#     logical -> logical snapshot (type "logical")
 #   {"name":"...","opid":"...","type":"...","start_ts":N,"last_write_ts":N,
-#    "nodes":["host:port",...]}
+#    "last_transition_ts":N,"restore_to":N,"nodes":["host:port",...]}
+#   start_ts comes from the name (start time), last_transition_ts is when it
+#   finished, restore_to is the snapshot's "restoreTo" (consistency point).
 #   Prints nothing if there is no such backup. Returns 1 if PBM cannot be queried.
 last_done_backup_json() {
-    local filter snaps name desc
+    local filter snaps snap name desc
     case $1 in
-        base) filter='.type == "incremental" and (.src // "") == ""' ;;
-        incr) filter='(.src // "") != ""' ;;
+        base)    filter='.type == "incremental" and (.src // "") == ""' ;;
+        incr)    filter='(.src // "") != ""' ;;
+        logical) filter='.type == "logical"' ;;
         *) die "last_done_backup_json: invalid kind '$1'" 2 ;;
     esac
     snaps=$(pbm_snapshots_json) || return 1
-    name=$(printf '%s\n' "$snaps" | jq -r "
+    snap=$(printf '%s\n' "$snaps" | jq -c "
         [ .[] | select(.status == \"done\") | select(${filter}) ]
-        | sort_by(.name) | last | .name // empty")
-    [[ -n $name ]] || return 0
+        | sort_by(.name) | last // empty")
+    [[ -n $snap ]] || return 0
+    name=$(printf '%s\n' "$snap" | jq -r '.name')
 
     desc=$("$PBM_BIN" describe-backup "$name" -o json) || return 1
-    printf '%s\n' "$desc" | jq -c '{
+    printf '%s\n' "$desc" | jq -c --argjson snap "$snap" '{
         name, opid, type,
         start_ts: (.name | fromdateiso8601),
         last_write_ts,
+        last_transition_ts,
+        restore_to: ($snap.restoreTo // .last_write_ts),
         nodes: [ .replsets[]?.node ]
     }'
 }
@@ -127,4 +134,62 @@ pbm_activity_since() {
     snaps=$(pbm_snapshots_json) || return 1
     printf '%s\n' "$snaps" | jq -e --argjson s "$1" \
         'any(.[]; (.name | try fromdateiso8601 catch 0) >= $s)' >/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# PITR (phase 4: Community logical scheme)
+# ---------------------------------------------------------------------------
+# pbm_config_get KEY - print a single PBM config value ("pbm config KEY"),
+# or nothing if it cannot be read.
+pbm_config_get() {
+    "$PBM_BIN" config "$1" 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true
+}
+
+# pbm_config_set KEY VALUE - "pbm config --set KEY=VALUE" (honors --dry-run).
+pbm_config_set() {
+    run_pbm config --set "$1=$2" >/dev/null
+}
+
+# pitr_ranges_json - print the saved PITR oplog ranges as a sorted JSON array
+# of [start, end] UNIX seconds, merged across the output shapes PBM may use:
+#   pbm list -o json   .pitr.ranges[] = {range: {start, end}}  (or {start, end})
+#   pbm status -o json .backups.pitrChunks.pitrChunks[] = {range: {start, end}}
+# NOTE: not verified against real PBM output with PITR enabled yet.
+pitr_ranges_json() {
+    local out
+    if out=$("$PBM_BIN" list -o json 2>/dev/null) && [[ -n $out ]]; then
+        printf '%s\n' "$out" | jq -c '
+            [ (.pitr.ranges // [])[] | (.range // .) | select(.start != null and .end != null)
+              | [(.start | floor), (.end | floor)] ] | sort'
+        return 0
+    fi
+    out=$(pbm_status_json) || return 1
+    printf '%s\n' "$out" | jq -c '
+        [ (.backups.pitrChunks.pitrChunks // [])[] | (.range // .) | select(.start != null and .end != null)
+          | [(.start | floor), (.end | floor)] ] | sort'
+}
+
+# pitr_coverage BASE_TS RANGES_JSON NOW MAX_LAG - check that saved oplog
+# covers [BASE_TS, NOW - MAX_LAG] without gaps (ranges starting after NOW are
+# ignored, so a later gap does not affect an earlier restore point). Prints:
+#   {"ok":bool,"reason":"...","from":N,"to":N,"lag":N,"gaps":[[end,start],...]}
+# Ranges separated by more than 1 second are a gap.
+pitr_coverage() {
+    jq -cn --argjson base "$1" --argjson r "$2" --argjson now "$3" --argjson maxlag "$4" '
+        ($r | map(select(.[1] >= $base and .[0] <= $now))) as $after
+        | ($after | map(select(.[0] <= $base + 1))) as $cov
+        | if ($cov | length) == 0 then
+            {ok: false, reason: "no saved oplog covers the base snapshot point (restoreTo \($base))",
+             from: null, to: null, lag: null, gaps: []}
+          else
+            ($after | sort) as $s
+            | [ range(1; $s | length) as $i
+                | select($s[$i][0] > $s[$i - 1][1] + 1) | [$s[$i - 1][1], $s[$i][0]] ] as $gaps
+            | (if ($gaps | length) > 0 then $gaps[0][0] else ($s | map(.[1]) | max) end) as $to
+            | ($now - $to) as $lag
+            | {from: $base, to: $to, lag: $lag, gaps: $gaps}
+            | if ($gaps | length) > 0 then . + {ok: false, reason: "gap in saved oplog after the base snapshot"}
+              elif $lag > $maxlag then . + {ok: false, reason: "saved oplog is \($lag)s behind (max \($maxlag)s)"}
+              else . + {ok: true, reason: null} end
+          end'
 }

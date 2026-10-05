@@ -109,14 +109,46 @@ load_config() {
     : "${MAX_WT_DIRTY_PCT:=20}"
     : "${FALLBACK_DELAY_SEC:=120}"
     : "${PROBE_TIMEOUT_MS:=5000}"
+
+    # Phase 4: logical scheme (Community)
+    : "${OPLOG_INCR_MIN:=360}"
+    : "${PITR_AUTOCONFIG:=true}"
+    : "${PITR_LAG_MARGIN_SEC:=900}"
+    : "${OPLOG_WINDOW_FACTOR:=2}"
+    : "${OPLOG_WINDOW_ENFORCE:=true}"
+    : "${EXPECTED_DUMP_SEC:=}"
+
+    # Storage and compression (all schemes): always a bucket, always compressed
+    : "${REQUIRED_STORAGE_TYPES:=GCS}"
+    : "${BACKUP_COMPRESSION:=gzip}"
+    : "${BACKUP_COMPRESSION_LEVEL=5}"   # empty = PBM default level
 }
 
 # validate_config - fail early on malformed tunables.
 validate_config() {
     local v
     for v in RETENTION_DAYS WAIT_RUNNING_SEC WAIT_POLL_SEC DEDUP_WINDOW_SEC \
-             MAX_REPL_LAG_SEC MAX_QUEUE MAX_WT_DIRTY_PCT FALLBACK_DELAY_SEC PROBE_TIMEOUT_MS; do
+             MAX_REPL_LAG_SEC MAX_QUEUE MAX_WT_DIRTY_PCT FALLBACK_DELAY_SEC PROBE_TIMEOUT_MS \
+             OPLOG_INCR_MIN PITR_LAG_MARGIN_SEC OPLOG_WINDOW_FACTOR; do
         is_uint "${!v}" || die "${v} must be a non-negative integer (got '${!v}')" 2
+    done
+    if [[ -n $EXPECTED_DUMP_SEC ]] && ! is_uint "$EXPECTED_DUMP_SEC"; then
+        die "EXPECTED_DUMP_SEC must be empty or a non-negative integer (got '${EXPECTED_DUMP_SEC}')" 2
+    fi
+    (( OPLOG_INCR_MIN >= 1 )) || die "OPLOG_INCR_MIN must be >= 1" 2
+    case $BACKUP_COMPRESSION in
+        s2|gzip|pgzip|snappy|lz4|zstd) ;;
+        *) die "BACKUP_COMPRESSION must be one of s2 gzip pgzip snappy lz4 zstd; 'none' is not allowed (got '${BACKUP_COMPRESSION}')" 2 ;;
+    esac
+    if [[ -n $BACKUP_COMPRESSION_LEVEL ]] && ! is_uint "$BACKUP_COMPRESSION_LEVEL"; then
+        die "BACKUP_COMPRESSION_LEVEL must be empty or a non-negative integer (got '${BACKUP_COMPRESSION_LEVEL}')" 2
+    fi
+    [[ -n $REQUIRED_STORAGE_TYPES ]] || die "REQUIRED_STORAGE_TYPES must not be empty" 2
+    for v in PITR_AUTOCONFIG OPLOG_WINDOW_ENFORCE; do
+        case ${!v} in
+            true|false) ;;
+            *) die "${v} must be true or false (got '${!v}')" 2 ;;
+        esac
     done
     case $BACKUP_MODE in
         auto|physical|logical) ;;
