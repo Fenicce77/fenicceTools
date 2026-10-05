@@ -1,0 +1,14 @@
+# pbm-backup: safe retention purge at 00:40
+# Waits for a running backup (WAIT_RUNNING_SEC) before purging.
+[Unit]
+Description=pbm-backup: safe retention purge at 00:40
+
+[Timer]
+OnCalendar=*-*-* 00:40:00
+# Keep members in step: the election relies on all of them starting together.
+AccuracySec=1s
+Persistent=true
+Unit=pbm-backup-cleanup.service
+
+[Install]
+WantedBy=timers.target

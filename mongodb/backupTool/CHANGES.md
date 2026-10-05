@@ -172,6 +172,28 @@ Metrics (optional, `METRICS_DIR`):
 - Atomic writes (temp file + mv); a metrics failure never fails a backup.
 - New `metrics` command to refresh the state file from a frequent timer.
 
+## Phase 6 - systemd, installer, templates, docs
+
+- New units `pbm-backup-{full,incr,cleanup,metrics}.{service,timer}`
+  (`AccuracySec=1s` so members start together). The incr timer follows the
+  production schedule (01:15..23:15, `Persistent=false`); the Community
+  scheme gets a drop-in with an every-`OPLOG_INCR_MIN` schedule. The old units
+  moved to `systemd/legacy/` unchanged.
+- `FULL_MIN_INTERVAL_SEC` (20h): `full` skips if the last full is more recent,
+  so a `Persistent=true` catch-up after a reboot cannot take an extra full
+  (including through the standby takeover path).
+- `install.sh`: installs bin, libraries, docs, config (never overwritten) and
+  units; `--scheme`, `--incr-every-min`, `--metrics`, `--enable`,
+  `--legacy-wrappers`, `--disable-legacy`, `--dry-run`.
+- Config files are looked up in `/etc/default` when `/etc/sysconfig` does
+  not exist (Debian-like systems).
+- Templates: `conf/pbm-agent.yaml` fixed (`log.level` indentation, host
+  typo, placeholders instead of credentials, cluster settings removed);
+  `conf/pbm-conf.yaml` documents what pbm-backup manages (PITR, priorities,
+  compression) and that filesystem storage is not supported; generic host
+  names.
+- `README.md`.
+
 ## Diffs of the replaced scripts
 
 <details>

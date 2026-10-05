@@ -8,6 +8,20 @@
 #   tests/smoke.sh /bin/bash       # macOS bash 3.2 compatibility check
 set -uo pipefail
 
+case ${1:-} in
+    -h|--help)
+        cat <<'EOT'
+smoke.sh - scenario tests for pbm-backup (mocked pbm and mongosh, PBM 2.12.0
+fixtures). No MongoDB or PBM needed. Exit code 0 if every scenario passes.
+
+Usage: tests/smoke.sh [BASH_BINARY]
+
+Examples:
+  tests/smoke.sh                 # bash from PATH
+  tests/smoke.sh /bin/bash       # macOS bash 3.2 compatibility check
+EOT
+        exit 0 ;;
+esac
 BASH_BIN=${1:-bash}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 FIX="${ROOT}/tests/fixtures/pbm-2.12.0-psmdb-8.0"
@@ -29,6 +43,7 @@ unset LOCAL_NODE_NAMES METRICS_DIR PREFERRED_NODES ALLOW_PRIMARY BACKUP_MODE \
       MONGODB_VERSION MONGODB_EDITION RETENTION_DAYS PBM_LOCAL_ROOT LOG_DIR \
       BACKUP_COMPRESSION BACKUP_COMPRESSION_LEVEL REQUIRED_STORAGE_TYPES \
       OPLOG_INCR_MIN PITR_AUTOCONFIG EXPECTED_DUMP_SEC PBM_BIN MONGO_SHELL \
+      FULL_MIN_INTERVAL_SEC DEDUP_WINDOW_SEC FALLBACK_DELAY_SEC \
       MOCK_STATUS MOCK_BACKUPS MOCK_BACKUPS_AFTER MOCK_RUNNING MOCK_NODE MOCK_RC \
       MOCK_LIST MOCK_CONFIG MOCK_BUILDINFO MOCK_PBM_VERSION MOCK_DUMP_SEC
 
@@ -156,6 +171,18 @@ LOCAL_NODE_NAMES=$N3 check "owner runs base"                                  0 
 LOCAL_NODE_NAMES=$N2 check "standby skips base"                               0 "" "backup --type" -- full
 MOCK_BACKUPS=$WORK/backups-fresh-base.json LOCAL_NODE_NAMES=$N3 \
     check "base already done -> dedup skip"                                   0 "" "backup --type" -- full
+# base 5h ago (outside DEDUP_WINDOW_SEC, inside FULL_MIN_INTERVAL_SEC)
+jq --arg n "$(jq -rn --argjson t "$(( $(date +%s) - 5 * 3600 ))" '$t | todate')" \
+    '.backups.snapshot = [{name: $n, status: "done", type: "incremental", src: ""}] + .backups.snapshot' \
+    "$FIX/status-backups.json" >"$WORK/backups-base-5h.json"
+MOCK_BACKUPS=$WORK/backups-base-5h.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="FULL_MIN_INTERVAL_SEC" \
+    check "full 5h after the last one (e.g. reboot catch-up) -> skip"         0 "" "backup --type" -- full
+MOCK_BACKUPS=$WORK/backups-base-5h.json FALLBACK_DELAY_SEC=1 LOCAL_NODE_NAMES=$N2 \
+    check "...also on a standby: no takeover, no extra full"                  0 "" "backup --type" -- full
+MOCK_BACKUPS=$WORK/backups-base-5h.json FULL_MIN_INTERVAL_SEC=0 LOCAL_NODE_NAMES=$N3 \
+    check "FULL_MIN_INTERVAL_SEC=0 disables the guard"                        0 "$BASE" "" -- full
+MOCK_BACKUPS=$WORK/backups-base-5h.json LOCAL_NODE_NAMES=$N3 \
+    check "incr is not affected by the full guard"                            0 "" "" -- incr
 MOCK_BACKUPS=$WORK/backups-fresh-base.json LOCAL_NODE_NAMES=$N3 \
     check "--force ignores dedup"                                             0 "$BASE" "" -- full --force
 MOCK_RC=1 LOCAL_NODE_NAMES=$N3 check "pbm failure -> rc 1"                    1 "$BASE" "" -- full
@@ -212,16 +239,16 @@ jq --arg n "$LNAME" --argjson r "$LRESTORE" \
     "$FIX/status-backups.json" >"$WORK/backups-logical.json"
 jq '.backups.snapshot = []' "$FIX/status-backups.json" >"$WORK/backups-none.json"
 jq '.pitr.conf = true | .pitr.run = true' "$FIX/status-all-agents-ok.json" >"$WORK/status-pitr-run.json"
-mklist() { # name [[start,end],...]
-    jq -n --argjson r "$2" '{snapshots: [], pitr: {on: true, ranges: [$r[] | {range: {start: .[0], end: .[1]}}]}}' >"$WORK/list-$1.json"
-}
-mklist ok      "[[$(( LRESTORE - 60 )),$(( NOW - 1200 ))]]"
-mklist gap     "[[$(( LRESTORE - 60 )),$(( LRESTORE + 3600 ))],[$(( LRESTORE + 5400 )),$(( NOW - 1200 ))]]"
 # older full (now-30h) whose slices stopped 7h ago
 OSTART=$(( NOW - 30 * 3600 )); ORESTORE=$(( OSTART + 300 ))
 jq --arg n "$(jq -rn --argjson t "$OSTART" '$t | todate')" --argjson r "$ORESTORE" \
     '.backups.snapshot = [{name: $n, status: "done", type: "logical", src: "", restoreTo: $r, pbmVersion: "2.12.0"}]' \
     "$FIX/status-backups.json" >"$WORK/backups-logical-old.json"
+mklist() { # name [[start,end],...]
+    jq -n --argjson r "$2" '{snapshots: [], pitr: {on: true, ranges: [$r[] | {range: {start: .[0], end: .[1]}}]}}' >"$WORK/list-$1.json"
+}
+mklist ok      "[[$(( LRESTORE - 60 )),$(( NOW - 1200 ))]]"
+mklist gap     "[[$(( LRESTORE - 60 )),$(( LRESTORE + 3600 ))],[$(( LRESTORE + 5400 )),$(( NOW - 1200 ))]]"
 mklist stale   "[[$(( ORESTORE - 60 )),$(( NOW - 7 * 3600 ))]]"
 mklist late    "[[$(( LRESTORE + 600 )),$(( NOW - 1200 ))]]"
 CE='{"version":"7.0.14","modules":[]}'
@@ -232,7 +259,7 @@ lcfg() { # enabled span [compression, default gzip]
 
 printf '\n[phase 4: logical full]\n'
 printf 'pitr.enabled=false\npitr.oplogSpanMin=10\n' >"$WORK/pbmconf"
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
     EXPECT_OUT="Oplog window 86400s >= 2 x expected dump 300s" \
     check "owner takes logical full"                                          0 "$LOG" "--base" -- full
 for kv in pitr.oplogSpanMin=360 pitr.enabled=true pitr.compression=gzip pitr.compressionLevel=5; do
@@ -243,27 +270,29 @@ for kv in pitr.oplogSpanMin=360 pitr.enabled=true pitr.compression=gzip pitr.com
     fi
 done
 lcfg true 360
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
     check "PITR already configured -> no config change"                      0 "$LOG" "config --set" -- full
 lcfg false 10
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 PITR_AUTOCONFIG=false \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 PITR_AUTOCONFIG=false \
     check "PITR_AUTOCONFIG=false -> no config change"                        0 "$LOG" "config --set" -- full
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json LOCAL_NODE_NAMES=$N2 \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json LOCAL_NODE_NAMES=$N2 \
     check "standby skips logical full"                                        0 "" "backup --type" -- full
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_PROBES=$WORK/probes/n03smalloplog LOCAL_NODE_NAMES=$N3 \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_PROBES=$WORK/probes/n03smalloplog LOCAL_NODE_NAMES=$N3 \
     EXPECT_OUT="Oplog window 400s < 2 x expected dump 300s" \
     check "oplog window too small -> rc 1, no backup"                         1 "" "backup --type" -- full
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_PROBES=$WORK/probes/n03smalloplog LOCAL_NODE_NAMES=$N3 \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_PROBES=$WORK/probes/n03smalloplog LOCAL_NODE_NAMES=$N3 \
     OPLOG_WINDOW_ENFORCE=false \
     check "oplog window too small + ENFORCE=false -> runs"                    0 "$LOG" "" -- full
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_PROBES=$WORK/probes/n03smalloplog LOCAL_NODE_NAMES=$N3 \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_PROBES=$WORK/probes/n03smalloplog LOCAL_NODE_NAMES=$N3 \
     EXPECTED_DUMP_SEC=100 \
     check "EXPECTED_DUMP_SEC overrides the estimate"                          0 "$LOG" "" -- full
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="FULL_MIN_INTERVAL_SEC" \
+    check "logical full 6h after the last one -> skip"                        0 "" "backup --type" -- full
 MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-none.json LOCAL_NODE_NAMES=$N2 EXPECT_OUT="cannot estimate the dump time" \
     check "first logical full -> no estimate, runs"                           0 "$LOG" "" -- full
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
     check "--dry-run takes nothing, changes nothing"                          0 "" "backup --type" -- full --dry-run
-BACKUP_MODE=logical MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/status-pitr-run.json LOCAL_NODE_NAMES=$N3 \
+BACKUP_MODE=logical MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_STATUS=$WORK/status-pitr-run.json LOCAL_NODE_NAMES=$N3 \
     check "PSMDB + BACKUP_MODE=logical -> logical, PITR allowed"              0 "$LOG" "" -- full
 
 printf '\n[phase 4: oplog (PITR) check]\n'

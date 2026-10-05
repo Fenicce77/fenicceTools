@@ -115,7 +115,9 @@ Common steps:
      the last full goes first, then PREFERRED_NODES, then by name. Primary
      excluded. Rank #N takes over after N x FALLBACK_DELAY_SEC (default 120s)
      only if nobody started a backup meanwhile.
-  3. Skips if another node completed a full within DEDUP_WINDOW_SEC.
+  3. Skips if the last full started less than FULL_MIN_INTERVAL_SEC (20h)
+     ago (e.g. a systemd catch-up run after a reboot) or another node
+     completed one within DEDUP_WINDOW_SEC. --force overrides both.
 
 PSMDB (physical): "pbm backup --type incremental --base --wait".
   Requires PITR disabled. Log file: \${LOG_DIR}/incrbase.log
@@ -289,6 +291,21 @@ recent_done_since() {
     [[ -n $json ]] || return 1
     ts=$(printf '%s\n' "$json" | jq -r '.start_ts // 0')
     is_uint "$ts" && (( ts >= $2 ))
+}
+
+# full_too_recent LABEL LAST_FULL_JSON STARTED - true (and logs) if the last
+# full started less than FULL_MIN_INTERVAL_SEC ago. Protects against extra
+# fulls, e.g. a systemd "Persistent=true" catch-up after a node reboots.
+full_too_recent() {
+    local L=$1 last=$2 started=$3 ts
+    [[ $FORCE != 1 && -n $last && $FULL_MIN_INTERVAL_SEC -gt 0 ]] || return 1
+    ts=$(printf '%s\n' "$last" | jq -r '.start_ts // 0')
+    if is_uint "$ts" && (( ts >= started - FULL_MIN_INTERVAL_SEC )); then
+        SKIPPED=1
+        log INFO "${L}[PRECHECK]" "Last full $(printf '%s\n' "$last" | jq -r '.name') started $(( (started - ts) / 60 )) min ago (< FULL_MIN_INTERVAL_SEC=${FULL_MIN_INTERVAL_SEC}s). Skipping (use --force to override)"
+        return 0
+    fi
+    return 1
 }
 
 # iso EPOCH - UTC ISO-8601 timestamp.
@@ -517,6 +534,11 @@ run_physical() {
         log WARN "${L}[PBM][PRECHECK][LASTBACKUP]" "No successful base backup found"
     fi
 
+    if [[ $kind == full ]] && full_too_recent "$L" "$base" "$started"; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    fi
+
     if ! election_gate "$L" "$status" "$owner" "$started" yes; then
         log INFO "${L}[END]" "${title} Service Ended"
         return "$GATE_RC"
@@ -666,6 +688,10 @@ run_logical_full() {
         log WARN "${L}[PRECHECK][LASTBACKUP]" "No successful logical backup found"
     fi
 
+    if full_too_recent "$L" "$last" "$started"; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    fi
     if ! election_gate "$L" "$status" "$owner" "$started" yes; then
         log INFO "${L}[END]" "${title} Service Ended"
         return "$GATE_RC"

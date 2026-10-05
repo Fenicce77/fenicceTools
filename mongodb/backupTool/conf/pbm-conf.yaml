@@ -50,6 +50,8 @@ storage:
 #      maxObjSizeGB: 5018
 
 #--------------------Filesystem Configuration---------------------------
+## NOT USED by pbm-backup: PBM filesystem storage needs the same path mounted
+## on every member (NFS). pbm-backup refuses it (REQUIRED_STORAGE_TYPES=GCS).
 #type:
 #  filesystem:
 
@@ -60,6 +62,13 @@ storage:
 #      maxObjSizeGB: 5018
 
 #====================Point-in-Time Recovery Configuration==================
+## pbm-backup manages this section, do not enable it by hand:
+##  - PSMDB (physical scheme): PITR must stay DISABLED (preflight fails if on).
+##  - Community (logical scheme): after each logical full, pbm-backup sets
+##    pitr.enabled=true, pitr.oplogSpanMin=OPLOG_INCR_MIN (default 360) and
+##    pitr.compression/compressionLevel = BACKUP_COMPRESSION(_LEVEL)
+##    (PITR_AUTOCONFIG=true).
+## Oplog slicing node: give the PRIMARY the lowest priority.
 
 #pitr:
 #  enabled: true 
@@ -77,9 +86,9 @@ storage:
 ## Node priority for saving oplog slices. The highest priority node is used.
 ## Nodes with the same priority are randomly elected for saving oplog slices.
 #  priority:
-#    "gcss-mongodbcluster01-node01:27017": 0.5
-#    "gcss-mongodbcluster01-node02:27017": 1.5
-#    "gcss-mongodbcluster01-node03:27017": 2.5
+#    "mongodbcluster-node01:27017": 0.5
+#    "mongodbcluster-node02:27017": 1.5
+#    "mongodbcluster-node03:27017": 2.5
 
 
 #==========================Backup Configuration============================
@@ -87,13 +96,17 @@ storage:
 ## Adjust priority of mongod nodes for making backups. The highest priority
 ## node is making a backup.
 ## Nodes with the same priority are randomly elected for a backup.
+## pbm-backup elects which member LAUNCHES a backup (never the primary) but
+## PBM picks the member that EXECUTES it by this priority: keep the primary
+## lowest. pbm-backup warns when PBM executed a backup on another member.
 backup:
 #  priority:
-#    "gcss-mongodbcluster01-node01:27017": 0.5
-#    "gcss-mongodbcluster01-node02:27017": 3.0 
-#    "gcss-mongodbcluster01-node03:27017": 1.0
+#    "mongodbcluster-node01:27017": 0.5
+#    "mongodbcluster-node02:27017": 3.0
+#    "mongodbcluster-node03:27017": 1.0
 
 ## Set a compression method and level
+## (pbm-backup also passes BACKUP_COMPRESSION/_LEVEL explicitly on every backup)
   compression: gzip
   compressionLevel: 5
 

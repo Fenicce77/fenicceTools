@@ -20,6 +20,11 @@
 # runs on every node).
 #DEDUP_WINDOW_SEC=600
 
+# "full" skips if the last full started less than this ago (one scheduled full
+# per day; stops an extra full when systemd replays a missed run at boot).
+# 0 = disabled. --force always runs.
+#FULL_MIN_INTERVAL_SEC=72000
+
 # Extra names this node is known by in the replica set config, space separated,
 # when they differ from hostname / hostname -s / hostname -f.
 #LOCAL_NODE_NAMES="mongodbcluster-node01 10.0.0.11"

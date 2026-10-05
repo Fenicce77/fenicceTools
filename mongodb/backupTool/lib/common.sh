@@ -68,13 +68,17 @@ die() {
 # Configuration
 # ---------------------------------------------------------------------------
 # load_config
-#   1. PBM_BACKUP_CONF (default /etc/sysconfig/pbm-backup): tunables, optional.
+#   1. PBM_BACKUP_CONF (default /etc/sysconfig/pbm-backup, or /etc/default/...
+#      when /etc/sysconfig does not exist): tunables, optional.
 #   2. PBM_ENV_FILE    (default /etc/sysconfig/pbm-conf): PBM_MONGODB_URI.
 #      Always sourced when readable, as the original scripts did.
 #   3. Defaults for anything still unset.
 load_config() {
-    local conf=${PBM_BACKUP_CONF:-/etc/sysconfig/pbm-backup}
-    local envf=${PBM_ENV_FILE:-/etc/sysconfig/pbm-conf}
+    # RHEL-like systems use /etc/sysconfig, Debian-like /etc/default.
+    local d=/etc/sysconfig
+    [[ -d $d ]] || d=/etc/default
+    local conf=${PBM_BACKUP_CONF:-$d/pbm-backup}
+    local envf=${PBM_ENV_FILE:-$d/pbm-conf}
 
     if [[ -r $conf ]]; then
         # shellcheck disable=SC1090
@@ -91,6 +95,7 @@ load_config() {
     : "${WAIT_RUNNING_SEC:=1800}"
     : "${WAIT_POLL_SEC:=30}"
     : "${DEDUP_WINDOW_SEC:=600}"
+    : "${FULL_MIN_INTERVAL_SEC:=72000}"   # 20h: at most one scheduled full per day
     : "${LOCAL_NODE_NAMES:=}"
     : "${LOCK_DIR:=}"
     : "${PBM_BIN:=}"
@@ -130,7 +135,7 @@ load_config() {
 # validate_config - fail early on malformed tunables.
 validate_config() {
     local v
-    for v in RETENTION_DAYS WAIT_RUNNING_SEC WAIT_POLL_SEC DEDUP_WINDOW_SEC \
+    for v in RETENTION_DAYS WAIT_RUNNING_SEC WAIT_POLL_SEC DEDUP_WINDOW_SEC FULL_MIN_INTERVAL_SEC \
              MAX_REPL_LAG_SEC MAX_QUEUE MAX_WT_DIRTY_PCT FALLBACK_DELAY_SEC PROBE_TIMEOUT_MS \
              OPLOG_INCR_MIN PITR_LAG_MARGIN_SEC OPLOG_WINDOW_FACTOR; do
         is_uint "${!v}" || die "${v} must be a non-negative integer (got '${!v}')" 2

@@ -1,18 +1,14 @@
-#mongodb-uri: "mongodb://pbmuser:svGpQlVZgnTTT9Dnv38KKAxX@gcss-mongodbcluster01-node01:27017/?authSource=admin&replicaSet=gcssrs01"
-mongodb-uri: "mongodb://pbmuser:pbmPassword@gmongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName&readConcernLevel=local&w=1"
-#pitr:
-#  enabled: true 
-#  oplogSpanMin: 60
-#  compression: gzip
-#  compressionLevel: 5
+# pbm-agent configuration template (one per replica set member).
+# Replace the placeholders; keep this file readable by the pbm-agent user only.
+# Each member's pbm-agent talks to its own mongod: use that member's host.
+mongodb-uri: "mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName&readConcernLevel=local&w=1"
+
+# PITR and backup priorities are cluster settings: they belong in
+# pbm-conf.yaml ("pbm config --file"), not here. See the notes there.
 backup:
   dump-parallel-collections: 4
-  priority:
-#    "gcss-mongodbcluster01-node01:27017": 0.5 
-#    "gcss-mongodbcluster01-node02:27017": 3.0 
-#    "gcss-mongodbcluster01-node03:27017": 1.0
-
 
 log:
   path: "/data/log/pbm/pbm.log"
-level: "D"
+  # D (debug) is very verbose; I (info) is enough for daily operation.
+  level: "D"

@@ -1,0 +1,20 @@
+# pbm-backup: refresh Prometheus textfile state metrics
+# Installed by install.sh. Runs on EVERY replica set member; pbm-backup's
+# node election decides which member acts (never the primary).
+[Unit]
+Description=pbm-backup: refresh Prometheus textfile state metrics
+Documentation=file:/usr/local/share/doc/pbm-backup/README.md
+Wants=network-online.target
+After=network-online.target time-sync.target pbm-agent.service
+
+[Service]
+Type=oneshot
+# PBM_MONGODB_URI (RHEL-like / Debian-like); pbm-backup also reads
+# /etc/sysconfig/pbm-conf and /etc/sysconfig/pbm-backup by itself.
+EnvironmentFile=-/etc/sysconfig/pbm-agent
+EnvironmentFile=-/etc/default/pbm-agent
+ExecStart=/usr/local/bin/pbm-backup --no-color metrics
+User=root
+Group=root
+Nice=10
+TimeoutStartSec=10min
