@@ -59,7 +59,14 @@ case $1 in
             { grep -v "^${kv%%=*}=" "$cfg" 2>/dev/null || true; printf '%s\n' "$kv"; } >"$cfg.tmp" && mv "$cfg.tmp" "$cfg"
             printf '[%s]\n' "$kv"
         else
-            grep "^$2=" "$cfg" 2>/dev/null | tail -n 1 | cut -d= -f2-
+            # Same output as PBM 2.12.0 (cmd/pbm/config.go, confKV):
+            # text "[KEY=VALUE]", json {"key":"KEY","value":"VALUE"}; "" if unset.
+            val=$(grep "^$2=" "$cfg" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)
+            if [[ " $* " == *" -o json "* ]]; then
+                jq -cn --arg k "$2" --arg v "$val" '{key: $k, value: $v}'
+            else
+                printf '[%s=%s]\n' "$2" "$val"
+            fi
         fi ;;
     backup|cleanup|restore)
         exit "${MOCK_RC:-0}" ;;

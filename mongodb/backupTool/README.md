@@ -165,13 +165,23 @@ tests/smoke.sh /bin/bash  # macOS bash 3.2
 Scenario tests with mocked `pbm` and `mongosh` and real PBM 2.12.0 JSON
 output as fixtures. No MongoDB needed.
 
+## Verified against PBM 2.12.0
+
+- `pbm status [-s backups|-s running] -o json`, `pbm describe-backup -o json`
+  (fixtures in `tests/fixtures/pbm-2.12.0-psmdb-8.0`).
+- From the PBM 2.12.0 source (`cmd/pbm`, `pbm/oplog`): PITR ranges in
+  `pbm list -o json` (`.pitr.ranges[].range.{start,end}`) and
+  `pbm status -o json` (`.backups.pitrChunks.pitrChunks[].range`);
+  `pbm config KEY -o json` (`{"key","value"}`; text mode prints `[KEY=VALUE]`);
+  `pbm cleanup --older-than` / `pbm restore --time` accept
+  `YYYY-MM-DDTHH:MM:SS` and `YYYY-MM-DD`, parsed as UTC.
+- `pbm backup` accepts `--compression` (none/gzip/snappy/lz4/s2/pgzip/zstd)
+  and `--compression-level` for every backup type; existing physical
+  backups are already compressed (`size` < `size_uncompressed`).
+
 ## Not yet verified against a live cluster
 
-- `pbm backup --compression=... --compression-level=...` on physical
-  incremental backups (PBM 2.12).
-- `pbm list -o json` PITR range format and `pbm config <key>` output with
-  PITR enabled.
-- `pbm cleanup --older-than YYYY-MM-DDTHH:MM:SS`.
+- A real Community run with PITR enabled (formats checked in the source only).
 - `buildInfo.psmdbVersion` (the `-N` version suffix is used as fallback).
 - `globalLock.currentQueue` as an overload signal on MongoDB 8.0.
 - Dynamic `backup.priority` to force the executing member is not

@@ -139,10 +139,14 @@ pbm_activity_since() {
 # ---------------------------------------------------------------------------
 # PITR (phase 4: Community logical scheme)
 # ---------------------------------------------------------------------------
-# pbm_config_get KEY - print a single PBM config value ("pbm config KEY"),
-# or nothing if it cannot be read.
+# pbm_config_get KEY - print a single PBM config value, or nothing if it is
+# unset or cannot be read. In text mode "pbm config KEY" prints "[KEY=VALUE]";
+# with "-o json" it prints {"key":"KEY","value":"VALUE"} (PBM 2.12.0,
+# cmd/pbm/config.go confKV), which is what is parsed here.
 pbm_config_get() {
-    "$PBM_BIN" config "$1" 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true
+    local out
+    out=$("$PBM_BIN" config "$1" -o json 2>/dev/null) || return 0
+    printf '%s\n' "$out" | jq -r '.value // empty' 2>/dev/null || true
 }
 
 # pbm_config_set KEY VALUE - "pbm config --set KEY=VALUE" (honors --dry-run).
