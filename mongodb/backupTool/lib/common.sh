@@ -68,13 +68,17 @@ die() {
 # Configuration
 # ---------------------------------------------------------------------------
 # load_config
-#   1. PBM_BACKUP_CONF (default /etc/sysconfig/pbm-backup): tunables, optional.
+#   1. PBM_BACKUP_CONF (default /etc/sysconfig/pbm-backup, or /etc/default/...
+#      when /etc/sysconfig does not exist): tunables, optional.
 #   2. PBM_ENV_FILE    (default /etc/sysconfig/pbm-conf): PBM_MONGODB_URI.
 #      Always sourced when readable, as the original scripts did.
 #   3. Defaults for anything still unset.
 load_config() {
-    local conf=${PBM_BACKUP_CONF:-/etc/sysconfig/pbm-backup}
-    local envf=${PBM_ENV_FILE:-/etc/sysconfig/pbm-conf}
+    # RHEL-like systems use /etc/sysconfig, Debian-like /etc/default.
+    local d=/etc/sysconfig
+    [[ -d $d ]] || d=/etc/default
+    local conf=${PBM_BACKUP_CONF:-$d/pbm-backup}
+    local envf=${PBM_ENV_FILE:-$d/pbm-conf}
 
     if [[ -r $conf ]]; then
         # shellcheck disable=SC1090
@@ -91,6 +95,7 @@ load_config() {
     : "${WAIT_RUNNING_SEC:=1800}"
     : "${WAIT_POLL_SEC:=30}"
     : "${DEDUP_WINDOW_SEC:=600}"
+    : "${FULL_MIN_INTERVAL_SEC:=72000}"   # 20h: at most one scheduled full per day
     : "${LOCAL_NODE_NAMES:=}"
     : "${LOCK_DIR:=}"
     : "${PBM_BIN:=}"
@@ -109,14 +114,49 @@ load_config() {
     : "${MAX_WT_DIRTY_PCT:=20}"
     : "${FALLBACK_DELAY_SEC:=120}"
     : "${PROBE_TIMEOUT_MS:=5000}"
+
+    # Phase 4: logical scheme (Community)
+    : "${OPLOG_INCR_MIN:=360}"
+    : "${PITR_AUTOCONFIG:=true}"
+    : "${PITR_LAG_MARGIN_SEC:=900}"
+    : "${OPLOG_WINDOW_FACTOR:=2}"
+    : "${OPLOG_WINDOW_ENFORCE:=true}"
+    : "${EXPECTED_DUMP_SEC:=}"
+
+    # Storage and compression (all schemes): always a bucket, always compressed
+    : "${REQUIRED_STORAGE_TYPES:=GCS}"
+    : "${BACKUP_COMPRESSION:=gzip}"
+    : "${BACKUP_COMPRESSION_LEVEL=5}"   # empty = PBM default level
+
+    # Phase 5: metrics (empty = disabled)
+    : "${METRICS_DIR:=}"
 }
 
 # validate_config - fail early on malformed tunables.
 validate_config() {
     local v
-    for v in RETENTION_DAYS WAIT_RUNNING_SEC WAIT_POLL_SEC DEDUP_WINDOW_SEC \
-             MAX_REPL_LAG_SEC MAX_QUEUE MAX_WT_DIRTY_PCT FALLBACK_DELAY_SEC PROBE_TIMEOUT_MS; do
+    for v in RETENTION_DAYS WAIT_RUNNING_SEC WAIT_POLL_SEC DEDUP_WINDOW_SEC FULL_MIN_INTERVAL_SEC \
+             MAX_REPL_LAG_SEC MAX_QUEUE MAX_WT_DIRTY_PCT FALLBACK_DELAY_SEC PROBE_TIMEOUT_MS \
+             OPLOG_INCR_MIN PITR_LAG_MARGIN_SEC OPLOG_WINDOW_FACTOR; do
         is_uint "${!v}" || die "${v} must be a non-negative integer (got '${!v}')" 2
+    done
+    if [[ -n $EXPECTED_DUMP_SEC ]] && ! is_uint "$EXPECTED_DUMP_SEC"; then
+        die "EXPECTED_DUMP_SEC must be empty or a non-negative integer (got '${EXPECTED_DUMP_SEC}')" 2
+    fi
+    (( OPLOG_INCR_MIN >= 1 )) || die "OPLOG_INCR_MIN must be >= 1" 2
+    case $BACKUP_COMPRESSION in
+        s2|gzip|pgzip|snappy|lz4|zstd) ;;
+        *) die "BACKUP_COMPRESSION must be one of s2 gzip pgzip snappy lz4 zstd; 'none' is not allowed (got '${BACKUP_COMPRESSION}')" 2 ;;
+    esac
+    if [[ -n $BACKUP_COMPRESSION_LEVEL ]] && ! is_uint "$BACKUP_COMPRESSION_LEVEL"; then
+        die "BACKUP_COMPRESSION_LEVEL must be empty or a non-negative integer (got '${BACKUP_COMPRESSION_LEVEL}')" 2
+    fi
+    [[ -n $REQUIRED_STORAGE_TYPES ]] || die "REQUIRED_STORAGE_TYPES must not be empty" 2
+    for v in PITR_AUTOCONFIG OPLOG_WINDOW_ENFORCE; do
+        case ${!v} in
+            true|false) ;;
+            *) die "${v} must be true or false (got '${!v}')" 2 ;;
+        esac
     done
     case $BACKUP_MODE in
         auto|physical|logical) ;;
@@ -187,6 +227,20 @@ _release_lock() {
     fi
 }
 
+# Single EXIT handler: runs ON_EXIT_FN (if set) with the exit code, then
+# releases the lock. Keeps the original exit code.
+ON_EXIT_FN=''
+_on_exit() {
+    local rc=$?
+    trap - EXIT
+    if [[ -n $ON_EXIT_FN ]]; then
+        "$ON_EXIT_FN" "$rc" || true
+    fi
+    _release_lock
+    exit "$rc"
+}
+trap _on_exit EXIT
+
 acquire_lock() {
     local name=$1 dir=${LOCK_DIR:-}
     if [[ -z $dir ]]; then
@@ -217,5 +271,4 @@ acquire_lock() {
     fi
     printf '%s\n' "$$" >"${path}.d/pid"
     _LOCK_MKDIR_PATH="${path}.d"
-    trap _release_lock EXIT
 }

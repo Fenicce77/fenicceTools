@@ -64,7 +64,7 @@ uri_for_host() {
 }
 
 # probe_node HOST:PORT - print one JSON line with the node's health:
-#   {"reachable":true,"primary":bool,"state":"SECONDARY","lag":N,
+#   {"reachable":true,"primary":bool,"state":"SECONDARY","lag":N,"oplog_window_sec":N,
 #    "queue":N,"dirty_pct":N}
 #   {"reachable":false,"error":"..."}
 probe_node() {
@@ -86,6 +86,13 @@ probe_node() {
     js+=' o.queue = (ss.globalLock && ss.globalLock.currentQueue) ? Number(ss.globalLock.currentQueue.total) : null;'
     js+=' var c = ss.wiredTiger ? ss.wiredTiger.cache : null;'
     js+=' o.dirty_pct = c ? Math.round(1000 * Number(c["tracked dirty bytes in the cache"]) / Number(c["maximum bytes configured"])) / 10 : null;'
+    # Oplog window = wall time of the newest minus the oldest oplog entry.
+    js+=' try {'
+    js+='  var ol = db.getSiblingDB("local").getCollection("oplog.rs");'
+    js+='  var f = ol.find({}, {wall: 1}).sort({$natural: 1}).limit(1).toArray()[0];'
+    js+='  var l = ol.find({}, {wall: 1}).sort({$natural: -1}).limit(1).toArray()[0];'
+    js+='  o.oplog_window_sec = (f && l && f.wall && l.wall) ? Math.round((l.wall - f.wall) / 1000) : null;'
+    js+=' } catch (e) { o.oplog_window_sec = null; }'
     js+='} catch (e) { o = {reachable: true, error: String(e.message || e)}; }'
     js+='print(JSON.stringify(o));'
     if ! out=$("$MONGO_SHELL" --quiet "$uri" --eval "$js" 2>&1); then

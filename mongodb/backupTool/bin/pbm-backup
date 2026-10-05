@@ -6,13 +6,16 @@
 #   Phase 2: MongoDB version/edition detection and PBM compatibility checks.
 #   Phase 3: node election (stay on the owner node, never the primary,
 #            fail over to a healthy secondary).
+#   Phase 4: Community / logical scheme: daily logical full + PITR oplog
+#            slicing, oplog window check, oplog chain continuity check.
+#   Phase 5: chain-aligned safe retention, Prometheus textfile metrics.
 #
 # Run "pbm-backup --help" for usage.
 
 set -euo pipefail
 
 PROG=pbm-backup
-VERSION=0.3.0
+VERSION=0.5.0
 
 # ---------------------------------------------------------------------------
 # Locate and load libraries
@@ -29,7 +32,7 @@ if [[ -z $LIB_DIR ]]; then
     printf '%s: cannot find library directory (set PBM_BACKUP_LIB)\n' "$PROG" >&2
     exit 2
 fi
-for _f in common mongo pbm compat topology; do
+for _f in common mongo pbm compat topology metrics; do
     # shellcheck disable=SC1090
     . "${LIB_DIR}/${_f}.sh"
 done
@@ -46,41 +49,50 @@ ${C_BLD}USAGE${C_OFF}
     ${PROG} COMMAND --help
 
 ${C_BLD}COMMANDS${C_OFF}
-    full        Daily physical incremental BASE backup (PSMDB).
-    incr        Hourly physical incremental backup on top of the last base.
-    cleanup     Delete backups and PITR chunks older than the retention.
+    full        Daily full backup. The scheme is chosen automatically:
+                  PSMDB     -> physical incremental BASE
+                  Community -> logical snapshot (then PITR is kept enabled)
+    incr        Incremental step:
+                  PSMDB     -> hourly physical incremental on the base node
+                  Community -> oplog check: PITR slices must cover the last
+                               logical snapshot up to now, with no gaps
+    cleanup     Delete backups and oplog slices older than the retention, never
+                splitting a chain and never removing the newest full.
+    metrics     Refresh the Prometheus state metrics (needs METRICS_DIR).
     check       Read-only report: versions, compatibility, node election and
                 what this node would do. Changes nothing.
+    restore     Restore a backup by name, or (logical scheme) to a point in
+                time with --to. Validates first; asks for confirmation.
 
     full/incr run from a systemd timer on EVERY node. All nodes compute the
-    same election and only one launches the backup:
-      - the node that took the last base (owner) keeps the chain;
+    same election and only one acts:
+      - the node that took the last full (owner) keeps going;
       - if it is down, its pbm-agent is not ok, or it is overloaded, the
-        next healthy secondary takes over and starts a new base;
+        next healthy secondary takes over;
       - the PRIMARY is never used (unless ALLOW_PRIMARY=true).
 
 ${C_BLD}OPTIONS${C_OFF}
     -c, --config FILE      Tunables file      (default: /etc/sysconfig/pbm-backup)
     -e, --env-file FILE    PBM_MONGODB_URI file (default: /etc/sysconfig/pbm-conf)
-    -n, --dry-run          Show what would be done; do not run pbm backup/cleanup
-    -f, --force            Skip election and duplicate-base guards
+    -n, --dry-run          Show what would be done; change nothing
+    -f, --force            Skip election and duplicate-backup guards
         --no-color         Disable colored output (NO_COLOR is also honored)
     -h, --help             Show this help
     -V, --version          Show version
 
 ${C_BLD}EXIT CODES${C_OFF}
     0  success, or skipped on purpose (another node's turn, already done)
-    1  backup/cleanup failed, incompatible versions, or no eligible node
+    1  backup/check failed, incompatible versions, or no eligible node
     2  usage or configuration error
 
 ${C_BLD}EXAMPLES${C_OFF}
     # What would happen on this node right now?
     ${PROG} check
 
-    # Daily base backup, as run by pbm-physical-full-base.service
+    # Daily full backup, as run by pbm-physical-full-base.service
     ${PROG} full
 
-    # Simulate the hourly incremental
+    # Simulate the incremental step
     ${PROG} incr --dry-run
 
     # Test with personal config files
@@ -93,21 +105,30 @@ EOF
 
 usage_full() {
     cat <<EOF
-${C_BLD}${PROG} full${C_OFF} - daily physical incremental BASE backup
+${C_BLD}${PROG} full${C_OFF} - daily full backup
 
-Runs "pbm backup --type incremental --base --wait" on the elected node.
-
-Steps:
+Common steps:
   1. Preflight: detect MongoDB version/edition and PBM version, check the
-     compatibility matrix, require PSMDB and PITR disabled.
+     compatibility matrix and pick the scheme (BACKUP_MODE=auto).
   2. Election: probe every member (agent, reachability, replication lag,
-     queued operations, WiredTiger dirty cache). The owner of the last base
-     goes first, then PREFERRED_NODES, then by name. Primary excluded.
-  3. Only rank #0 runs. Rank #N waits N x FALLBACK_DELAY_SEC (default 120s)
-     and takes over only if nobody started a backup meanwhile.
-  4. Skips if another node completed a base within DEDUP_WINDOW_SEC.
+     queued operations, WiredTiger dirty cache, oplog window). The owner of
+     the last full goes first, then PREFERRED_NODES, then by name. Primary
+     excluded. Rank #N takes over after N x FALLBACK_DELAY_SEC (default 120s)
+     only if nobody started a backup meanwhile.
+  3. Skips if the last full started less than FULL_MIN_INTERVAL_SEC (20h)
+     ago (e.g. a systemd catch-up run after a reboot) or another node
+     completed one within DEDUP_WINDOW_SEC. --force overrides both.
 
-Log file: \${LOG_DIR}/incrbase.log
+PSMDB (physical): "pbm backup --type incremental --base --wait".
+  Requires PITR disabled. Log file: \${LOG_DIR}/incrbase.log
+
+Community (logical): "pbm backup --type logical --wait".
+  - Before: the oplog window of this node must be >= OPLOG_WINDOW_FACTOR
+    (default 2) x the expected dump time (EXPECTED_DUMP_SEC, or the duration
+    of the previous logical backup).
+  - After: with PITR_AUTOCONFIG=true (default) sets pitr.enabled=true and
+    pitr.oplogSpanMin=OPLOG_INCR_MIN (default 360 = an oplog slice every 6h).
+  Log file: \${LOG_DIR}/logical-full.log
 
 ${C_BLD}EXAMPLES${C_OFF}
     ${PROG} full
@@ -118,29 +139,44 @@ EOF
 
 usage_incr() {
     cat <<EOF
-${C_BLD}${PROG} incr${C_OFF} - hourly physical incremental backup
+${C_BLD}${PROG} incr${C_OFF} - incremental step
 
-Same preflight and election as "full". Then, on the elected node:
-  - elected node is the owner of the last base -> incremental backup
-    ("pbm backup --type incremental --wait");
-  - owner unavailable, or no base exists yet  -> NEW BASE on this node
-    ("--base"), because an incremental chain cannot move between nodes.
+PSMDB (physical), hourly. Same preflight and election as "full". Then:
+  - elected node owns the last base -> "pbm backup --type incremental --wait"
+  - owner unavailable / no base yet  -> NEW BASE on this node ("--base"),
+    because an incremental chain cannot move between nodes.
+  Log file: \${LOG_DIR}/incr.log
 
-Writes the last base info to \${PBM_LOCAL_ROOT}/<replset>.lastbackup.index.
-Log file: \${LOG_DIR}/incr.log
+Community (logical), every 6h. Takes no backup: PBM already saves the oplog
+continuously (PITR slices every pitr.oplogSpanMin minutes). Only the elected
+node checks, and fails (exit 1) if:
+  - PITR is disabled (it is enabled if PITR_AUTOCONFIG=true and a logical
+    full exists), or
+  - the saved oplog does not cover the last logical snapshot (restoreTo), or
+  - there is a gap in the saved oplog after it, or
+  - the newest saved oplog is older than OPLOG_INCR_MIN x 60 +
+    PITR_LAG_MARGIN_SEC (default 6h + 15min).
+  Log file: \${LOG_DIR}/oplog.log
 
 ${C_BLD}EXAMPLES${C_OFF}
     ${PROG} incr
     ${PROG} incr --dry-run
-    ${PROG} incr --force      # skip the election, always an incremental
+    ${PROG} incr --force      # skip the election
 EOF
 }
 
 usage_cleanup() {
     cat <<EOF
-${C_BLD}${PROG} cleanup${C_OFF} - retention purge
+${C_BLD}${PROG} cleanup${C_OFF} - safe retention purge
 
-Runs "pbm cleanup -y --older-than <today - RETENTION_DAYS> --wait".
+Only the elected node runs it (same election as full/incr, no takeover).
+The retention cutoff is today - RETENTION_DAYS (00:00 UTC). It is then moved
+back to the start of the newest full backup (base or logical) that started
+at/before it, and "pbm cleanup -y --older-than <that time> --wait" runs. So:
+  - chains are deleted whole, never split (no orphan incrementals);
+  - the full needed to restore to the cutoff, and its oplog slices, stay;
+  - the newest valid full is never deleted, even if backups stopped.
+Afterwards it checks that the newest full is still there.
 
 ${C_BLD}OPTIONS${C_OFF}
     -r, --retention-days N   Override RETENTION_DAYS (default 7)
@@ -153,14 +189,65 @@ ${C_BLD}EXAMPLES${C_OFF}
 EOF
 }
 
+usage_metrics() {
+    cat <<EOF
+${C_BLD}${PROG} metrics${C_OFF} - refresh Prometheus textfile metrics
+
+Writes \${METRICS_DIR}/pbm_backup_state.prom: newest backup of each kind
+(restoreTo, size), backup counts by status, PITR enabled/running, oplog
+coverage, gaps and lag (logical scheme), pbm-agent health per member.
+full/incr/cleanup also write it, plus pbm_backup_run_<command>.prom with the
+outcome of their last run. Meant for a frequent timer (e.g. every 5 minutes).
+
+Directories: node_exporter --collector.textfile.directory, or
+  PMM2: /usr/local/percona/pmm2/collectors/textfile-collector/low-resolution
+  PMM3: /usr/local/percona/pmm/collectors/textfile-collector/low-resolution
+
+${C_BLD}EXAMPLES${C_OFF}
+    METRICS_DIR=/var/lib/node_exporter/textfile_collector ${PROG} metrics
+EOF
+}
+
+usage_restore() {
+    cat <<EOF
+${C_BLD}${PROG} restore${C_OFF} - validated wrapper around "pbm restore"
+
+${C_BLD}USAGE${C_OFF}
+    ${PROG} restore BACKUP_NAME [--dry-run] [--yes]
+    ${PROG} restore --to YYYY-MM-DDTHH:MM:SS [--dry-run] [--yes]
+
+BACKUP_NAME   Restore that backup ("pbm restore NAME"). For a physical
+              incremental, PBM restores its whole chain up to it.
+--to TIME     Point-in-time restore, UTC (logical scheme). Picks the newest
+              logical full with restoreTo <= TIME and checks that the saved
+              oplog slices cover restoreTo..TIME with no gap, then runs
+              "pbm restore --time=TIME".
+-n, --dry-run Validate and print the plan only.
+-y, --yes     Do not ask for confirmation (required when not on a TTY).
+              Without it you must type the replica set name.
+
+Before restoring, PITR is disabled if it is on (PBM requires it). After a
+restore, take a new full backup: "${PROG} full" also re-enables PITR.
+
+Log file: \${LOG_DIR}/restore.log
+
+${C_BLD}EXAMPLES${C_OFF}
+    ${PROG} restore --to 2026-10-05T11:30:00 --dry-run
+    ${PROG} restore 2026-10-05T00:00:45Z
+    sudo -u rmateos ${PROG} restore --to 2026-10-05T11:30:00 --yes
+EOF
+}
+
 usage_check() {
     cat <<EOF
 ${C_BLD}${PROG} check${C_OFF} - read-only diagnostics
 
-Prints the detected versions, compatibility findings, PITR state, the
-election table (rank, role, owner, lag, queue, dirty cache, eligibility)
-and what "full" and "incr" would do on this node. Takes no backup and
-writes no log file. Exit code 1 if a backup would fail on this cluster.
+Prints the detected versions, compatibility findings, the election table
+(rank, role, owner, lag, queue, dirty cache, oplog window, eligibility) and
+what "full" and "incr" would do on this node. For the logical scheme it also
+reports PITR state and oplog coverage since the last logical snapshot.
+Takes no backup, changes no configuration and writes no log file.
+Exit code 1 if a backup or check would fail on this cluster.
 
 ${C_BLD}EXAMPLES${C_OFF}
     ${PROG} check
@@ -190,32 +277,66 @@ setup_run() {
 # lock_or_skip NAME LABEL
 lock_or_skip() {
     if ! acquire_lock "$1"; then
+        SKIPPED=1
         log WARN "$2" "Another '${1}' run is already in progress on this node. Exiting"
         exit 0
     fi
 }
 
-# recent_base_since EPOCH - true if a base backup started at/after EPOCH is done.
-recent_base_since() {
-    local since=$1 json ts
-    json=$(last_done_backup_json base) || return 1
+# recent_done_since KIND EPOCH - true if a KIND (base|logical) backup that
+# started at/after EPOCH is done.
+recent_done_since() {
+    local json ts
+    json=$(last_done_backup_json "$1") || return 1
     [[ -n $json ]] || return 1
     ts=$(printf '%s\n' "$json" | jq -r '.start_ts // 0')
-    is_uint "$ts" && (( ts >= since ))
+    is_uint "$ts" && (( ts >= $2 ))
+}
+
+# full_too_recent LABEL LAST_FULL_JSON STARTED - true (and logs) if the last
+# full started less than FULL_MIN_INTERVAL_SEC ago. Protects against extra
+# fulls, e.g. a systemd "Persistent=true" catch-up after a node reboots.
+full_too_recent() {
+    local L=$1 last=$2 started=$3 ts
+    [[ $FORCE != 1 && -n $last && $FULL_MIN_INTERVAL_SEC -gt 0 ]] || return 1
+    ts=$(printf '%s\n' "$last" | jq -r '.start_ts // 0')
+    if is_uint "$ts" && (( ts >= started - FULL_MIN_INTERVAL_SEC )); then
+        SKIPPED=1
+        log INFO "${L}[PRECHECK]" "Last full $(printf '%s\n' "$last" | jq -r '.name') started $(( (started - ts) / 60 )) min ago (< FULL_MIN_INTERVAL_SEC=${FULL_MIN_INTERVAL_SEC}s). Skipping (use --force to override)"
+        return 0
+    fi
+    return 1
+}
+
+# iso EPOCH - UTC ISO-8601 timestamp.
+iso() {
+    jq -rn --argjson t "$1" '$t | floor | todate'
+}
+
+# compression_args - set COMP_ARGS to the pbm backup compression flags.
+# Backups are always compressed: the flags are passed explicitly on every
+# "pbm backup" so they do not depend on the cluster configuration.
+COMP_ARGS=()
+compression_args() {
+    COMP_ARGS=(--compression="$BACKUP_COMPRESSION")
+    if [[ -n $BACKUP_COMPRESSION_LEVEL ]]; then
+        COMP_ARGS+=(--compression-level="$BACKUP_COMPRESSION_LEVEL")
+    fi
 }
 
 # ---------------------------------------------------------------------------
 # Phase 2: preflight
 # ---------------------------------------------------------------------------
-# preflight LABEL STATUS_JSON - detect versions, check compatibility and the
-# physical-scheme rules. Sets DETECTED (JSON) and STRATEGY.
-# Returns 1 if a backup must not run.
+# preflight LABEL STATUS_JSON - detect versions (unless DETECTED is already
+# set), check compatibility and the rules of the selected scheme.
+# Sets DETECTED (JSON) and STRATEGY. Returns 1 if a backup must not run.
 DETECTED='' STRATEGY=''
 preflight() {
     local L=$1 status=$2 mv ed pv errors=0 level msg agents
 
     mongo_init
-    if ! DETECTED=$(detect_mongodb_json) || [[ -z $DETECTED ]]; then
+    if [[ -z $DETECTED ]] && { ! DETECTED=$(detect_mongodb_json) || [[ -z $DETECTED ]]; }; then
+        DETECTED=''
         log ERROR "${L}[PRECHECK][DETECT]" "Cannot read buildInfo with ${MONGO_SHELL##*/}. Set MONGODB_VERSION and MONGODB_EDITION to skip detection"
         return 1
     fi
@@ -253,11 +374,20 @@ $agents
 EOF
     fi
 
-    if [[ $STRATEGY != physical ]]; then
+    # Backups always go to a bucket (no PBM filesystem storage: it needs a
+    # path shared by every node, i.e. NFS).
+    local stype
+    stype=$(printf '%s\n' "$status" | jq -r '.backups.type // empty')
+    if [[ -z $stype ]]; then
+        log WARN "${L}[PRECHECK][STORAGE]" "Cannot read the PBM storage type from 'pbm status'"
+    elif ! printf '%s\n' $REQUIRED_STORAGE_TYPES | grep -qix -- "$stype"; then
         errors=$((errors + 1))
-        log ERROR "${L}[PRECHECK][STRATEGY]" "Strategy '${STRATEGY}' (logical backup + oplog slicing for Community) is not implemented yet (phase 4). full/incr only run physical backups on PSMDB"
+        log ERROR "${L}[PRECHECK][STORAGE]" "PBM storage is '${stype}'; backups must go to a bucket (REQUIRED_STORAGE_TYPES=${REQUIRED_STORAGE_TYPES})"
+    else
+        log OK "${L}[PRECHECK][STORAGE]" "Storage ${stype} $(printf '%s\n' "$status" | jq -r '.backups.path // ""'), compression ${BACKUP_COMPRESSION}${BACKUP_COMPRESSION_LEVEL:+ level ${BACKUP_COMPRESSION_LEVEL}}"
     fi
-    if [[ $(printf '%s\n' "$status" | jq -r '.pitr.conf // false') == true ]]; then
+
+    if [[ $STRATEGY == physical && $(printf '%s\n' "$status" | jq -r '.pitr.conf // false') == true ]]; then
         errors=$((errors + 1))
         log ERROR "${L}[PRECHECK][PITR]" "PITR is enabled, but the physical scheme runs without PITR. Disable it: pbm config --set pitr.enabled=false"
     fi
@@ -303,8 +433,71 @@ election_decision() {
     fi
 }
 
+# election_gate LABEL STATUS OWNER STARTED TAKEOVER(yes|no)
+#   Returns 0 if this node must act. Otherwise returns 1 and sets GATE_RC to
+#   the exit code to use (0 = skipped on purpose, 1 = error).
+GATE_RC=0
+election_gate() {
+    local L=$1 status=$2 owner=$3 started=$4 takeover=$5 decision rank elected
+    GATE_RC=0
+    if [[ $FORCE == 1 ]]; then
+        log WARN "${L}[ELECTION]" "--force: election skipped, running on this node"
+        SELF=''
+        return 0
+    fi
+    run_election "$L" "$status" "$owner" || { GATE_RC=1; return 1; }
+    decision=$(election_decision)
+    elected=$(printf '%s\n' "$ELECTION" | jq -r '[.[] | select(.rank == 0)][0].host // "none"')
+
+    case $decision in
+        run)
+            return 0 ;;
+        none)
+            log ERROR "${L}[ELECTION]" "No eligible node (all secondaries down, overloaded or without a healthy pbm-agent). Nothing done"
+            GATE_RC=1 ;;
+        unknown)
+            log ERROR "${L}[ELECTION]" "This host ($(hostname)) is not in the replica set member list reported by PBM. Set LOCAL_NODE_NAMES in the config"
+            GATE_RC=1 ;;
+        skip\ *)
+            log INFO "${L}[ELECTION]" "This node is not eligible (${decision#skip }). Elected node: ${elected}. Exiting" ;;
+        standby\ *)
+            rank=${decision#standby }
+            if [[ $takeover != yes ]] || (( FALLBACK_DELAY_SEC == 0 )); then
+                log INFO "${L}[ELECTION]" "Standby #${rank}; elected node is ${elected}. Exiting"
+            else
+                log INFO "${L}[ELECTION]" "Standby #${rank}; giving ${elected} $(( rank * FALLBACK_DELAY_SEC ))s to start the backup"
+                sleep $(( rank * FALLBACK_DELAY_SEC ))
+                if pbm_activity_since $(( started - 5 )); then
+                    log INFO "${L}[ELECTION]" "A higher-ranked node started the backup. Exiting"
+                else
+                    log WARN "${L}[ELECTION][TAKEOVER]" "No backup was started by higher-ranked node(s). Taking over on this node"
+                    return 0
+                fi
+            fi ;;
+    esac
+    [[ $GATE_RC != 0 ]] || SKIPPED=1
+    return 1
+}
+
+# self_is_owner - true if this node owns the chain according to the election.
+self_is_owner() {
+    [[ -n $SELF && $(printf '%s\n' "$SELF" | jq -r '.owner') == true ]]
+}
+
+# verify_executor LABEL KIND - log the new backup and warn if PBM ran it on
+# another node.
+verify_executor() {
+    local L=$1 json node
+    json=$(last_done_backup_json "$2" || true)
+    log INFO "${L}[PBM][RUN][OK][INFO]" "Backup Info: [$(backup_summary "$json")]"
+    node=$(printf '%s\n' "$json" | jq -r '.nodes[0] // empty' 2>/dev/null || true)
+    if [[ -n $node ]] && ! is_local_node "$node"; then
+        log WARN "${L}[PBM][RUN][NODE]" "PBM executed the backup on ${node}, not on this node. PBM picks the node by backup.priority; that node is now the owner"
+    fi
+}
+
 # ---------------------------------------------------------------------------
-# Physical backup flow (full / incr)
+# Physical scheme (PSMDB): full / incr
 # ---------------------------------------------------------------------------
 run_physical() {
     local kind=$1 L title logfile
@@ -312,7 +505,7 @@ run_physical() {
         full) L='[PSMB][BACKUP][BASE][INCREMENTAL]' title='MongoDB Base Incremental Backup' logfile=incrbase.log ;;
         incr) L='[PSMB][BACKUP][INCREMENTAL]'       title='MongoDB Incremental Backup'      logfile=incr.log ;;
     esac
-    local rc=0 started status base owner='' decision rank action replset index json node elected
+    local rc=0 started status base owner='' action replset index
 
     setup_run "$logfile" "$L"
     log INFO "${L}[INIT]" "${title} Service Initiating"
@@ -341,45 +534,14 @@ run_physical() {
         log WARN "${L}[PBM][PRECHECK][LASTBACKUP]" "No successful base backup found"
     fi
 
-    # --- Election ----------------------------------------------------------
-    if [[ $FORCE == 1 ]]; then
-        log WARN "${L}[ELECTION]" "--force: election skipped, running on this node"
-        decision=run
-    else
-        run_election "$L" "$status" "$owner" || { log INFO "${L}[END]" "${title} Service Ended"; return 1; }
-        decision=$(election_decision)
-    fi
-    elected=$(printf '%s\n' "$ELECTION" | jq -r '[.[] | select(.rank == 0)][0].host // "none"' 2>/dev/null || printf 'none')
-
-    case $decision in
-        none)
-            log ERROR "${L}[ELECTION]" "No eligible node (all secondaries down, overloaded or without a healthy pbm-agent). No backup taken"
-            rc=1 ;;
-        unknown)
-            log ERROR "${L}[ELECTION]" "This host ($(hostname)) is not in the replica set member list reported by PBM. Set LOCAL_NODE_NAMES in the config"
-            rc=1 ;;
-        skip\ *)
-            log INFO "${L}[ELECTION]" "This node is not eligible (${decision#skip }). Elected node: ${elected}. Exiting" ;;
-        standby\ *)
-            rank=${decision#standby }
-            if (( FALLBACK_DELAY_SEC == 0 )); then
-                log INFO "${L}[ELECTION]" "Standby #${rank}; elected node is ${elected}. Exiting"
-                decision=skip
-            else
-                log INFO "${L}[ELECTION]" "Standby #${rank}; giving ${elected} $(( rank * FALLBACK_DELAY_SEC ))s to start the backup"
-                sleep $(( rank * FALLBACK_DELAY_SEC ))
-                if pbm_activity_since $(( started - 5 )); then
-                    log INFO "${L}[ELECTION]" "A higher-ranked node started the backup. Exiting"
-                    decision=skip
-                else
-                    log WARN "${L}[ELECTION][TAKEOVER]" "No backup was started by higher-ranked node(s). Taking over on this node"
-                    decision=run
-                fi
-            fi ;;
-    esac
-    if [[ $decision != run ]]; then
+    if [[ $kind == full ]] && full_too_recent "$L" "$base" "$started"; then
         log INFO "${L}[END]" "${title} Service Ended"
-        return "$rc"
+        return 0
+    fi
+
+    if ! election_gate "$L" "$status" "$owner" "$started" yes; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return "$GATE_RC"
     fi
 
     # --- What to run -------------------------------------------------------
@@ -387,15 +549,16 @@ run_physical() {
     if [[ $kind == incr ]]; then
         if [[ -z $base ]]; then
             log WARN "${L}[CHAIN]" "No base backup exists yet: starting a new chain with a base backup"
-        elif [[ $FORCE == 1 ]] || [[ $(printf '%s\n' "$SELF" | jq -r '.owner') == true ]]; then
+        elif [[ $FORCE == 1 ]] || self_is_owner; then
             action=incr
             log OK "${L}[CHECKINFO]" "Last MongoDB Base Backup Ran in current Node. PBM Incremental Backup will be Run!!"
         else
-            log WARN "${L}[CHAIN][RESTART]" "Chain owner ${owner} is not available ($(printf '%s\n' "$ELECTION" | jq -r --arg o "$owner" '[.[] | select(.owner)][0].reason // "did not run"')). An incremental cannot continue on another node: taking a NEW BASE here"
+            log WARN "${L}[CHAIN][RESTART]" "Chain owner ${owner} is not available ($(printf '%s\n' "$ELECTION" | jq -r '[.[] | select(.owner)][0].reason // "did not run"')). An incremental cannot continue on another node: taking a NEW BASE here"
         fi
     fi
 
-    if [[ $action == base && $FORCE != 1 ]] && recent_base_since $(( started - DEDUP_WINDOW_SEC )); then
+    if [[ $action == base && $FORCE != 1 ]] && recent_done_since base $(( started - DEDUP_WINDOW_SEC )); then
+        SKIPPED=1
         log WARN "${L}[PRECHECK]" "A base backup was already completed in the last ${DEDUP_WINDOW_SEC}s. Skipping"
         log INFO "${L}[END]" "${title} Service Ended"
         return 0
@@ -404,12 +567,14 @@ run_physical() {
     # --- Run ---------------------------------------------------------------
     LOG_LABEL="${L}[PBM][RUN]"
     pbm_wait_idle "$WAIT_RUNNING_SEC" || true
-    local -a args=(backup --type incremental --wait)
-    [[ $action == base ]] && args=(backup --type incremental --base --wait)
+    compression_args
+    local -a args=(backup --type incremental "${COMP_ARGS[@]}" --wait)
+    [[ $action == base ]] && args=(backup --type incremental --base "${COMP_ARGS[@]}" --wait)
     log INFO "${L}[PBM][RUN][START]" "PBM - RUN - ${title} Starting!! (pbm ${args[*]})"
     if run_pbm "${args[@]}"; then
         log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - ${title} Successfully DONE!!"
-    elif [[ $action == base && $FORCE != 1 ]] && { pbm_wait_idle "$WAIT_RUNNING_SEC" || true; recent_base_since $(( started - DEDUP_WINDOW_SEC )); }; then
+    elif [[ $action == base && $FORCE != 1 ]] && { pbm_wait_idle "$WAIT_RUNNING_SEC" || true; recent_done_since base $(( started - DEDUP_WINDOW_SEC )); }; then
+        SKIPPED=1
         log WARN "${L}[PBM][RUN][FINISH]" "Base backup was taken by another node at the same time. Skipping"
         log INFO "${L}[END]" "${title} Service Ended"
         return 0
@@ -418,53 +583,429 @@ run_physical() {
         log ERROR "${L}[PBM][RUN][FINISH][ERROR]" "PBM - ${title} Failed!! Please check pbm-agent logs!!"
     fi
 
-    # --- Verify where PBM actually ran it ----------------------------------
     if [[ $rc -eq 0 && $DRY_RUN != 1 ]]; then
-        json=$(last_done_backup_json "$action" || true)
-        log INFO "${L}[PBM][RUN][OK][INFO]" "${title} Info: [$(backup_summary "$json")]"
-        node=$(printf '%s\n' "$json" | jq -r '.nodes[0] // empty' 2>/dev/null || true)
-        if [[ -n $node ]] && ! is_local_node "$node"; then
-            log WARN "${L}[PBM][RUN][NODE]" "PBM executed the backup on ${node}, not on this node. PBM picks the node by backup.priority; that node is now the chain owner"
-        fi
+        verify_executor "$L" "$action"
     fi
     log INFO "${L}[END]" "${title} Service Ended"
     return "$rc"
 }
 
 # ---------------------------------------------------------------------------
+# Logical scheme (Community): full / oplog check
+# ---------------------------------------------------------------------------
+# expected_dump_sec LAST_LOGICAL_JSON - EXPECTED_DUMP_SEC, or the duration of
+# the previous logical backup, or nothing.
+expected_dump_sec() {
+    if [[ -n $EXPECTED_DUMP_SEC ]]; then
+        printf '%s\n' "$EXPECTED_DUMP_SEC"
+    elif [[ -n $1 ]]; then
+        printf '%s\n' "$1" | jq -r 'if .last_transition_ts and .start_ts then (.last_transition_ts - .start_ts) else empty end'
+    fi
+}
+
+# check_oplog_window LABEL LAST_LOGICAL_JSON - compare this node's oplog
+# window with the expected dump time. Returns 1 if the full must not run.
+check_oplog_window() {
+    local L=$1 last=$2 win='' expected need
+    if [[ -n $SELF ]]; then
+        win=$(printf '%s\n' "$SELF" | jq -r '.probe.oplog_window_sec // empty')
+    fi
+    expected=$(expected_dump_sec "$last")
+    if [[ -z $win ]]; then
+        log WARN "${L}[PRECHECK][OPLOG]" "Cannot read this node's oplog window (local.oplog.rs); check skipped"
+        return 0
+    fi
+    if [[ -z $expected ]]; then
+        log WARN "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s. No previous logical backup and no EXPECTED_DUMP_SEC: cannot estimate the dump time (this run will calibrate it)"
+        return 0
+    fi
+    need=$(( expected * OPLOG_WINDOW_FACTOR ))
+    if (( win >= need )); then
+        log OK "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s >= ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s"
+        return 0
+    fi
+    if [[ $OPLOG_WINDOW_ENFORCE == true ]]; then
+        log ERROR "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s < ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s (${need}s). The dump could outlive the oplog. Resize the oplog (replSetResizeOplog) or set OPLOG_WINDOW_ENFORCE=false"
+        return 1
+    fi
+    log WARN "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s < ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s (${need}s); continuing (OPLOG_WINDOW_ENFORCE=false)"
+}
+
+# ensure_pitr LABEL - with PITR_AUTOCONFIG=true make sure pitr.enabled=true,
+# pitr.oplogSpanMin=OPLOG_INCR_MIN and the oplog slices are compressed like
+# the backups. Only scalar keys, via "pbm config --set".
+ensure_pitr() {
+    local L=$1 enabled span comp level
+    if [[ $PITR_AUTOCONFIG != true ]]; then
+        return 0
+    fi
+    comp=$(pbm_config_get pitr.compression)
+    if [[ $comp != "$BACKUP_COMPRESSION" ]]; then
+        log INFO "${L}[PITR][CONFIG]" "Setting pitr.compression=${BACKUP_COMPRESSION} (was '${comp:-unknown}')"
+        pbm_config_set pitr.compression "$BACKUP_COMPRESSION" || { log ERROR "${L}[PITR][CONFIG]" "pbm config --set pitr.compression failed"; return 1; }
+    fi
+    if [[ -n $BACKUP_COMPRESSION_LEVEL ]]; then
+        level=$(pbm_config_get pitr.compressionLevel)
+        if [[ $level != "$BACKUP_COMPRESSION_LEVEL" ]]; then
+            log INFO "${L}[PITR][CONFIG]" "Setting pitr.compressionLevel=${BACKUP_COMPRESSION_LEVEL} (was '${level:-unknown}')"
+            pbm_config_set pitr.compressionLevel "$BACKUP_COMPRESSION_LEVEL" || { log ERROR "${L}[PITR][CONFIG]" "pbm config --set pitr.compressionLevel failed"; return 1; }
+        fi
+    fi
+    span=$(pbm_config_get pitr.oplogSpanMin)
+    if [[ $span != "$OPLOG_INCR_MIN" ]]; then
+        log INFO "${L}[PITR][CONFIG]" "Setting pitr.oplogSpanMin=${OPLOG_INCR_MIN} (was '${span:-unknown}')"
+        pbm_config_set pitr.oplogSpanMin "$OPLOG_INCR_MIN" || { log ERROR "${L}[PITR][CONFIG]" "pbm config --set pitr.oplogSpanMin failed"; return 1; }
+    fi
+    enabled=$(pbm_config_get pitr.enabled)
+    if [[ $enabled != true ]]; then
+        log INFO "${L}[PITR][CONFIG]" "Enabling PITR oplog slicing (pitr.enabled=true; was '${enabled:-unknown}')"
+        pbm_config_set pitr.enabled true || { log ERROR "${L}[PITR][CONFIG]" "pbm config --set pitr.enabled failed"; return 1; }
+    fi
+}
+
+run_logical_full() {
+    local L='[MONGODB][BACKUP][LOGICAL][FULL]' title='MongoDB Logical Full Backup'
+    local rc=0 started status last owner=''
+
+    setup_run logical-full.log "$L"
+    log INFO "${L}[INIT]" "${title} Service Initiating"
+    lock_or_skip full "${L}[INIT]"
+    started=$(now_epoch)
+    LOG_LABEL="${L}[PRECHECK]"
+
+    status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+    if ! preflight "$L" "$status"; then
+        log ERROR "${L}[PRECHECK]" "Preflight failed. No backup taken"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 1
+    fi
+
+    last=$(last_done_backup_json logical) || die "Cannot read backup list from PBM (pbm status / describe-backup failed)"
+    if [[ -n $last ]]; then
+        owner=$(printf '%s\n' "$last" | jq -r '.nodes[0] // empty')
+        log INFO "${L}[PRECHECK][LASTBACKUP]" "Last logical backup: [$(backup_summary "$last")], took $(expected_dump_sec "$last" || true)s"
+    else
+        log WARN "${L}[PRECHECK][LASTBACKUP]" "No successful logical backup found"
+    fi
+
+    if full_too_recent "$L" "$last" "$started"; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    fi
+    if ! election_gate "$L" "$status" "$owner" "$started" yes; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return "$GATE_RC"
+    fi
+    if ! check_oplog_window "$L" "$last"; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 1
+    fi
+    if [[ $FORCE != 1 ]] && recent_done_since logical $(( started - DEDUP_WINDOW_SEC )); then
+        SKIPPED=1
+        log WARN "${L}[PRECHECK]" "A logical backup was already completed in the last ${DEDUP_WINDOW_SEC}s. Skipping"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    fi
+
+    LOG_LABEL="${L}[PBM][RUN]"
+    pbm_wait_idle "$WAIT_RUNNING_SEC" || true
+    compression_args
+    log INFO "${L}[PBM][RUN][START]" "PBM - RUN - ${title} Starting!! (pbm backup --type logical ${COMP_ARGS[*]} --wait)"
+    if run_pbm backup --type logical "${COMP_ARGS[@]}" --wait; then
+        log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - ${title} Successfully DONE!!"
+    elif [[ $FORCE != 1 ]] && { pbm_wait_idle "$WAIT_RUNNING_SEC" || true; recent_done_since logical $(( started - DEDUP_WINDOW_SEC )); }; then
+        SKIPPED=1
+        log WARN "${L}[PBM][RUN][FINISH]" "Logical backup was taken by another node at the same time. Skipping"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    else
+        rc=1
+        log ERROR "${L}[PBM][RUN][FINISH][ERROR]" "PBM - ${title} Failed!! Please check pbm-agent logs!!"
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        [[ $DRY_RUN == 1 ]] || verify_executor "$L" logical
+        ensure_pitr "$L" || rc=1
+    fi
+    log INFO "${L}[END]" "${title} Service Ended"
+    return "$rc"
+}
+
+# pitr_report LABEL STATUS LAST_LOGICAL_JSON - log PITR state and oplog
+# coverage since the last logical snapshot. Returns 1 if it is not sound.
+pitr_report() {
+    local L=$1 status=$2 last=$3 conf run err span ranges now maxlag cov ok
+    conf=$(printf '%s\n' "$status" | jq -r '.pitr.conf // false')
+    run=$(printf '%s\n' "$status" | jq -r '.pitr.run // false')
+    err=$(printf '%s\n' "$status" | jq -r '.pitr.error // empty')
+    if [[ $conf != true ]]; then
+        log ERROR "${L}[PITR]" "PITR is disabled: no oplog is being saved between logical fulls"
+        return 1
+    fi
+    if [[ $run != true ]]; then
+        log WARN "${L}[PITR]" "PITR is enabled but no node is slicing right now${err:+ (${err})}"
+    fi
+    span=$(pbm_config_get pitr.oplogSpanMin)
+    if [[ -n $span && $span != "$OPLOG_INCR_MIN" ]]; then
+        log WARN "${L}[PITR]" "pitr.oplogSpanMin=${span}, expected OPLOG_INCR_MIN=${OPLOG_INCR_MIN}"
+    fi
+    local comp
+    comp=$(pbm_config_get pitr.compression)
+    if [[ $comp == none ]]; then
+        log ERROR "${L}[PITR]" "pitr.compression=none: oplog slices are uploaded UNCOMPRESSED. Set it: pbm config --set pitr.compression=${BACKUP_COMPRESSION}"
+        return 1
+    elif [[ -n $comp && $comp != "$BACKUP_COMPRESSION" ]]; then
+        log WARN "${L}[PITR]" "pitr.compression=${comp}, expected BACKUP_COMPRESSION=${BACKUP_COMPRESSION}"
+    fi
+    if [[ -z $last ]]; then
+        log ERROR "${L}[PITR]" "No logical full backup: PITR has no base to restore from. Run '${PROG} full'"
+        return 1
+    fi
+
+    ranges=$(pitr_ranges_json) || { log ERROR "${L}[PITR]" "Cannot read PITR ranges (pbm list -o json)"; return 1; }
+    now=$(now_epoch)
+    maxlag=$(( OPLOG_INCR_MIN * 60 + PITR_LAG_MARGIN_SEC ))
+    cov=$(pitr_coverage "$(printf '%s\n' "$last" | jq -r '.restore_to')" "$ranges" "$now" "$maxlag")
+    ok=$(printf '%s\n' "$cov" | jq -r '.ok')
+    if [[ $ok == true ]]; then
+        log OK "${L}[PITR][COVERAGE]" "Restorable to any point from $(iso "$(printf '%s\n' "$cov" | jq -r '.from')") to $(iso "$(printf '%s\n' "$cov" | jq -r '.to')") (oplog lag $(printf '%s\n' "$cov" | jq -r '.lag')s, max ${maxlag}s)"
+        return 0
+    fi
+    log ERROR "${L}[PITR][COVERAGE]" "$(printf '%s\n' "$cov" | jq -r '.reason')"
+    printf '%s\n' "$cov" | jq -r '.gaps[] | "\(.[0]) \(.[1])"' | while read -r a b; do
+        log ERROR "${L}[PITR][GAP]" "No oplog saved from $(iso "$a") to $(iso "$b") ($(( b - a ))s). Restores cannot cross this gap: take a new logical full"
+    done
+    if [[ $(printf '%s\n' "$cov" | jq -r '.to') != null ]]; then
+        log INFO "${L}[PITR][COVERAGE]" "Restorable from $(iso "$(printf '%s\n' "$cov" | jq -r '.from')") to $(iso "$(printf '%s\n' "$cov" | jq -r '.to')") only"
+    fi
+    return 1
+}
+
+run_oplog_check() {
+    local L='[MONGODB][BACKUP][LOGICAL][OPLOG]' title='MongoDB Oplog (PITR) Check'
+    local rc=0 started status last owner=''
+
+    setup_run oplog.log "$L"
+    log INFO "${L}[INIT]" "${title} Service Initiating"
+    lock_or_skip incr "${L}[INIT]"
+    started=$(now_epoch)
+    LOG_LABEL="${L}[PRECHECK]"
+
+    status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+    if ! preflight "$L" "$status"; then
+        log ERROR "${L}[PRECHECK]" "Preflight failed"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 1
+    fi
+    last=$(last_done_backup_json logical) || die "Cannot read backup list from PBM (pbm status / describe-backup failed)"
+    [[ -n $last ]] && owner=$(printf '%s\n' "$last" | jq -r '.nodes[0] // empty')
+
+    # Read-only check: only the elected node reports, no takeover delay.
+    if ! election_gate "$L" "$status" "$owner" "$started" no; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return "$GATE_RC"
+    fi
+
+    if [[ $(printf '%s\n' "$status" | jq -r '.pitr.conf // false') != true && -n $last && $PITR_AUTOCONFIG == true ]]; then
+        log WARN "${L}[PITR]" "PITR is disabled; enabling it (PITR_AUTOCONFIG=true)"
+        if ensure_pitr "$L" && [[ $DRY_RUN != 1 ]]; then
+            status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+        fi
+    fi
+    pitr_report "$L" "$status" "$last" || rc=1
+    log INFO "${L}[END]" "${title} Service Ended"
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Dispatcher for full / incr
+# ---------------------------------------------------------------------------
+# Detection runs once before the log file is chosen, because the scheme
+# (physical or logical) decides the log file and labels.
+cmd_backup() {
+    local kind=$1 mv ed
+    require_cmd jq
+    pbm_init
+    mongo_init
+    DETECTED=$(detect_mongodb_json 2>/dev/null || true)
+    if [[ -n $DETECTED ]]; then
+        mv=$(printf '%s\n' "$DETECTED" | jq -r '.version')
+        ed=$(printf '%s\n' "$DETECTED" | jq -r '.edition')
+        STRATEGY=$(resolve_strategy "$ed" "$mv")
+    else
+        # preflight will report the detection error in the matching log.
+        STRATEGY=physical
+        [[ $BACKUP_MODE == logical ]] && STRATEGY=logical
+    fi
+    case $STRATEGY/$kind in
+        physical/full) run_physical full ;;
+        physical/incr) run_physical incr ;;
+        logical/full)  run_logical_full ;;
+        logical/incr)  run_oplog_check ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # check
 # ---------------------------------------------------------------------------
 cmd_check() {
-    local L='[PSMB][BACKUP][CHECK]' rc=0 status base owner='' decision
+    local L='[PBM-BACKUP][CHECK]' rc=0 status last owner='' decision kind
     setup_run '' "$L"
     status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
     preflight "$L" "$status" || rc=1
 
-    base=$(last_done_backup_json base) || die "Cannot read backup list from PBM"
-    if [[ -n $base ]]; then
-        owner=$(printf '%s\n' "$base" | jq -r '.nodes[0] // empty')
-        log INFO "${L}[LASTBASE]" "$(backup_summary "$base")"
+    kind=base
+    [[ $STRATEGY == logical ]] && kind=logical
+    last=$(last_done_backup_json "$kind") || die "Cannot read backup list from PBM"
+    if [[ -n $last ]]; then
+        owner=$(printf '%s\n' "$last" | jq -r '.nodes[0] // empty')
+        log INFO "${L}[LASTBACKUP]" "Last ${kind} backup: $(backup_summary "$last")"
     else
-        log WARN "${L}[LASTBASE]" "No successful base backup found"
+        log WARN "${L}[LASTBACKUP]" "No successful ${kind} backup found"
     fi
 
     run_election "$L" "$status" "$owner" || return 1
     decision=$(election_decision)
     case $decision in
-        none)       rc=1; log ERROR "${L}[DECISION]" "No eligible node: full/incr would take NO backup" ;;
+        none)       rc=1; log ERROR "${L}[DECISION]" "No eligible node: full/incr would do NOTHING" ;;
         unknown)    rc=1; log ERROR "${L}[DECISION]" "This host ($(hostname)) is not in the member list. Set LOCAL_NODE_NAMES" ;;
         skip\ *)    log INFO "${L}[DECISION]" "This node would skip: ${decision#skip }" ;;
-        standby\ *) log INFO "${L}[DECISION]" "This node is standby #${decision#standby }: takes over after $(( ${decision#standby } * FALLBACK_DELAY_SEC ))s if nobody started" ;;
+        standby\ *) log INFO "${L}[DECISION]" "This node is standby #${decision#standby }: takes over a full after $(( ${decision#standby } * FALLBACK_DELAY_SEC ))s if nobody started" ;;
         run)
-            if [[ -z $base ]]; then
+            if [[ $STRATEGY == logical ]]; then
+                log INFO "${L}[DECISION]" "This node is #0: full -> logical backup, incr -> oplog (PITR) check"
+                check_oplog_window "$L" "$last" || rc=1
+            elif [[ -z $last ]]; then
                 log INFO "${L}[DECISION]" "This node is #0: full -> base, incr -> base (no chain yet)"
-            elif [[ $(printf '%s\n' "$SELF" | jq -r '.owner') == true ]]; then
+            elif self_is_owner; then
                 log INFO "${L}[DECISION]" "This node is #0 and owns the chain: full -> base, incr -> incremental"
             else
                 log WARN "${L}[DECISION]" "This node is #0 but the owner (${owner}) is not available: full -> base, incr -> NEW base (chain restart)"
             fi ;;
     esac
+    if [[ $STRATEGY == logical ]]; then
+        pitr_report "$L" "$status" "$last" || rc=1
+    fi
     return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# restore
+# ---------------------------------------------------------------------------
+# to_epoch "YYYY-MM-DDTHH:MM:SS[Z]" - UTC epoch, fails on bad input.
+to_epoch() {
+    [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?$ ]] || return 1
+    jq -rn --arg t "${1%Z}Z" '$t | fromdateiso8601' 2>/dev/null
+}
+
+cmd_restore() {
+    local L='[PBM-BACKUP][RESTORE]' status snaps op t base snap type rs ranges cov pitr_on ans step=1
+    local -a args=()
+    setup_run restore.log "$L"
+    if [[ -z $RESTORE_TO && -z $RESTORE_NAME ]]; then
+        die "Give a backup name or --to TIME (see '${PROG} restore --help')" 2
+    fi
+    if [[ -n $RESTORE_TO && -n $RESTORE_NAME ]]; then
+        die "Use either a backup name or --to TIME, not both" 2
+    fi
+    log INFO "${L}[INIT]" "MongoDB Restore Service Initiating"
+    lock_or_skip restore "${L}[INIT]"
+
+    status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+    op=$(pbm_running_op)
+    [[ -z $op ]] || die "PBM is busy (${op}). Try again when it finishes"
+    rs=$(printf '%s\n' "$status" | jq -r '.cluster[0].rs // empty')
+    pitr_on=$(printf '%s\n' "$status" | jq -r '.pitr.conf // false')
+    snaps=$(pbm_snapshots_json) || die "Cannot read backup list from PBM"
+
+    if [[ -n $RESTORE_TO ]]; then
+        t=$(to_epoch "$RESTORE_TO") || die "Invalid --to '${RESTORE_TO}'; use YYYY-MM-DDTHH:MM:SS (UTC)" 2
+        base=$(printf '%s\n' "$snaps" | jq -c --argjson t "$t" '
+            [ .[] | select(.status == "done" and .type == "logical" and (.restoreTo // 0) <= $t) ]
+            | sort_by(.restoreTo) | last // empty')
+        if [[ -z $base ]]; then
+            log ERROR "${L}[PLAN]" "No logical full backup with restoreTo <= $(iso "$t"). Nothing to restore from"
+            return 1
+        fi
+        local base_ts
+        base_ts=$(printf '%s\n' "$base" | jq -r '.restoreTo')
+        log INFO "${L}[PLAN]" "Base: logical backup $(printf '%s\n' "$base" | jq -r '.name') (restoreTo $(iso "$base_ts"))"
+        if (( t > base_ts )); then
+            ranges=$(pitr_ranges_json) || die "Cannot read PITR ranges (pbm list -o json)"
+            cov=$(pitr_coverage "$base_ts" "$ranges" "$t" 0)
+            if [[ $(printf '%s\n' "$cov" | jq -r '.ok') != true ]]; then
+                if [[ $(printf '%s\n' "$cov" | jq -r '.to') != null && $(printf '%s\n' "$cov" | jq '.gaps | length') == 0 ]]; then
+                    log ERROR "${L}[PLAN]" "Saved oplog does not reach $(iso "$t"): No saved oplog between $(iso "$(printf '%s\n' "$cov" | jq -r '.to')") and $(iso "$t") (gap, or slice not uploaded yet)"
+                else
+                    log ERROR "${L}[PLAN]" "Saved oplog does not reach $(iso "$t"): $(printf '%s\n' "$cov" | jq -r '.reason')"
+                fi
+                if [[ $(printf '%s\n' "$cov" | jq -r '.to') != null ]]; then
+                    log INFO "${L}[PLAN]" "Restorable window from this base: $(iso "$(printf '%s\n' "$cov" | jq -r '.from')") .. $(iso "$(printf '%s\n' "$cov" | jq -r '.to')")"
+                fi
+                return 1
+            fi
+            log OK "${L}[PLAN]" "Oplog slices cover $(iso "$base_ts") .. $(iso "$t") with no gap"
+        fi
+        args=(restore --time="${RESTORE_TO%Z}" --wait)
+        type=logical
+    else
+        snap=$(printf '%s\n' "$snaps" | jq -c --arg n "$RESTORE_NAME" '[.[] | select(.name == $n)][0] // empty')
+        if [[ -z $snap ]]; then
+            log ERROR "${L}[PLAN]" "Backup '${RESTORE_NAME}' not found (see 'pbm list')"
+            return 1
+        fi
+        if [[ $(printf '%s\n' "$snap" | jq -r '.status') != done ]]; then
+            log ERROR "${L}[PLAN]" "Backup '${RESTORE_NAME}' is in status '$(printf '%s\n' "$snap" | jq -r '.status')', not 'done'"
+            return 1
+        fi
+        type=$(printf '%s\n' "$snap" | jq -r '.type')
+        log INFO "${L}[PLAN]" "Backup ${RESTORE_NAME} (type ${type}$(printf '%s\n' "$snap" | jq -r 'if (.src // "") != "" then ", on top of \(.src)" else "" end'))"
+        if [[ $type == logical ]]; then
+            args=(restore "$RESTORE_NAME" --wait)
+        else
+            args=(restore "$RESTORE_NAME")
+            log WARN "${L}[PLAN]" "Physical restore: PBM stops mongod on every node. Afterwards restart all mongod and pbm-agent services and run 'pbm config --force-resync' (see PBM docs)"
+        fi
+    fi
+
+    if [[ $pitr_on == true ]]; then
+        log INFO "${L}[PLAN]" "Step ${step}: disable PITR (pbm config --set pitr.enabled=false)"
+        step=2
+    fi
+    log INFO "${L}[PLAN]" "Step ${step}: pbm ${args[*]}  (replica set ${rs:-?}: ALL DATA WILL BE REPLACED)"
+    if [[ $DRY_RUN == 1 ]]; then
+        log INFO "${L}[END]" "[DRY-RUN] Plan validated, nothing executed"
+        return 0
+    fi
+
+    if [[ $ASSUME_YES != 1 ]]; then
+        if [[ -t 0 ]]; then
+            printf '%sType the replica set name (%s) to confirm the restore: %s' "$C_YEL" "${rs:-?}" "$C_OFF"
+            read -r ans
+            [[ -n $rs && $ans == "$rs" ]] || die "Confirmation does not match. Restore aborted" 1
+        else
+            die "Refusing to restore without --yes when not on a terminal" 2
+        fi
+    fi
+
+    if [[ $pitr_on == true ]]; then
+        pbm_config_set pitr.enabled false || die "Cannot disable PITR"
+        log OK "${L}[PITR]" "PITR disabled"
+    fi
+    log INFO "${L}[PBM][RUN][START]" "pbm ${args[*]}"
+    if run_pbm "${args[@]}"; then
+        log OK "${L}[PBM][RUN][FINISH][OK]" "Restore command finished (check 'pbm describe-restore' / 'pbm status')"
+        if [[ $type == logical ]]; then
+            log WARN "${L}[NEXT]" "Take a new full now: '${PROG} full' (it also re-enables PITR). Old oplog slices cannot be applied on top of the restored data"
+        else
+            log WARN "${L}[NEXT]" "Restart mongod and pbm-agent on all nodes, run 'pbm config --force-resync', then take a new base: '${PROG} full'"
+        fi
+        log INFO "${L}[END]" "MongoDB Restore Service Ended"
+        return 0
+    fi
+    log ERROR "${L}[PBM][RUN][FINISH][ERROR]" "pbm restore failed. Check 'pbm logs' and the pbm-agent logs"
+    log INFO "${L}[END]" "MongoDB Restore Service Ended"
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -472,22 +1013,103 @@ cmd_check() {
 # ---------------------------------------------------------------------------
 cmd_cleanup() {
     local L='[PSMB][BACKUP][RETENTION][PURGE]'
-    local rc=0 date_from
+    local rc=0 started status snaps owner='' date_from ret plan cutoff newest n
     setup_run deletion.log "$L"
     log INFO "${L}[INIT]" "MongoDB Backups Deletion Service Initiating. RETENTION DAYS -> ${RETENTION_DAYS}"
     lock_or_skip cleanup "${L}[INIT]"
+    started=$(now_epoch)
+    LOG_LABEL="${L}[PRECHECK]"
+    mongo_init
+
+    status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+    snaps=$(pbm_snapshots_json) || die "Cannot read backup list from PBM"
+    # Owner = node of the newest full of any kind, so cleanup follows backups.
+    newest=$(printf '%s\n' "$snaps" | jq -r '[.[] | select(.status == "done" and (.src // "") == "")] | sort_by(.name) | last | .name // empty')
+    if [[ -n $newest ]]; then
+        owner=$("$PBM_BIN" describe-backup "$newest" -o json 2>/dev/null | jq -r '.replsets[0].node // empty' || true)
+    fi
+    if ! election_gate "$L" "$status" "$owner" "$started" no; then
+        log INFO "${L}[END]" "MongoDB Backups Deletion Service Ended"
+        return "$GATE_RC"
+    fi
 
     date_from=$(date_days_ago "$RETENTION_DAYS")
+    ret=$(jq -rn --arg d "${date_from}T00:00:00Z" '$d | fromdateiso8601')
+    plan=$(retention_plan "$snaps" "$ret")
+    if [[ $(printf '%s\n' "$plan" | jq -r '.action') == skip ]]; then
+        log INFO "${L}[PLAN]" "Retention cutoff ${date_from}: $(printf '%s\n' "$plan" | jq -r '.reason')"
+        log INFO "${L}[END]" "MongoDB Backups Deletion Service Ended"
+        return 0
+    fi
+    cutoff=$(printf '%s\n' "$plan" | jq -r '.cutoff')
+    n=$(printf '%s\n' "$plan" | jq '.delete | length')
+    log INFO "${L}[PLAN]" "Retention cutoff ${date_from} -> aligned to the start of full $(printf '%s\n' "$plan" | jq -r '.anchor') (the chain that covers the cutoff is kept); newest full $(printf '%s\n' "$plan" | jq -r '.newest') is kept"
+    log INFO "${L}[PLAN]" "${n} backup(s) older than $(iso "$cutoff") will be deleted$( [[ $n -gt 0 ]] && printf ': %s' "$(printf '%s\n' "$plan" | jq -r '.delete | if length > 6 then (.[0:3] + ["..."] + .[-3:]) else . end | join(" ")')"), plus oplog slices older than that"
+
     LOG_LABEL="${L}[PBM][RUN]"
-    log INFO "${L}[PBM][RUN][START]" "PBM - MongoDB Backups Deletion Starting!! Deleting Backups stored Older than ${date_from}"
-    if run_pbm cleanup -y --older-than "$date_from" --wait; then
+    pbm_wait_idle "$WAIT_RUNNING_SEC" || true
+    log INFO "${L}[PBM][RUN][START]" "PBM - MongoDB Backups Deletion Starting!! (pbm cleanup -y --older-than $(iso "$cutoff" | sed 's/Z$//') --wait)"
+    if run_pbm cleanup -y --older-than "$(iso "$cutoff" | sed 's/Z$//')" --wait; then
         log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - MongoDB Backups Deletion Successfully DONE!!"
     else
         rc=1
         log ERROR "${L}[PBM][RUN][FINISH][ERROR]" "PBM - MongoDB Backups Deletion Failed!! Please check pbm-agent logs!!"
     fi
+
+    # Safety net: the newest full must survive.
+    if [[ $rc -eq 0 && $DRY_RUN != 1 ]]; then
+        newest=$(printf '%s\n' "$plan" | jq -r '.newest')
+        if pbm_snapshots_json | jq -e --arg n "$newest" 'any(.[]; .name == $n and .status == "done")' >/dev/null; then
+            log OK "${L}[VERIFY]" "Newest full ${newest} is still available"
+        else
+            rc=1
+            log ERROR "${L}[VERIFY]" "Newest full ${newest} is MISSING after cleanup. Check 'pbm list' immediately"
+        fi
+    fi
     log INFO "${L}[END]" "MongoDB Backups Deletion Service Ended"
     return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Metrics (phase 5)
+# ---------------------------------------------------------------------------
+# collect_state_metrics - write pbm_backup_state.prom (best effort).
+collect_state_metrics() {
+    metrics_enabled || return 0
+    local status snaps last ranges cov=''
+    status=$(pbm_status_json 2>/dev/null) || return 0
+    snaps=$(pbm_snapshots_json 2>/dev/null) || return 0
+    if [[ $(printf '%s\n' "$snaps" | jq 'any(.[]; .type == "logical" and .status == "done")') == true ]]; then
+        last=$(last_done_backup_json logical 2>/dev/null || true)
+        if [[ -n $last ]] && ranges=$(pitr_ranges_json 2>/dev/null); then
+            cov=$(pitr_coverage "$(printf '%s\n' "$last" | jq -r '.restore_to')" "$ranges" "$(now_epoch)" \
+                $(( OPLOG_INCR_MIN * 60 + PITR_LAG_MARGIN_SEC )) 2>/dev/null || true)
+        fi
+    fi
+    metrics_state "$status" "$snaps" "$cov" "${ELECTION:-}"
+}
+
+# finish_run RC - EXIT hook for full/incr/cleanup: run + state metrics.
+RUN_CMD='' RUN_STARTED=0 SKIPPED=0
+finish_run() {
+    local rc=$1 outcome=ok
+    [[ -n $RUN_CMD ]] || return 0
+    [[ $DRY_RUN != 1 ]] || return 0   # a simulation must not look like a real run
+    metrics_enabled || return 0
+    if [[ $rc -ne 0 ]]; then
+        outcome=failed
+    elif [[ $SKIPPED == 1 ]]; then
+        outcome=skipped
+    fi
+    metrics_run "$RUN_CMD" "$outcome" "$RUN_STARTED"
+    collect_state_metrics
+}
+
+cmd_metrics() {
+    setup_run '' '[PBM-BACKUP][METRICS]'
+    metrics_enabled || die "METRICS_DIR is not set (config file or environment)" 2
+    collect_state_metrics
+    log OK '[PBM-BACKUP][METRICS]' "State metrics written to ${METRICS_DIR}/pbm_backup_state.prom"
 }
 
 # ---------------------------------------------------------------------------
@@ -497,6 +1119,10 @@ main() {
     local cmd='' help=0 opt_retention=''
     DRY_RUN=0
     FORCE=0
+    ASSUME_YES=0
+    RESTORE_TO=''
+    RESTORE_NAME=''
+
     LOG_LABEL='[PBM-BACKUP]'
     LOG_FILE=''
 
@@ -510,13 +1136,25 @@ main() {
             -c|--config)        [[ $# -ge 2 ]] || { usage >&2; exit 2; }; PBM_BACKUP_CONF=$2; shift ;;
             -e|--env-file)      [[ $# -ge 2 ]] || { usage >&2; exit 2; }; PBM_ENV_FILE=$2; shift ;;
             -r|--retention-days) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; opt_retention=$2; shift ;;
-            full|incr|cleanup|check)
+            -y|--yes)           ASSUME_YES=1 ;;
+            --to)               [[ $# -ge 2 ]] || { usage >&2; exit 2; }; RESTORE_TO=$2; shift ;;
+            full|incr|cleanup|check|restore|metrics)
                 if [[ -n $cmd ]]; then
                     printf '%s: only one command allowed\n' "$PROG" >&2
                     exit 2
                 fi
                 cmd=$1 ;;
+            -*)
+                setup_colors
+                printf '%s: unknown option: %s\n\n' "$PROG" "$1" >&2
+                usage >&2
+                exit 2 ;;
             *)
+                if [[ $cmd == restore && -z $RESTORE_NAME ]]; then
+                    RESTORE_NAME=$1
+                    shift
+                    continue
+                fi
                 setup_colors
                 printf '%s: unknown argument: %s\n\n' "$PROG" "$1" >&2
                 usage >&2
@@ -532,6 +1170,8 @@ main() {
             incr)    usage_incr ;;
             cleanup) usage_cleanup ;;
             check)   usage_check ;;
+            restore) usage_restore ;;
+            metrics) usage_metrics ;;
             *)       usage ;;
         esac
         [[ $help == 1 ]] && exit 0
@@ -545,10 +1185,17 @@ main() {
     validate_config
 
     case $cmd in
-        full)    run_physical full ;;
-        incr)    run_physical incr ;;
-        cleanup) cmd_cleanup ;;
-        check)   cmd_check ;;
+        full|incr|cleanup)
+            RUN_CMD=$cmd
+            RUN_STARTED=$(now_epoch)
+            ON_EXIT_FN=finish_run ;;
+    esac
+    case $cmd in
+        full|incr) cmd_backup "$cmd" ;;
+        cleanup)   cmd_cleanup ;;
+        check)     cmd_check ;;
+        restore)   cmd_restore ;;
+        metrics)   cmd_metrics ;;
     esac
 }
 

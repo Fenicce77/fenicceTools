@@ -1,0 +1,15 @@
+# pbm-backup: daily full backup at 00:00
+# Persistent=true: a full missed while the host was down runs at boot;
+# FULL_MIN_INTERVAL_SEC (20h) stops it if another member already took it.
+[Unit]
+Description=pbm-backup: daily full backup at 00:00
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+# Keep members in step: the election relies on all of them starting together.
+AccuracySec=1s
+Persistent=true
+Unit=pbm-backup-full.service
+
+[Install]
+WantedBy=timers.target

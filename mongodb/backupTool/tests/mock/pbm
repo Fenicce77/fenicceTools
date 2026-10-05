@@ -5,12 +5,16 @@
 #   MOCK_FIXTURES  fixtures directory (required)
 #   MOCK_STATUS    full "pbm status -o json" (default: status-all-agents-ok.json)
 #   MOCK_BACKUPS   "pbm status -s backups -o json" (default: status-backups.json)
-#   MOCK_BACKUPS_AFTER  served instead once a "pbm backup" call was recorded
-#                  (simulates the new backup showing up in the list)
+#   MOCK_BACKUPS_AFTER  served instead once a "pbm backup" or "pbm cleanup"
+#                  call was recorded (simulates the list changing)
 #   MOCK_RUNNING   JSON returned by "status -s running" (default: idle fixture)
 #   MOCK_NODE      node reported by describe-backup for backups other than the
 #                  fixture base (i.e. "new" backups); default: fixture value
 #   MOCK_PBM_VERSION  version reported by "pbm version" (default 2.12.0)
+#   MOCK_LIST      "pbm list -o json" (default: no snapshots, no PITR ranges)
+#   MOCK_CONFIG    key=value file backing "pbm config KEY" / "--set KEY=VALUE"
+#   MOCK_DUMP_SEC  duration reported by describe-backup for non-fixture
+#                  backups (last_transition_ts - start), default 300
 #   MOCK_RC        exit code of backup/cleanup (default 0)
 set -euo pipefail
 printf 'pbm %s\n' "$*" >>"$MOCK_CALLS"
@@ -22,7 +26,7 @@ case $1 in
             if [[ -n ${MOCK_RUNNING:-} ]]; then printf '%s\n' "$MOCK_RUNNING"
             else cat "$MOCK_FIXTURES/status-running-idle.json"; fi
         elif [[ " $* " == *" -s backups "* ]]; then
-            if [[ -n ${MOCK_BACKUPS_AFTER:-} ]] && grep -q '^pbm backup ' "$MOCK_CALLS"; then
+            if [[ -n ${MOCK_BACKUPS_AFTER:-} ]] && grep -qE '^pbm (backup|cleanup) ' "$MOCK_CALLS"; then
                 cat "$MOCK_BACKUPS_AFTER"
             else
                 cat "${MOCK_BACKUPS:-$MOCK_FIXTURES/status-backups.json}"
@@ -31,13 +35,33 @@ case $1 in
             cat "${MOCK_STATUS:-$MOCK_FIXTURES/status-all-agents-ok.json}"
         fi ;;
     describe-backup)
-        jq --arg n "$2" --arg node "${MOCK_NODE:-}" \
+        # Type comes from the snapshot list being served, like real PBM.
+        backups=${MOCK_BACKUPS:-$MOCK_FIXTURES/status-backups.json}
+        if [[ -n ${MOCK_BACKUPS_AFTER:-} ]] && grep -q '^pbm backup ' "$MOCK_CALLS"; then
+            backups=$MOCK_BACKUPS_AFTER
+        fi
+        type=$(jq -r --arg n "$2" '[.backups.snapshot[] | select(.name == $n)][0].type // "incremental"' "$backups")
+        jq --arg n "$2" --arg node "${MOCK_NODE:-}" --arg type "$type" --argjson dur "${MOCK_DUMP_SEC:-300}" \
             '(if .name != $n then .opid = "mock-opid-\($n)"
+                 | ($n | fromdateiso8601) as $s
+                 | .last_write_ts = ($s + $dur) | .last_transition_ts = ($s + $dur)
                  | (if $node != "" then .replsets[].node = $node else . end)
               else . end)
-             | .name = $n' \
+             | .name = $n | .type = $type' \
             "$MOCK_FIXTURES/describe-backup-base.json" ;;
-    backup|cleanup)
+    list)
+        if [[ -n ${MOCK_LIST:-} ]]; then cat "$MOCK_LIST"
+        else printf '%s\n' '{"snapshots":[],"pitr":{"on":false,"ranges":[]}}'; fi ;;
+    config)
+        cfg=${MOCK_CONFIG:-/dev/null}
+        if [[ ${2:-} == --set ]]; then
+            kv=$3
+            { grep -v "^${kv%%=*}=" "$cfg" 2>/dev/null || true; printf '%s\n' "$kv"; } >"$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+            printf '[%s]\n' "$kv"
+        else
+            grep "^$2=" "$cfg" 2>/dev/null | tail -n 1 | cut -d= -f2-
+        fi ;;
+    backup|cleanup|restore)
         exit "${MOCK_RC:-0}" ;;
     *)
         printf 'mock pbm: unsupported command %s\n' "$1" >&2

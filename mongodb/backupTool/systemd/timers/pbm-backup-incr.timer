@@ -1,0 +1,19 @@
+# pbm-backup: incremental step
+# Default schedule = PSMDB physical scheme: hourly at :15, 01:15..23:15
+# (00:15 is skipped: the daily base runs at 00:00).
+# Community (logical) scheme: install.sh writes a drop-in
+#   /etc/systemd/system/pbm-backup-incr.timer.d/schedule.conf
+# that runs it every OPLOG_INCR_MIN minutes instead.
+# Persistent=false: a missed step is not replayed at boot (the next one runs).
+[Unit]
+Description=pbm-backup: incremental step
+
+[Timer]
+OnCalendar=*-*-* 01..23:15:00
+# Keep members in step: the election relies on all of them starting together.
+AccuracySec=1s
+Persistent=false
+Unit=pbm-backup-incr.service
+
+[Install]
+WantedBy=timers.target

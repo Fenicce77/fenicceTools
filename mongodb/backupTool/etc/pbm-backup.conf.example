@@ -20,6 +20,11 @@
 # runs on every node).
 #DEDUP_WINDOW_SEC=600
 
+# "full" skips if the last full started less than this ago (one scheduled full
+# per day; stops an extra full when systemd replays a missed run at boot).
+# 0 = disabled. --force always runs.
+#FULL_MIN_INTERVAL_SEC=72000
+
 # Extra names this node is known by in the replica set config, space separated,
 # when they differ from hostname / hostname -s / hostname -f.
 #LOCAL_NODE_NAMES="mongodbcluster-node01 10.0.0.11"
@@ -66,3 +71,47 @@
 
 # Connection timeout for each per-node health probe (directConnection=true).
 #PROBE_TIMEOUT_MS=5000
+
+# ---------------------------------------------------------------------------
+# Phase 4 - logical scheme (Community): daily logical full + PITR oplog slices
+# ---------------------------------------------------------------------------
+# Minutes between saved oplog slices (pitr.oplogSpanMin). 360 = every 6h.
+# "incr" fails if the newest saved oplog is older than this + the margin.
+#OPLOG_INCR_MIN=360
+#PITR_LAG_MARGIN_SEC=900
+
+# After a successful logical full (and in "incr" if PITR is off), set
+# pitr.enabled=true and pitr.oplogSpanMin=OPLOG_INCR_MIN with "pbm config --set".
+#PITR_AUTOCONFIG=true
+
+# Before a logical full: this node's oplog window must be at least
+# OPLOG_WINDOW_FACTOR x the expected dump time. The expected time is
+# EXPECTED_DUMP_SEC, or the duration of the previous logical backup.
+#OPLOG_WINDOW_FACTOR=2
+#OPLOG_WINDOW_ENFORCE=true   # false = warn only
+#EXPECTED_DUMP_SEC=
+
+# ---------------------------------------------------------------------------
+# Storage and compression (all schemes)
+# ---------------------------------------------------------------------------
+# Backups always go to a bucket. Accepted PBM storage types, as reported by
+# "pbm status" (.backups.type). PBM "filesystem" storage needs a path shared by
+# every node (NFS), which is not available, so it is rejected by default.
+#REQUIRED_STORAGE_TYPES="GCS"
+
+# Backups are always compressed: passed explicitly to every "pbm backup"
+# (--compression / --compression-level) and applied to PITR oplog slices
+# (pitr.compression / pitr.compressionLevel) when PITR_AUTOCONFIG=true.
+# One of: s2 gzip pgzip snappy lz4 zstd ("none" is rejected).
+#BACKUP_COMPRESSION=gzip
+#BACKUP_COMPRESSION_LEVEL=5   # empty = PBM default level for the method
+
+# ---------------------------------------------------------------------------
+# Phase 5 - metrics (Prometheus textfile collector). Empty = disabled.
+# ---------------------------------------------------------------------------
+# full/incr/cleanup write pbm_backup_run_<command>.prom and
+# pbm_backup_state.prom; "pbm-backup metrics" refreshes the state file.
+#   node_exporter: --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+#   PMM2: /usr/local/percona/pmm2/collectors/textfile-collector/low-resolution
+#   PMM3: /usr/local/percona/pmm/collectors/textfile-collector/low-resolution
+#METRICS_DIR=""
