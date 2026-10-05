@@ -122,6 +122,9 @@ load_config() {
     : "${REQUIRED_STORAGE_TYPES:=GCS}"
     : "${BACKUP_COMPRESSION:=gzip}"
     : "${BACKUP_COMPRESSION_LEVEL=5}"   # empty = PBM default level
+
+    # Phase 5: metrics (empty = disabled)
+    : "${METRICS_DIR:=}"
 }
 
 # validate_config - fail early on malformed tunables.
@@ -219,6 +222,20 @@ _release_lock() {
     fi
 }
 
+# Single EXIT handler: runs ON_EXIT_FN (if set) with the exit code, then
+# releases the lock. Keeps the original exit code.
+ON_EXIT_FN=''
+_on_exit() {
+    local rc=$?
+    trap - EXIT
+    if [[ -n $ON_EXIT_FN ]]; then
+        "$ON_EXIT_FN" "$rc" || true
+    fi
+    _release_lock
+    exit "$rc"
+}
+trap _on_exit EXIT
+
 acquire_lock() {
     local name=$1 dir=${LOCK_DIR:-}
     if [[ -z $dir ]]; then
@@ -249,5 +266,4 @@ acquire_lock() {
     fi
     printf '%s\n' "$$" >"${path}.d/pid"
     _LOCK_MKDIR_PATH="${path}.d"
-    trap _release_lock EXIT
 }

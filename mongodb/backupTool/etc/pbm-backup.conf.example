@@ -100,3 +100,13 @@
 # One of: s2 gzip pgzip snappy lz4 zstd ("none" is rejected).
 #BACKUP_COMPRESSION=gzip
 #BACKUP_COMPRESSION_LEVEL=5   # empty = PBM default level for the method
+
+# ---------------------------------------------------------------------------
+# Phase 5 - metrics (Prometheus textfile collector). Empty = disabled.
+# ---------------------------------------------------------------------------
+# full/incr/cleanup write pbm_backup_run_<command>.prom and
+# pbm_backup_state.prom; "pbm-backup metrics" refreshes the state file.
+#   node_exporter: --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+#   PMM2: /usr/local/percona/pmm2/collectors/textfile-collector/low-resolution
+#   PMM3: /usr/local/percona/pmm/collectors/textfile-collector/low-resolution
+#METRICS_DIR=""

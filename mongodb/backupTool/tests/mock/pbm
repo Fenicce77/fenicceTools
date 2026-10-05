@@ -5,8 +5,8 @@
 #   MOCK_FIXTURES  fixtures directory (required)
 #   MOCK_STATUS    full "pbm status -o json" (default: status-all-agents-ok.json)
 #   MOCK_BACKUPS   "pbm status -s backups -o json" (default: status-backups.json)
-#   MOCK_BACKUPS_AFTER  served instead once a "pbm backup" call was recorded
-#                  (simulates the new backup showing up in the list)
+#   MOCK_BACKUPS_AFTER  served instead once a "pbm backup" or "pbm cleanup"
+#                  call was recorded (simulates the list changing)
 #   MOCK_RUNNING   JSON returned by "status -s running" (default: idle fixture)
 #   MOCK_NODE      node reported by describe-backup for backups other than the
 #                  fixture base (i.e. "new" backups); default: fixture value
@@ -26,7 +26,7 @@ case $1 in
             if [[ -n ${MOCK_RUNNING:-} ]]; then printf '%s\n' "$MOCK_RUNNING"
             else cat "$MOCK_FIXTURES/status-running-idle.json"; fi
         elif [[ " $* " == *" -s backups "* ]]; then
-            if [[ -n ${MOCK_BACKUPS_AFTER:-} ]] && grep -q '^pbm backup ' "$MOCK_CALLS"; then
+            if [[ -n ${MOCK_BACKUPS_AFTER:-} ]] && grep -qE '^pbm (backup|cleanup) ' "$MOCK_CALLS"; then
                 cat "$MOCK_BACKUPS_AFTER"
             else
                 cat "${MOCK_BACKUPS:-$MOCK_FIXTURES/status-backups.json}"

@@ -8,13 +8,14 @@
 #            fail over to a healthy secondary).
 #   Phase 4: Community / logical scheme: daily logical full + PITR oplog
 #            slicing, oplog window check, oplog chain continuity check.
+#   Phase 5: chain-aligned safe retention, Prometheus textfile metrics.
 #
 # Run "pbm-backup --help" for usage.
 
 set -euo pipefail
 
 PROG=pbm-backup
-VERSION=0.4.0
+VERSION=0.5.0
 
 # ---------------------------------------------------------------------------
 # Locate and load libraries
@@ -31,7 +32,7 @@ if [[ -z $LIB_DIR ]]; then
     printf '%s: cannot find library directory (set PBM_BACKUP_LIB)\n' "$PROG" >&2
     exit 2
 fi
-for _f in common mongo pbm compat topology; do
+for _f in common mongo pbm compat topology metrics; do
     # shellcheck disable=SC1090
     . "${LIB_DIR}/${_f}.sh"
 done
@@ -55,7 +56,9 @@ ${C_BLD}COMMANDS${C_OFF}
                   PSMDB     -> hourly physical incremental on the base node
                   Community -> oplog check: PITR slices must cover the last
                                logical snapshot up to now, with no gaps
-    cleanup     Delete backups and PITR chunks older than the retention.
+    cleanup     Delete backups and oplog slices older than the retention, never
+                splitting a chain and never removing the newest full.
+    metrics     Refresh the Prometheus state metrics (needs METRICS_DIR).
     check       Read-only report: versions, compatibility, node election and
                 what this node would do. Changes nothing.
     restore     Restore a backup by name, or (logical scheme) to a point in
@@ -162,9 +165,16 @@ EOF
 
 usage_cleanup() {
     cat <<EOF
-${C_BLD}${PROG} cleanup${C_OFF} - retention purge
+${C_BLD}${PROG} cleanup${C_OFF} - safe retention purge
 
-Runs "pbm cleanup -y --older-than <today - RETENTION_DAYS> --wait".
+Only the elected node runs it (same election as full/incr, no takeover).
+The retention cutoff is today - RETENTION_DAYS (00:00 UTC). It is then moved
+back to the start of the newest full backup (base or logical) that started
+at/before it, and "pbm cleanup -y --older-than <that time> --wait" runs. So:
+  - chains are deleted whole, never split (no orphan incrementals);
+  - the full needed to restore to the cutoff, and its oplog slices, stay;
+  - the newest valid full is never deleted, even if backups stopped.
+Afterwards it checks that the newest full is still there.
 
 ${C_BLD}OPTIONS${C_OFF}
     -r, --retention-days N   Override RETENTION_DAYS (default 7)
@@ -174,6 +184,25 @@ Log file: \${LOG_DIR}/deletion.log
 ${C_BLD}EXAMPLES${C_OFF}
     ${PROG} cleanup
     ${PROG} cleanup --retention-days 14 --dry-run
+EOF
+}
+
+usage_metrics() {
+    cat <<EOF
+${C_BLD}${PROG} metrics${C_OFF} - refresh Prometheus textfile metrics
+
+Writes \${METRICS_DIR}/pbm_backup_state.prom: newest backup of each kind
+(restoreTo, size), backup counts by status, PITR enabled/running, oplog
+coverage, gaps and lag (logical scheme), pbm-agent health per member.
+full/incr/cleanup also write it, plus pbm_backup_run_<command>.prom with the
+outcome of their last run. Meant for a frequent timer (e.g. every 5 minutes).
+
+Directories: node_exporter --collector.textfile.directory, or
+  PMM2: /usr/local/percona/pmm2/collectors/textfile-collector/low-resolution
+  PMM3: /usr/local/percona/pmm/collectors/textfile-collector/low-resolution
+
+${C_BLD}EXAMPLES${C_OFF}
+    METRICS_DIR=/var/lib/node_exporter/textfile_collector ${PROG} metrics
 EOF
 }
 
@@ -246,6 +275,7 @@ setup_run() {
 # lock_or_skip NAME LABEL
 lock_or_skip() {
     if ! acquire_lock "$1"; then
+        SKIPPED=1
         log WARN "$2" "Another '${1}' run is already in progress on this node. Exiting"
         exit 0
     fi
@@ -428,6 +458,7 @@ election_gate() {
                 fi
             fi ;;
     esac
+    [[ $GATE_RC != 0 ]] || SKIPPED=1
     return 1
 }
 
@@ -505,6 +536,7 @@ run_physical() {
     fi
 
     if [[ $action == base && $FORCE != 1 ]] && recent_done_since base $(( started - DEDUP_WINDOW_SEC )); then
+        SKIPPED=1
         log WARN "${L}[PRECHECK]" "A base backup was already completed in the last ${DEDUP_WINDOW_SEC}s. Skipping"
         log INFO "${L}[END]" "${title} Service Ended"
         return 0
@@ -520,6 +552,7 @@ run_physical() {
     if run_pbm "${args[@]}"; then
         log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - ${title} Successfully DONE!!"
     elif [[ $action == base && $FORCE != 1 ]] && { pbm_wait_idle "$WAIT_RUNNING_SEC" || true; recent_done_since base $(( started - DEDUP_WINDOW_SEC )); }; then
+        SKIPPED=1
         log WARN "${L}[PBM][RUN][FINISH]" "Base backup was taken by another node at the same time. Skipping"
         log INFO "${L}[END]" "${title} Service Ended"
         return 0
@@ -642,6 +675,7 @@ run_logical_full() {
         return 1
     fi
     if [[ $FORCE != 1 ]] && recent_done_since logical $(( started - DEDUP_WINDOW_SEC )); then
+        SKIPPED=1
         log WARN "${L}[PRECHECK]" "A logical backup was already completed in the last ${DEDUP_WINDOW_SEC}s. Skipping"
         log INFO "${L}[END]" "${title} Service Ended"
         return 0
@@ -654,6 +688,7 @@ run_logical_full() {
     if run_pbm backup --type logical "${COMP_ARGS[@]}" --wait; then
         log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - ${title} Successfully DONE!!"
     elif [[ $FORCE != 1 ]] && { pbm_wait_idle "$WAIT_RUNNING_SEC" || true; recent_done_since logical $(( started - DEDUP_WINDOW_SEC )); }; then
+        SKIPPED=1
         log WARN "${L}[PBM][RUN][FINISH]" "Logical backup was taken by another node at the same time. Skipping"
         log INFO "${L}[END]" "${title} Service Ended"
         return 0
@@ -952,22 +987,103 @@ cmd_restore() {
 # ---------------------------------------------------------------------------
 cmd_cleanup() {
     local L='[PSMB][BACKUP][RETENTION][PURGE]'
-    local rc=0 date_from
+    local rc=0 started status snaps owner='' date_from ret plan cutoff newest n
     setup_run deletion.log "$L"
     log INFO "${L}[INIT]" "MongoDB Backups Deletion Service Initiating. RETENTION DAYS -> ${RETENTION_DAYS}"
     lock_or_skip cleanup "${L}[INIT]"
+    started=$(now_epoch)
+    LOG_LABEL="${L}[PRECHECK]"
+    mongo_init
+
+    status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+    snaps=$(pbm_snapshots_json) || die "Cannot read backup list from PBM"
+    # Owner = node of the newest full of any kind, so cleanup follows backups.
+    newest=$(printf '%s\n' "$snaps" | jq -r '[.[] | select(.status == "done" and (.src // "") == "")] | sort_by(.name) | last | .name // empty')
+    if [[ -n $newest ]]; then
+        owner=$("$PBM_BIN" describe-backup "$newest" -o json 2>/dev/null | jq -r '.replsets[0].node // empty' || true)
+    fi
+    if ! election_gate "$L" "$status" "$owner" "$started" no; then
+        log INFO "${L}[END]" "MongoDB Backups Deletion Service Ended"
+        return "$GATE_RC"
+    fi
 
     date_from=$(date_days_ago "$RETENTION_DAYS")
+    ret=$(jq -rn --arg d "${date_from}T00:00:00Z" '$d | fromdateiso8601')
+    plan=$(retention_plan "$snaps" "$ret")
+    if [[ $(printf '%s\n' "$plan" | jq -r '.action') == skip ]]; then
+        log INFO "${L}[PLAN]" "Retention cutoff ${date_from}: $(printf '%s\n' "$plan" | jq -r '.reason')"
+        log INFO "${L}[END]" "MongoDB Backups Deletion Service Ended"
+        return 0
+    fi
+    cutoff=$(printf '%s\n' "$plan" | jq -r '.cutoff')
+    n=$(printf '%s\n' "$plan" | jq '.delete | length')
+    log INFO "${L}[PLAN]" "Retention cutoff ${date_from} -> aligned to the start of full $(printf '%s\n' "$plan" | jq -r '.anchor') (the chain that covers the cutoff is kept); newest full $(printf '%s\n' "$plan" | jq -r '.newest') is kept"
+    log INFO "${L}[PLAN]" "${n} backup(s) older than $(iso "$cutoff") will be deleted$( [[ $n -gt 0 ]] && printf ': %s' "$(printf '%s\n' "$plan" | jq -r '.delete | if length > 6 then (.[0:3] + ["..."] + .[-3:]) else . end | join(" ")')"), plus oplog slices older than that"
+
     LOG_LABEL="${L}[PBM][RUN]"
-    log INFO "${L}[PBM][RUN][START]" "PBM - MongoDB Backups Deletion Starting!! Deleting Backups stored Older than ${date_from}"
-    if run_pbm cleanup -y --older-than "$date_from" --wait; then
+    pbm_wait_idle "$WAIT_RUNNING_SEC" || true
+    log INFO "${L}[PBM][RUN][START]" "PBM - MongoDB Backups Deletion Starting!! (pbm cleanup -y --older-than $(iso "$cutoff" | sed 's/Z$//') --wait)"
+    if run_pbm cleanup -y --older-than "$(iso "$cutoff" | sed 's/Z$//')" --wait; then
         log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - MongoDB Backups Deletion Successfully DONE!!"
     else
         rc=1
         log ERROR "${L}[PBM][RUN][FINISH][ERROR]" "PBM - MongoDB Backups Deletion Failed!! Please check pbm-agent logs!!"
     fi
+
+    # Safety net: the newest full must survive.
+    if [[ $rc -eq 0 && $DRY_RUN != 1 ]]; then
+        newest=$(printf '%s\n' "$plan" | jq -r '.newest')
+        if pbm_snapshots_json | jq -e --arg n "$newest" 'any(.[]; .name == $n and .status == "done")' >/dev/null; then
+            log OK "${L}[VERIFY]" "Newest full ${newest} is still available"
+        else
+            rc=1
+            log ERROR "${L}[VERIFY]" "Newest full ${newest} is MISSING after cleanup. Check 'pbm list' immediately"
+        fi
+    fi
     log INFO "${L}[END]" "MongoDB Backups Deletion Service Ended"
     return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Metrics (phase 5)
+# ---------------------------------------------------------------------------
+# collect_state_metrics - write pbm_backup_state.prom (best effort).
+collect_state_metrics() {
+    metrics_enabled || return 0
+    local status snaps last ranges cov=''
+    status=$(pbm_status_json 2>/dev/null) || return 0
+    snaps=$(pbm_snapshots_json 2>/dev/null) || return 0
+    if [[ $(printf '%s\n' "$snaps" | jq 'any(.[]; .type == "logical" and .status == "done")') == true ]]; then
+        last=$(last_done_backup_json logical 2>/dev/null || true)
+        if [[ -n $last ]] && ranges=$(pitr_ranges_json 2>/dev/null); then
+            cov=$(pitr_coverage "$(printf '%s\n' "$last" | jq -r '.restore_to')" "$ranges" "$(now_epoch)" \
+                $(( OPLOG_INCR_MIN * 60 + PITR_LAG_MARGIN_SEC )) 2>/dev/null || true)
+        fi
+    fi
+    metrics_state "$status" "$snaps" "$cov" "${ELECTION:-}"
+}
+
+# finish_run RC - EXIT hook for full/incr/cleanup: run + state metrics.
+RUN_CMD='' RUN_STARTED=0 SKIPPED=0
+finish_run() {
+    local rc=$1 outcome=ok
+    [[ -n $RUN_CMD ]] || return 0
+    [[ $DRY_RUN != 1 ]] || return 0   # a simulation must not look like a real run
+    metrics_enabled || return 0
+    if [[ $rc -ne 0 ]]; then
+        outcome=failed
+    elif [[ $SKIPPED == 1 ]]; then
+        outcome=skipped
+    fi
+    metrics_run "$RUN_CMD" "$outcome" "$RUN_STARTED"
+    collect_state_metrics
+}
+
+cmd_metrics() {
+    setup_run '' '[PBM-BACKUP][METRICS]'
+    metrics_enabled || die "METRICS_DIR is not set (config file or environment)" 2
+    collect_state_metrics
+    log OK '[PBM-BACKUP][METRICS]' "State metrics written to ${METRICS_DIR}/pbm_backup_state.prom"
 }
 
 # ---------------------------------------------------------------------------
@@ -996,7 +1112,7 @@ main() {
             -r|--retention-days) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; opt_retention=$2; shift ;;
             -y|--yes)           ASSUME_YES=1 ;;
             --to)               [[ $# -ge 2 ]] || { usage >&2; exit 2; }; RESTORE_TO=$2; shift ;;
-            full|incr|cleanup|check|restore)
+            full|incr|cleanup|check|restore|metrics)
                 if [[ -n $cmd ]]; then
                     printf '%s: only one command allowed\n' "$PROG" >&2
                     exit 2
@@ -1029,6 +1145,7 @@ main() {
             cleanup) usage_cleanup ;;
             check)   usage_check ;;
             restore) usage_restore ;;
+            metrics) usage_metrics ;;
             *)       usage ;;
         esac
         [[ $help == 1 ]] && exit 0
@@ -1042,10 +1159,17 @@ main() {
     validate_config
 
     case $cmd in
+        full|incr|cleanup)
+            RUN_CMD=$cmd
+            RUN_STARTED=$(now_epoch)
+            ON_EXIT_FN=finish_run ;;
+    esac
+    case $cmd in
         full|incr) cmd_backup "$cmd" ;;
         cleanup)   cmd_cleanup ;;
         check)     cmd_check ;;
         restore)   cmd_restore ;;
+        metrics)   cmd_metrics ;;
     esac
 }
 

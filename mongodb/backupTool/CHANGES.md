@@ -144,6 +144,34 @@ No hand-rolled mongodump/oplog tailing: PBM logical snapshots + PBM PITR.
     new full afterwards. `--dry-run` prints the validated plan; without `--yes`
     the replica set name must be typed (refused when not on a TTY).
 
+## Phase 5 - retention and metrics
+
+Retention (`cleanup`):
+
+- Runs only on the elected node (same election, no takeover); the original
+  script ran on every node.
+- The cutoff `today - RETENTION_DAYS` (00:00 UTC) is moved back to the start
+  of the newest full backup (base or logical) that started at/before it, and
+  `pbm cleanup -y --older-than <that time> --wait` runs. Chains are deleted
+  whole, never split; the full that covers the cutoff and its oplog slices
+  stay; the newest valid full is never deleted, even if backups stopped.
+  Example with the PBM 2.12.0 fixture and a 2026-09-28 cutoff: the base of
+  2026-09-28 starts at 00:00:45, so the 2026-09-27 chain (which covers
+  00:00:00-00:00:45) is kept and only the 48 backups of 09-25 and 09-26 go.
+- After the cleanup it verifies that the newest full is still listed.
+- `--dry-run` prints the plan, including which backups would be deleted.
+
+Metrics (optional, `METRICS_DIR`):
+
+- `pbm_backup_run_<command>.prom` (full, incr, cleanup): last run timestamp,
+  duration, success, skipped. Not written on `--dry-run`.
+- `pbm_backup_state.prom`: restoreTo and size of the newest backup of each
+  kind (base, incremental, logical), backups by status, PITR enabled/running,
+  oplog coverage/gaps/lag (logical scheme), pbm-agent health, member
+  eligibility, oplog window and replication lag per member.
+- Atomic writes (temp file + mv); a metrics failure never fails a backup.
+- New `metrics` command to refresh the state file from a frequent timer.
+
 ## Diffs of the replaced scripts
 
 <details>

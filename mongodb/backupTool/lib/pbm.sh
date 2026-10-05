@@ -193,3 +193,36 @@ pitr_coverage() {
               else . + {ok: true, reason: null} end
           end'
 }
+
+# ---------------------------------------------------------------------------
+# Retention (phase 5)
+# ---------------------------------------------------------------------------
+# retention_plan SNAPSHOTS_JSON RETENTION_CUTOFF_EPOCH - decide a SAFE cleanup
+# cutoff. Prints one JSON line:
+#   {"action":"cleanup","cutoff":N,"anchor":"<name>","newest":"<name>",
+#    "delete":["<name>",...]}
+#   {"action":"skip","reason":"..."}
+# A "full" is any successful backup with no source: physical/incremental base
+# or logical snapshot. The cutoff is moved back to the START of the newest
+# full that started at/before the retention cutoff (the anchor), so:
+#   - whole chains are deleted or kept, never split (a base is never removed
+#     while its incrementals stay, and the anchor keeps its PITR slices);
+#   - the newest valid full is never deleted, even if backups stopped
+#     running longer ago than the retention.
+retention_plan() {
+    jq -cn --argjson sn "$1" --argjson ret "$2" '
+        [ $sn[] | select(.status == "done" and (.src // "") == ""
+                         and (.type == "incremental" or .type == "physical" or .type == "logical")) ]
+        | sort_by(.name) as $fulls
+        | ($fulls | last) as $newest
+        | ([ $fulls[] | select((.name | fromdateiso8601) <= $ret) ] | last) as $anchor
+        | if $newest == null then
+            {action: "skip", reason: "no successful full backup exists: nothing is deleted"}
+          elif $anchor == null then
+            {action: "skip", reason: "every full backup is newer than the retention cutoff: nothing to delete"}
+          else
+            ($anchor.name | fromdateiso8601) as $cut
+            | {action: "cleanup", cutoff: $cut, anchor: $anchor.name, newest: $newest.name,
+               delete: [ $sn[] | select((.name | fromdateiso8601) < $cut) | .name ] | sort}
+          end'
+}

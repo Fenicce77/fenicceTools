@@ -23,6 +23,15 @@ WAIT_POLL_SEC=1
 WAIT_RUNNING_SEC=1
 EOT
 
+# Start from a clean environment: tunables inherited from the caller's shell
+# would change the scenarios.
+unset LOCAL_NODE_NAMES METRICS_DIR PREFERRED_NODES ALLOW_PRIMARY BACKUP_MODE \
+      MONGODB_VERSION MONGODB_EDITION RETENTION_DAYS PBM_LOCAL_ROOT LOG_DIR \
+      BACKUP_COMPRESSION BACKUP_COMPRESSION_LEVEL REQUIRED_STORAGE_TYPES \
+      OPLOG_INCR_MIN PITR_AUTOCONFIG EXPECTED_DUMP_SEC PBM_BIN MONGO_SHELL \
+      MOCK_STATUS MOCK_BACKUPS MOCK_BACKUPS_AFTER MOCK_RUNNING MOCK_NODE MOCK_RC \
+      MOCK_LIST MOCK_CONFIG MOCK_BUILDINFO MOCK_PBM_VERSION MOCK_DUMP_SEC
+
 export PATH="${ROOT}/tests/mock:$PATH"
 export MOCK_FIXTURES=$FIX MOCK_CALLS="$WORK/calls"
 export PBM_BACKUP_CONF="$WORK/conf" PBM_ENV_FILE="$WORK/env" LOCK_DIR=$WORK
@@ -351,10 +360,84 @@ check "restore without target -> rc 2"                                        2 
 MOCK_RC=1 check "pbm restore fails -> rc 1"                                   1 "pbm restore" "" -- restore 2026-10-02T16:15:05Z --yes
 check "restore --help"                                                        0 "" "" -- restore --help
 
-printf '\n[cleanup / CLI]\n'
-check "cleanup default retention"   0 "cleanup -y --older-than" "" -- cleanup
-check "cleanup --dry-run"           0 "" "cleanup -y" -- cleanup --dry-run
+printf '\n[phase 5: cleanup]\n'
+# Retention so that the cutoff is 2026-09-28T00:00:00Z whatever today is.
+R28=$(( ( $(jq -rn --arg d "$(date '+%Y-%m-%d')T00:00:00Z" '$d | fromdateiso8601') - $(jq -rn '"2026-09-28T00:00:00Z" | fromdateiso8601') ) / 86400 ))
+LOCAL_NODE_NAMES=$N3 EXPECT_OUT="aligned to the start of full 2026-09-27T00:00:45Z" \
+    check "cutoff mid-day -> aligned to the chain that covers it"            0 "cleanup -y --older-than 2026-09-27T00:00:45 --wait" "" -- cleanup -r "$R28"
+LOCAL_NODE_NAMES=$N3 EXPECT_OUT="48 backup(s) older than" \
+    check "...deletes only the 2 older whole chains"                          0 "" "" -- cleanup -r "$R28" --dry-run
+LOCAL_NODE_NAMES=$N3 EXPECT_OUT="Newest full 2026-10-02T00:00:45Z is still available" \
+    check "verifies the newest full survived"                                 0 "cleanup -y" "" -- cleanup -r "$R28"
+LOCAL_NODE_NAMES=$N3 \
+    check "retention 0 -> keeps the newest full and its chain"                0 "cleanup -y --older-than 2026-10-02T00:00:45 --wait" "" -- cleanup -r 0
+LOCAL_NODE_NAMES=$N3 EXPECT_OUT="every full backup is newer" \
+    check "huge retention -> nothing to delete"                               0 "" "cleanup -y" -- cleanup -r 3650
+MOCK_BACKUPS=$WORK/backups-empty.json LOCAL_NODE_NAMES=$N2 EXPECT_OUT="no successful full backup exists" \
+    check "no full at all -> nothing deleted"                                 0 "" "cleanup -y" -- cleanup
+MOCK_BACKUPS_AFTER=$WORK/backups-empty.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="MISSING after cleanup" \
+    check "newest full vanished -> rc 1"                                      1 "cleanup -y" "" -- cleanup -r "$R28"
+LOCAL_NODE_NAMES=$N2 check "standby node does not clean"                      0 "" "cleanup -y" -- cleanup
+LOCAL_NODE_NAMES=$N1 check "primary does not clean"                           0 "" "cleanup -y" -- cleanup
+LOCAL_NODE_NAMES=$N3 check "cleanup --dry-run"                                0 "" "cleanup -y" -- cleanup --dry-run
+LOCAL_NODE_NAMES=$N3 METRICS_DIR=$WORK/m-dry check "--dry-run writes no metrics" 0 "" "cleanup -y" -- cleanup --dry-run
+[[ ! -e $WORK/m-dry/pbm_backup_run_cleanup.prom ]] && { pass=$((pass + 1)); printf '  \033[32mPASS\033[0m %s\n' "...no run metrics file"; } \
+    || { fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s\n' "...no run metrics file"; }
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json LOCAL_NODE_NAMES=$N3 \
+    check "logical: newest (only) full is kept"                               0 "cleanup -y --older-than" "" -- cleanup -r 0
 check "cleanup invalid retention"   2 "" "cleanup -y" -- cleanup -r abc
+
+printf '\n[phase 5: metrics]\n'
+M=$WORK/metrics
+mcheck() { # name file regex
+    if grep -qE -- "$3" "$M/$2" 2>/dev/null; then
+        pass=$((pass + 1)); printf '  \033[32mPASS\033[0m %s\n' "$1"
+    else
+        fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s (%s !~ %s)\n' "$1" "$2" "$3"; sed 's/^/       | /' "$M/$2" 2>/dev/null
+    fi
+}
+fmtcheck() { # every sample line must be valid exposition format
+    local bad
+    bad=$(cat "$M"/*.prom | grep -v '^#' | grep -vE '^[a-z_]+\{[a-z_]+="[^"]*"(,[a-z_]+="[^"]*")*\} -?[0-9]+(\.[0-9]+)?$' || true)
+    if [[ -z $bad ]]; then
+        pass=$((pass + 1)); printf '  \033[32mPASS\033[0m %s\n' "$1"
+    else
+        fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; printf '%s\n' "$bad" | sed 's/^/       | /'
+    fi
+}
+METRICS_DIR=$M LOCAL_NODE_NAMES=$N3 check "full writes metrics"               0 "$BASE" "" -- full
+mcheck "run: success=1"            pbm_backup_run_full.prom 'pbm_backup_run_success\{.*command="full",scheme="physical"\} 1$'
+mcheck "run: skipped=0"            pbm_backup_run_full.prom 'pbm_backup_run_skipped\{.*\} 0$'
+mcheck "state: last base restoreTo" pbm_backup_state.prom 'pbm_backup_last_restore_timestamp_seconds\{rs="gcssrs01",node="[^"]+",kind="base"\} 1790899247$'
+mcheck "state: last incremental"   pbm_backup_state.prom 'kind="incremental"\} 1790957708$'
+mcheck "state: snapshots by status" pbm_backup_state.prom 'pbm_backup_snapshots\{.*status="done"\} 185$'
+mcheck "state: agents"             pbm_backup_state.prom 'pbm_agent_ok\{.*member="mongocluster-node02.example.private:27017",role="S"\} 1$'
+mcheck "state: oplog window"       pbm_backup_state.prom 'pbm_oplog_window_seconds\{.*member="mongocluster-node03.example.private:27017"\} 86400$'
+mcheck "state: eligibility"        pbm_backup_state.prom 'pbm_backup_member_eligible\{.*member="mongocluster-node01.example.private:27017"\} 0$'
+fmtcheck "exposition format is valid"
+METRICS_DIR=$M LOCAL_NODE_NAMES=$N2 check "standby run"                       0 "" "backup --type" -- incr
+mcheck "standby: skipped=1"        pbm_backup_run_incr.prom 'pbm_backup_run_skipped\{.*command="incr".*\} 1$'
+METRICS_DIR=$M LOCAL_NODE_NAMES=$N3 MOCK_RC=1 check "failed run"              1 "$INCR" "" -- incr
+mcheck "failed: success=0"         pbm_backup_run_incr.prom 'pbm_backup_run_success\{.*command="incr".*\} 0$'
+METRICS_DIR=$M LOCAL_NODE_NAMES=$N3 check "cleanup writes metrics"            0 "cleanup -y" "" -- cleanup -r "$R28"
+mcheck "cleanup: success=1"        pbm_backup_run_cleanup.prom 'pbm_backup_run_success\{.*command="cleanup".*\} 1$'
+lcfg true 360
+rm -f "$M"/*.prom
+METRICS_DIR=$M MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/status-pitr-run.json \
+    MOCK_LIST=$WORK/list-ok.json MOCK_CONFIG=$WORK/pbmconf check "metrics command (logical, PITR)" 0 "" "backup --type" -- metrics
+mcheck "pitr enabled"              pbm_backup_state.prom 'pbm_pitr_enabled\{.*\} 1$'
+mcheck "pitr coverage ok"          pbm_backup_state.prom 'pbm_pitr_coverage_ok\{.*\} 1$'
+mcheck "pitr gaps 0"               pbm_backup_state.prom 'pbm_pitr_gaps\{.*\} 0$'
+mcheck "pitr lag ~1200s"           pbm_backup_state.prom 'pbm_pitr_lag_seconds\{.*\} 1[12][0-9][0-9]$'
+mcheck "last logical"              pbm_backup_state.prom "kind=\"logical\"\\} ${LRESTORE}\$"
+fmtcheck "exposition format is valid (logical)"
+[[ ! -e $M/pbm_backup_run_metrics.prom ]] && { pass=$((pass + 1)); printf '  \033[32mPASS\033[0m %s\n' "metrics command writes no run file"; } \
+    || { fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s\n' "metrics command writes no run file"; }
+check "metrics without METRICS_DIR -> rc 2"                                   2 "" "" -- metrics
+LOCAL_NODE_NAMES=$N3 METRICS_DIR=/dev/null/nope EXPECT_OUT="METRICS" \
+    check "unwritable METRICS_DIR never fails the backup"                     0 "$BASE" "" -- full
+
+printf '\n[CLI]\n'
 BACKUP_MODE=bogus check "invalid BACKUP_MODE" 2 "" "" -- check
 check "help"                        0 "" "" -- --help
 check "check --help"                0 "" "" -- check --help
