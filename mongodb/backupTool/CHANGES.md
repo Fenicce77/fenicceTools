@@ -194,6 +194,16 @@ Metrics (optional, `METRICS_DIR`):
   names.
 - `README.md`.
 
+## Fixes after checking the PBM 2.12.0 source
+
+- `pbm config KEY` prints `[KEY=VALUE]` in text mode, so the value was never
+  matched: on the logical scheme every run re-applied `pbm config --set`,
+  reported false mismatches and could not detect `pitr.compression=none`.
+  Now read with `-o json` (`{"key","value"}`). The test mock reproduces the
+  real output, and the old parser fails three scenarios.
+- Confirmed from the source: PITR range JSON (`pbm list`, `pbm status`) and
+  the `YYYY-MM-DDTHH:MM:SS` UTC format of `--older-than` / `--time`.
+
 ## Diffs of the replaced scripts
 
 <details>
