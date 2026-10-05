@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#
+# pbm-deletion - compatibility wrapper kept so existing systemd units
+# (ExecStart=/etc/sysconfig/pbm-deletion) keep working.
+# Retention purge (pbm cleanup --older-than).
+#
+# All logic lives in pbm-backup; run "pbm-backup cleanup --help" for details.
+set -euo pipefail
+exec "${PBM_BACKUP_BIN:-/usr/local/bin/pbm-backup}" cleanup "$@"

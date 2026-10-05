@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#
+# pbm-physical-full-base - compatibility wrapper kept so existing systemd units
+# (ExecStart=/etc/sysconfig/pbm-physical-full-base) keep working.
+# Daily physical incremental BASE backup.
+#
+# All logic lives in pbm-backup; run "pbm-backup full --help" for details.
+set -euo pipefail
+exec "${PBM_BACKUP_BIN:-/usr/local/bin/pbm-backup}" full "$@"

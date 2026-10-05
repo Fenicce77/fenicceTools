@@ -1,0 +1,18 @@
+#mongodb-uri: "mongodb://pbmuser:svGpQlVZgnTTT9Dnv38KKAxX@gcss-mongodbcluster01-node01:27017/?authSource=admin&replicaSet=gcssrs01"
+mongodb-uri: "mongodb://pbmuser:pbmPassword@gmongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName&readConcernLevel=local&w=1"
+#pitr:
+#  enabled: true 
+#  oplogSpanMin: 60
+#  compression: gzip
+#  compressionLevel: 5
+backup:
+  dump-parallel-collections: 4
+  priority:
+#    "gcss-mongodbcluster01-node01:27017": 0.5 
+#    "gcss-mongodbcluster01-node02:27017": 3.0 
+#    "gcss-mongodbcluster01-node03:27017": 1.0
+
+
+log:
+  path: "/data/log/pbm/pbm.log"
+level: "D"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Run pbm-physical-full-base daily at 00:00:01
+
+[Timer]
+# This specifies the exact time: any year/month/day at midnight and one second
+OnCalendar=*-*-* 00:00:01
+# Ensures the job runs shortly after boot if the system was off at the scheduled time
+Persistent=true
+Unit=pbm-physical-full-base.service
+
+[Install]
+# This ensures the timer starts when the system boots
+WantedBy=timers.target

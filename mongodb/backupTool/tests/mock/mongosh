@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#
+# Mock mongosh for tests.
+#   buildInfo eval        -> $MOCK_BUILDINFO
+#                            (default: PSMDB 8.0.17-6, like the fixtures)
+#   node probe (directConnection URI) -> $MOCK_PROBES/<short-host>.json;
+#                            a missing file simulates an unreachable mongod.
+set -euo pipefail
+uri='' js=''
+while (( $# > 0 )); do
+    case $1 in
+        --quiet) ;;
+        --eval) js=$2; shift ;;
+        *) uri=$1 ;;
+    esac
+    shift
+done
+case $js in
+    *buildInfo*)
+        if [[ -n ${MOCK_BUILDINFO:-} ]]; then
+            printf '%s\n' "$MOCK_BUILDINFO"
+        else
+            printf '%s\n' '{"version":"8.0.17-6","psmdbVersion":"8.0.17-6","modules":[]}'
+        fi ;;
+    *replSetGetStatus*)
+        host=${uri#*://}; host=${host#*@}; host=${host%%/*}; host=${host%%:*}; short=${host%%.*}
+        f="${MOCK_PROBES:-/nonexistent}/${short}.json"
+        if [[ -r $f ]]; then
+            cat "$f"
+        else
+            printf 'MongoServerSelectionError: connect ECONNREFUSED %s:27017\n' "$host" >&2
+            exit 1
+        fi ;;
+    *)
+        printf 'mock mongosh: unsupported eval\n' >&2
+        exit 99 ;;
+esac

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# Mock pbm CLI for tests. Serves JSON fixtures and records every call.
+#   MOCK_CALLS     file where calls are appended (required)
+#   MOCK_FIXTURES  fixtures directory (required)
+#   MOCK_STATUS    full "pbm status -o json" (default: status-all-agents-ok.json)
+#   MOCK_BACKUPS   "pbm status -s backups -o json" (default: status-backups.json)
+#   MOCK_BACKUPS_AFTER  served instead once a "pbm backup" call was recorded
+#                  (simulates the new backup showing up in the list)
+#   MOCK_RUNNING   JSON returned by "status -s running" (default: idle fixture)
+#   MOCK_NODE      node reported by describe-backup for backups other than the
+#                  fixture base (i.e. "new" backups); default: fixture value
+#   MOCK_PBM_VERSION  version reported by "pbm version" (default 2.12.0)
+#   MOCK_RC        exit code of backup/cleanup (default 0)
+set -euo pipefail
+printf 'pbm %s\n' "$*" >>"$MOCK_CALLS"
+case $1 in
+    version)
+        printf 'Version:   %s\nPlatform:  linux/amd64\nGitCommit: mock\n' "${MOCK_PBM_VERSION:-2.12.0}" ;;
+    status)
+        if [[ " $* " == *" -s running "* ]]; then
+            if [[ -n ${MOCK_RUNNING:-} ]]; then printf '%s\n' "$MOCK_RUNNING"
+            else cat "$MOCK_FIXTURES/status-running-idle.json"; fi
+        elif [[ " $* " == *" -s backups "* ]]; then
+            if [[ -n ${MOCK_BACKUPS_AFTER:-} ]] && grep -q '^pbm backup ' "$MOCK_CALLS"; then
+                cat "$MOCK_BACKUPS_AFTER"
+            else
+                cat "${MOCK_BACKUPS:-$MOCK_FIXTURES/status-backups.json}"
+            fi
+        else
+            cat "${MOCK_STATUS:-$MOCK_FIXTURES/status-all-agents-ok.json}"
+        fi ;;
+    describe-backup)
+        jq --arg n "$2" --arg node "${MOCK_NODE:-}" \
+            '(if .name != $n then .opid = "mock-opid-\($n)"
+                 | (if $node != "" then .replsets[].node = $node else . end)
+              else . end)
+             | .name = $n' \
+            "$MOCK_FIXTURES/describe-backup-base.json" ;;
+    backup|cleanup)
+        exit "${MOCK_RC:-0}" ;;
+    *)
+        printf 'mock pbm: unsupported command %s\n' "$1" >&2
+        exit 99 ;;
+esac

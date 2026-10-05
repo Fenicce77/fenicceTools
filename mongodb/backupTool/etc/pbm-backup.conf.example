@@ -1,0 +1,68 @@
+# /etc/sysconfig/pbm-backup - tunables for pbm-backup (sourced as bash).
+# Every variable is optional; the values below are the defaults.
+# PBM_MONGODB_URI is NOT set here: it is read from /etc/sysconfig/pbm-conf
+# (override with PBM_ENV_FILE or --env-file).
+
+# Local working directory and log directory.
+#PBM_LOCAL_ROOT="/data/backup/pbm"
+#LOG_DIR="${PBM_LOCAL_ROOT}/logs"
+
+# Days of backups to keep (pbm cleanup --older-than today-N).
+#RETENTION_DAYS=7
+
+# Max seconds to wait for a running PBM operation before starting a backup,
+# and polling interval while waiting.
+#WAIT_RUNNING_SEC=1800
+#WAIT_POLL_SEC=30
+
+# A base backup completed by another node within this many seconds before
+# this run started makes "full" skip (avoids duplicate bases when the timer
+# runs on every node).
+#DEDUP_WINDOW_SEC=600
+
+# Extra names this node is known by in the replica set config, space separated,
+# when they differ from hostname / hostname -s / hostname -f.
+#LOCAL_NODE_NAMES="mongodbcluster-node01 10.0.0.11"
+
+# Lock directory (default: /run/lock if writable, else $TMPDIR or /tmp).
+#LOCK_DIR="/run/lock"
+
+# Explicit binary paths (default: looked up in PATH).
+#PBM_BIN="/usr/bin/pbm"
+#MONGO_SHELL="/usr/bin/mongosh"
+
+# Colors: auto (TTY only) | always | never. NO_COLOR is also honored.
+#PBM_BACKUP_COLOR=auto
+
+# ---------------------------------------------------------------------------
+# Phase 2 - detection and strategy
+# ---------------------------------------------------------------------------
+# auto: PSMDB with physical incremental support -> physical; anything else ->
+# logical (phase 4). Force with "physical" or "logical".
+#BACKUP_MODE=auto
+
+# Skip buildInfo detection (both must be set). Edition: psmdb|community|enterprise
+#MONGODB_VERSION="8.0.17-6"
+#MONGODB_EDITION="psmdb"
+
+# ---------------------------------------------------------------------------
+# Phase 3 - node election (every node runs the timer; one launches)
+# ---------------------------------------------------------------------------
+# Order after the chain owner (node of the last base), space separated.
+# Nodes not listed follow, sorted by name.
+#PREFERRED_NODES="mongocluster-node03 mongocluster-node02"
+
+# Never back up on the PRIMARY unless this is true (last resort only).
+#ALLOW_PRIMARY=false
+
+# A node is "overloaded" (not eligible) above any of these thresholds.
+#MAX_REPL_LAG_SEC=60
+#MAX_QUEUE=50              # serverStatus globalLock.currentQueue.total
+#MAX_WT_DIRTY_PCT=20       # WiredTiger tracked dirty bytes / cache size
+
+# Standby rank N waits N x FALLBACK_DELAY_SEC and takes over only if no
+# backup was started meanwhile. 0 = standbys never take over.
+#FALLBACK_DELAY_SEC=120
+
+# Connection timeout for each per-node health probe (directConnection=true).
+#PROBE_TIMEOUT_MS=5000

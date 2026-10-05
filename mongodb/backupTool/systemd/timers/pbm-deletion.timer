@@ -1,0 +1,13 @@
+[Unit]
+Description=Run pbm-delete for removing older backups at 00:40:00
+
+[Timer]
+# This specifies the exact time: any year/month/day at midnight and one second
+OnCalendar=*-*-* 00:40:00
+# Ensures the job runs shortly after boot if the system was off at the scheduled time
+Persistent=true
+Unit=pbm-deletion.service
+
+[Install]
+# This ensures the timer starts when the system boots
+WantedBy=timers.target

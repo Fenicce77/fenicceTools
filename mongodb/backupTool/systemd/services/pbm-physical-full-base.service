@@ -1,0 +1,16 @@
+# Daily PBM MongoDB Full Base Backup
+[Unit]
+Description=Daily PBM MongoDB Full Base Backup
+After=time-sync.target network.target
+
+[Service]
+EnvironmentFile=-/etc/sysconfig/pbm-agent
+#Type=simple
+Type=oneshot
+User=root
+Group=root
+PermissionsStartOnly=true
+ExecStart=/etc/sysconfig/pbm-physical-full-base
+
+[Install]
+WantedBy=multi-user.target

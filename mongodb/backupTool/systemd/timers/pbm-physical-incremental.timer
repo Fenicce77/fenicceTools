@@ -1,0 +1,13 @@
+[Unit]
+Description=Run pbm-physical-incremental daily every hour since 01:00:00
+
+[Timer]
+# This specifies the exact time: any year/month/day at midnight and one second
+OnCalendar=*-*-* 6/1:15:00
+# Ensures the job runs shortly after boot if the system was off at the scheduled time
+Persistent=true
+Unit=pbm-physical-incremental.service
+
+[Install]
+# This ensures the timer starts when the system boots
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+# PBM MongoDB Old Backups Deletion Service
+[Unit]
+Description=PBM MongoDB Old Backups Deletion Service
+After=time-sync.target network.target
+
+[Service]
+EnvironmentFile=-/etc/sysconfig/pbm-agent
+#Type=simple
+Type=oneshot
+User=root
+Group=root
+PermissionsStartOnly=true
+ExecStart=/etc/sysconfig/pbm-deletion
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,555 @@
+#!/usr/bin/env bash
+#
+# pbm-backup - Generic Percona Backup for MongoDB (PBM 2.x) backup runner.
+#
+#   Phase 1: shared library, logging, locking, PBM JSON metadata.
+#   Phase 2: MongoDB version/edition detection and PBM compatibility checks.
+#   Phase 3: node election (stay on the owner node, never the primary,
+#            fail over to a healthy secondary).
+#
+# Run "pbm-backup --help" for usage.
+
+set -euo pipefail
+
+PROG=pbm-backup
+VERSION=0.3.0
+
+# ---------------------------------------------------------------------------
+# Locate and load libraries
+# ---------------------------------------------------------------------------
+_here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+LIB_DIR=''
+for _d in "${PBM_BACKUP_LIB:-}" "${_here}/../lib/pbm-backup" "${_here}/../lib"; do
+    if [[ -n $_d && -r ${_d}/common.sh ]]; then
+        LIB_DIR=$_d
+        break
+    fi
+done
+if [[ -z $LIB_DIR ]]; then
+    printf '%s: cannot find library directory (set PBM_BACKUP_LIB)\n' "$PROG" >&2
+    exit 2
+fi
+for _f in common mongo pbm compat topology; do
+    # shellcheck disable=SC1090
+    . "${LIB_DIR}/${_f}.sh"
+done
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+usage() {
+    cat <<EOF
+${C_BLD}${PROG} ${VERSION}${C_OFF} - Percona Backup for MongoDB (PBM 2.x) backup runner
+
+${C_BLD}USAGE${C_OFF}
+    ${PROG} [OPTIONS] COMMAND [COMMAND OPTIONS]
+    ${PROG} COMMAND --help
+
+${C_BLD}COMMANDS${C_OFF}
+    full        Daily physical incremental BASE backup (PSMDB).
+    incr        Hourly physical incremental backup on top of the last base.
+    cleanup     Delete backups and PITR chunks older than the retention.
+    check       Read-only report: versions, compatibility, node election and
+                what this node would do. Changes nothing.
+
+    full/incr run from a systemd timer on EVERY node. All nodes compute the
+    same election and only one launches the backup:
+      - the node that took the last base (owner) keeps the chain;
+      - if it is down, its pbm-agent is not ok, or it is overloaded, the
+        next healthy secondary takes over and starts a new base;
+      - the PRIMARY is never used (unless ALLOW_PRIMARY=true).
+
+${C_BLD}OPTIONS${C_OFF}
+    -c, --config FILE      Tunables file      (default: /etc/sysconfig/pbm-backup)
+    -e, --env-file FILE    PBM_MONGODB_URI file (default: /etc/sysconfig/pbm-conf)
+    -n, --dry-run          Show what would be done; do not run pbm backup/cleanup
+    -f, --force            Skip election and duplicate-base guards
+        --no-color         Disable colored output (NO_COLOR is also honored)
+    -h, --help             Show this help
+    -V, --version          Show version
+
+${C_BLD}EXIT CODES${C_OFF}
+    0  success, or skipped on purpose (another node's turn, already done)
+    1  backup/cleanup failed, incompatible versions, or no eligible node
+    2  usage or configuration error
+
+${C_BLD}EXAMPLES${C_OFF}
+    # What would happen on this node right now?
+    ${PROG} check
+
+    # Daily base backup, as run by pbm-physical-full-base.service
+    ${PROG} full
+
+    # Simulate the hourly incremental
+    ${PROG} incr --dry-run
+
+    # Test with personal config files
+    ${PROG} -c /home/rmateos/pbm-backup.conf -e /home/rmateos/pbm-conf check
+
+    # Purge backups older than 14 days
+    ${PROG} cleanup --retention-days 14
+EOF
+}
+
+usage_full() {
+    cat <<EOF
+${C_BLD}${PROG} full${C_OFF} - daily physical incremental BASE backup
+
+Runs "pbm backup --type incremental --base --wait" on the elected node.
+
+Steps:
+  1. Preflight: detect MongoDB version/edition and PBM version, check the
+     compatibility matrix, require PSMDB and PITR disabled.
+  2. Election: probe every member (agent, reachability, replication lag,
+     queued operations, WiredTiger dirty cache). The owner of the last base
+     goes first, then PREFERRED_NODES, then by name. Primary excluded.
+  3. Only rank #0 runs. Rank #N waits N x FALLBACK_DELAY_SEC (default 120s)
+     and takes over only if nobody started a backup meanwhile.
+  4. Skips if another node completed a base within DEDUP_WINDOW_SEC.
+
+Log file: \${LOG_DIR}/incrbase.log
+
+${C_BLD}EXAMPLES${C_OFF}
+    ${PROG} full
+    ${PROG} full --dry-run
+    sudo -u rmateos ${PROG} -c /home/rmateos/pbm-backup.conf full --force
+EOF
+}
+
+usage_incr() {
+    cat <<EOF
+${C_BLD}${PROG} incr${C_OFF} - hourly physical incremental backup
+
+Same preflight and election as "full". Then, on the elected node:
+  - elected node is the owner of the last base -> incremental backup
+    ("pbm backup --type incremental --wait");
+  - owner unavailable, or no base exists yet  -> NEW BASE on this node
+    ("--base"), because an incremental chain cannot move between nodes.
+
+Writes the last base info to \${PBM_LOCAL_ROOT}/<replset>.lastbackup.index.
+Log file: \${LOG_DIR}/incr.log
+
+${C_BLD}EXAMPLES${C_OFF}
+    ${PROG} incr
+    ${PROG} incr --dry-run
+    ${PROG} incr --force      # skip the election, always an incremental
+EOF
+}
+
+usage_cleanup() {
+    cat <<EOF
+${C_BLD}${PROG} cleanup${C_OFF} - retention purge
+
+Runs "pbm cleanup -y --older-than <today - RETENTION_DAYS> --wait".
+
+${C_BLD}OPTIONS${C_OFF}
+    -r, --retention-days N   Override RETENTION_DAYS (default 7)
+
+Log file: \${LOG_DIR}/deletion.log
+
+${C_BLD}EXAMPLES${C_OFF}
+    ${PROG} cleanup
+    ${PROG} cleanup --retention-days 14 --dry-run
+EOF
+}
+
+usage_check() {
+    cat <<EOF
+${C_BLD}${PROG} check${C_OFF} - read-only diagnostics
+
+Prints the detected versions, compatibility findings, PITR state, the
+election table (rank, role, owner, lag, queue, dirty cache, eligibility)
+and what "full" and "incr" would do on this node. Takes no backup and
+writes no log file. Exit code 1 if a backup would fail on this cluster.
+
+${C_BLD}EXAMPLES${C_OFF}
+    ${PROG} check
+    ${PROG} --no-color check | tee /tmp/pbm-check.txt
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Common setup
+# ---------------------------------------------------------------------------
+# setup_run LOGFILE LABEL - prepare log file/label and binaries.
+# LOGFILE may be empty (stdout only).
+setup_run() {
+    LOG_LABEL=$2
+    LOG_FILE=''
+    if [[ -n $1 ]]; then
+        if mkdir -p "$LOG_DIR" 2>/dev/null && touch "${LOG_DIR}/$1" 2>/dev/null; then
+            LOG_FILE="${LOG_DIR}/$1"
+        else
+            log WARN "$LOG_LABEL" "Cannot write to ${LOG_DIR}/$1; logging to stdout only"
+        fi
+    fi
+    require_cmd jq
+    pbm_init
+}
+
+# lock_or_skip NAME LABEL
+lock_or_skip() {
+    if ! acquire_lock "$1"; then
+        log WARN "$2" "Another '${1}' run is already in progress on this node. Exiting"
+        exit 0
+    fi
+}
+
+# recent_base_since EPOCH - true if a base backup started at/after EPOCH is done.
+recent_base_since() {
+    local since=$1 json ts
+    json=$(last_done_backup_json base) || return 1
+    [[ -n $json ]] || return 1
+    ts=$(printf '%s\n' "$json" | jq -r '.start_ts // 0')
+    is_uint "$ts" && (( ts >= since ))
+}
+
+# ---------------------------------------------------------------------------
+# Phase 2: preflight
+# ---------------------------------------------------------------------------
+# preflight LABEL STATUS_JSON - detect versions, check compatibility and the
+# physical-scheme rules. Sets DETECTED (JSON) and STRATEGY.
+# Returns 1 if a backup must not run.
+DETECTED='' STRATEGY=''
+preflight() {
+    local L=$1 status=$2 mv ed pv errors=0 level msg agents
+
+    mongo_init
+    if ! DETECTED=$(detect_mongodb_json) || [[ -z $DETECTED ]]; then
+        log ERROR "${L}[PRECHECK][DETECT]" "Cannot read buildInfo with ${MONGO_SHELL##*/}. Set MONGODB_VERSION and MONGODB_EDITION to skip detection"
+        return 1
+    fi
+    mv=$(printf '%s\n' "$DETECTED" | jq -r '.version')
+    ed=$(printf '%s\n' "$DETECTED" | jq -r '.edition')
+    if ! pv=$(detect_pbm_version) || [[ -z $pv ]]; then
+        log ERROR "${L}[PRECHECK][DETECT]" "Cannot read the PBM version ('pbm version' failed)"
+        return 1
+    fi
+    STRATEGY=$(resolve_strategy "$ed" "$mv")
+    log INFO "${L}[PRECHECK][DETECT]" "MongoDB ${mv} (${ed}, from $(printf '%s\n' "$DETECTED" | jq -r '.source')), PBM CLI ${pv}, BACKUP_MODE=${BACKUP_MODE} -> strategy ${STRATEGY}"
+
+    while IFS=$'\t' read -r level msg; do
+        [[ -n $level ]] || continue
+        case $level in
+            ERROR) errors=$((errors + 1)); log ERROR "${L}[PRECHECK][COMPAT]" "$msg" ;;
+            WARN)  log WARN "${L}[PRECHECK][COMPAT]" "$msg" ;;
+            *)     log OK "${L}[PRECHECK][COMPAT]" "$msg" ;;
+        esac
+    done <<EOF
+$(compat_report "$mv" "$ed" "$pv" "$STRATEGY")
+EOF
+
+    # Agents on a different version than the CLI, or not ok.
+    agents=$(printf '%s\n' "$status" | jq -r --arg v "v${pv}" '
+        .cluster[]?.nodes[]?
+        | if (.ok | not) then "\(.host): pbm-agent NOT ok"
+          elif .agent != $v then "\(.host): pbm-agent \(.agent) differs from CLI \($v)"
+          else empty end')
+    if [[ -n $agents ]]; then
+        while IFS= read -r msg; do
+            log WARN "${L}[PRECHECK][AGENTS]" "$msg"
+        done <<EOF
+$agents
+EOF
+    fi
+
+    if [[ $STRATEGY != physical ]]; then
+        errors=$((errors + 1))
+        log ERROR "${L}[PRECHECK][STRATEGY]" "Strategy '${STRATEGY}' (logical backup + oplog slicing for Community) is not implemented yet (phase 4). full/incr only run physical backups on PSMDB"
+    fi
+    if [[ $(printf '%s\n' "$status" | jq -r '.pitr.conf // false') == true ]]; then
+        errors=$((errors + 1))
+        log ERROR "${L}[PRECHECK][PITR]" "PITR is enabled, but the physical scheme runs without PITR. Disable it: pbm config --set pitr.enabled=false"
+    fi
+    (( errors == 0 ))
+}
+
+# ---------------------------------------------------------------------------
+# Phase 3: election
+# ---------------------------------------------------------------------------
+# run_election LABEL STATUS_JSON OWNER - sets ELECTION (JSON) and SELF (JSON
+# entry of this node, may be empty). Logs the table. Returns 1 on error.
+ELECTION='' SELF=''
+run_election() {
+    local L=$1 status=$2 owner=$3 line
+    if ! ELECTION=$(elect_nodes "$status" "$owner"); then
+        log ERROR "${L}[ELECTION]" "Cannot build the candidate list (sharded clusters are not supported yet)"
+        return 1
+    fi
+    while IFS= read -r line; do
+        log INFO "${L}[ELECTION]" "$line"
+    done <<EOF
+$(election_table "$ELECTION")
+EOF
+    SELF=$(self_entry "$ELECTION")
+}
+
+# election_decision - print one of:
+#   run            this node is rank #0
+#   standby N      this node is eligible with rank N > 0
+#   skip REASON    this node is not eligible
+#   none           no eligible node at all
+#   unknown        this host is not in the member list
+election_decision() {
+    if [[ $(printf '%s\n' "$ELECTION" | jq '[.[] | select(.eligible)] | length') == 0 ]]; then
+        printf 'none\n'
+    elif [[ -z $SELF ]]; then
+        printf 'unknown\n'
+    else
+        printf '%s\n' "$SELF" | jq -r '
+            if .eligible | not then "skip \(.reason)"
+            elif .rank == 0 then "run"
+            else "standby \(.rank)" end'
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Physical backup flow (full / incr)
+# ---------------------------------------------------------------------------
+run_physical() {
+    local kind=$1 L title logfile
+    case $kind in
+        full) L='[PSMB][BACKUP][BASE][INCREMENTAL]' title='MongoDB Base Incremental Backup' logfile=incrbase.log ;;
+        incr) L='[PSMB][BACKUP][INCREMENTAL]'       title='MongoDB Incremental Backup'      logfile=incr.log ;;
+    esac
+    local rc=0 started status base owner='' decision rank action replset index json node elected
+
+    setup_run "$logfile" "$L"
+    log INFO "${L}[INIT]" "${title} Service Initiating"
+    lock_or_skip "$kind" "${L}[INIT]"
+    started=$(now_epoch)
+    LOG_LABEL="${L}[PRECHECK]"
+
+    status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+    if ! preflight "$L" "$status"; then
+        log ERROR "${L}[PRECHECK]" "Preflight failed. No backup taken"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 1
+    fi
+
+    log INFO "${L}[PRECHECK]" "Checking Last Backup Ran Info"
+    base=$(last_done_backup_json base) || die "Cannot read backup list from PBM (pbm status / describe-backup failed)"
+    if [[ -n $base ]]; then
+        owner=$(printf '%s\n' "$base" | jq -r '.nodes[0] // empty')
+        log INFO "${L}[PBM][PRECHECK][LASTBACKUP]" "PBM - PRECHECK - Last MongoDB Base Backup Info: [$(backup_summary "$base")]"
+        replset=$(uri_param "$PBM_MONGODB_URI" replicaSet)
+        index="${PBM_LOCAL_ROOT}/${replset:-default}.lastbackup.index"
+        if mkdir -p "$PBM_LOCAL_ROOT" 2>/dev/null; then
+            printf '%s\n' "$base" >"$index" 2>/dev/null || log WARN "${L}[PRECHECK]" "Cannot write ${index}"
+        fi
+    else
+        log WARN "${L}[PBM][PRECHECK][LASTBACKUP]" "No successful base backup found"
+    fi
+
+    # --- Election ----------------------------------------------------------
+    if [[ $FORCE == 1 ]]; then
+        log WARN "${L}[ELECTION]" "--force: election skipped, running on this node"
+        decision=run
+    else
+        run_election "$L" "$status" "$owner" || { log INFO "${L}[END]" "${title} Service Ended"; return 1; }
+        decision=$(election_decision)
+    fi
+    elected=$(printf '%s\n' "$ELECTION" | jq -r '[.[] | select(.rank == 0)][0].host // "none"' 2>/dev/null || printf 'none')
+
+    case $decision in
+        none)
+            log ERROR "${L}[ELECTION]" "No eligible node (all secondaries down, overloaded or without a healthy pbm-agent). No backup taken"
+            rc=1 ;;
+        unknown)
+            log ERROR "${L}[ELECTION]" "This host ($(hostname)) is not in the replica set member list reported by PBM. Set LOCAL_NODE_NAMES in the config"
+            rc=1 ;;
+        skip\ *)
+            log INFO "${L}[ELECTION]" "This node is not eligible (${decision#skip }). Elected node: ${elected}. Exiting" ;;
+        standby\ *)
+            rank=${decision#standby }
+            if (( FALLBACK_DELAY_SEC == 0 )); then
+                log INFO "${L}[ELECTION]" "Standby #${rank}; elected node is ${elected}. Exiting"
+                decision=skip
+            else
+                log INFO "${L}[ELECTION]" "Standby #${rank}; giving ${elected} $(( rank * FALLBACK_DELAY_SEC ))s to start the backup"
+                sleep $(( rank * FALLBACK_DELAY_SEC ))
+                if pbm_activity_since $(( started - 5 )); then
+                    log INFO "${L}[ELECTION]" "A higher-ranked node started the backup. Exiting"
+                    decision=skip
+                else
+                    log WARN "${L}[ELECTION][TAKEOVER]" "No backup was started by higher-ranked node(s). Taking over on this node"
+                    decision=run
+                fi
+            fi ;;
+    esac
+    if [[ $decision != run ]]; then
+        log INFO "${L}[END]" "${title} Service Ended"
+        return "$rc"
+    fi
+
+    # --- What to run -------------------------------------------------------
+    action=base
+    if [[ $kind == incr ]]; then
+        if [[ -z $base ]]; then
+            log WARN "${L}[CHAIN]" "No base backup exists yet: starting a new chain with a base backup"
+        elif [[ $FORCE == 1 ]] || [[ $(printf '%s\n' "$SELF" | jq -r '.owner') == true ]]; then
+            action=incr
+            log OK "${L}[CHECKINFO]" "Last MongoDB Base Backup Ran in current Node. PBM Incremental Backup will be Run!!"
+        else
+            log WARN "${L}[CHAIN][RESTART]" "Chain owner ${owner} is not available ($(printf '%s\n' "$ELECTION" | jq -r --arg o "$owner" '[.[] | select(.owner)][0].reason // "did not run"')). An incremental cannot continue on another node: taking a NEW BASE here"
+        fi
+    fi
+
+    if [[ $action == base && $FORCE != 1 ]] && recent_base_since $(( started - DEDUP_WINDOW_SEC )); then
+        log WARN "${L}[PRECHECK]" "A base backup was already completed in the last ${DEDUP_WINDOW_SEC}s. Skipping"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    fi
+
+    # --- Run ---------------------------------------------------------------
+    LOG_LABEL="${L}[PBM][RUN]"
+    pbm_wait_idle "$WAIT_RUNNING_SEC" || true
+    local -a args=(backup --type incremental --wait)
+    [[ $action == base ]] && args=(backup --type incremental --base --wait)
+    log INFO "${L}[PBM][RUN][START]" "PBM - RUN - ${title} Starting!! (pbm ${args[*]})"
+    if run_pbm "${args[@]}"; then
+        log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - ${title} Successfully DONE!!"
+    elif [[ $action == base && $FORCE != 1 ]] && { pbm_wait_idle "$WAIT_RUNNING_SEC" || true; recent_base_since $(( started - DEDUP_WINDOW_SEC )); }; then
+        log WARN "${L}[PBM][RUN][FINISH]" "Base backup was taken by another node at the same time. Skipping"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    else
+        rc=1
+        log ERROR "${L}[PBM][RUN][FINISH][ERROR]" "PBM - ${title} Failed!! Please check pbm-agent logs!!"
+    fi
+
+    # --- Verify where PBM actually ran it ----------------------------------
+    if [[ $rc -eq 0 && $DRY_RUN != 1 ]]; then
+        json=$(last_done_backup_json "$action" || true)
+        log INFO "${L}[PBM][RUN][OK][INFO]" "${title} Info: [$(backup_summary "$json")]"
+        node=$(printf '%s\n' "$json" | jq -r '.nodes[0] // empty' 2>/dev/null || true)
+        if [[ -n $node ]] && ! is_local_node "$node"; then
+            log WARN "${L}[PBM][RUN][NODE]" "PBM executed the backup on ${node}, not on this node. PBM picks the node by backup.priority; that node is now the chain owner"
+        fi
+    fi
+    log INFO "${L}[END]" "${title} Service Ended"
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# check
+# ---------------------------------------------------------------------------
+cmd_check() {
+    local L='[PSMB][BACKUP][CHECK]' rc=0 status base owner='' decision
+    setup_run '' "$L"
+    status=$(pbm_status_json) || die "Cannot run 'pbm status -o json'"
+    preflight "$L" "$status" || rc=1
+
+    base=$(last_done_backup_json base) || die "Cannot read backup list from PBM"
+    if [[ -n $base ]]; then
+        owner=$(printf '%s\n' "$base" | jq -r '.nodes[0] // empty')
+        log INFO "${L}[LASTBASE]" "$(backup_summary "$base")"
+    else
+        log WARN "${L}[LASTBASE]" "No successful base backup found"
+    fi
+
+    run_election "$L" "$status" "$owner" || return 1
+    decision=$(election_decision)
+    case $decision in
+        none)       rc=1; log ERROR "${L}[DECISION]" "No eligible node: full/incr would take NO backup" ;;
+        unknown)    rc=1; log ERROR "${L}[DECISION]" "This host ($(hostname)) is not in the member list. Set LOCAL_NODE_NAMES" ;;
+        skip\ *)    log INFO "${L}[DECISION]" "This node would skip: ${decision#skip }" ;;
+        standby\ *) log INFO "${L}[DECISION]" "This node is standby #${decision#standby }: takes over after $(( ${decision#standby } * FALLBACK_DELAY_SEC ))s if nobody started" ;;
+        run)
+            if [[ -z $base ]]; then
+                log INFO "${L}[DECISION]" "This node is #0: full -> base, incr -> base (no chain yet)"
+            elif [[ $(printf '%s\n' "$SELF" | jq -r '.owner') == true ]]; then
+                log INFO "${L}[DECISION]" "This node is #0 and owns the chain: full -> base, incr -> incremental"
+            else
+                log WARN "${L}[DECISION]" "This node is #0 but the owner (${owner}) is not available: full -> base, incr -> NEW base (chain restart)"
+            fi ;;
+    esac
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# cleanup
+# ---------------------------------------------------------------------------
+cmd_cleanup() {
+    local L='[PSMB][BACKUP][RETENTION][PURGE]'
+    local rc=0 date_from
+    setup_run deletion.log "$L"
+    log INFO "${L}[INIT]" "MongoDB Backups Deletion Service Initiating. RETENTION DAYS -> ${RETENTION_DAYS}"
+    lock_or_skip cleanup "${L}[INIT]"
+
+    date_from=$(date_days_ago "$RETENTION_DAYS")
+    LOG_LABEL="${L}[PBM][RUN]"
+    log INFO "${L}[PBM][RUN][START]" "PBM - MongoDB Backups Deletion Starting!! Deleting Backups stored Older than ${date_from}"
+    if run_pbm cleanup -y --older-than "$date_from" --wait; then
+        log OK "${L}[PBM][RUN][FINISH][OK]" "PBM - MongoDB Backups Deletion Successfully DONE!!"
+    else
+        rc=1
+        log ERROR "${L}[PBM][RUN][FINISH][ERROR]" "PBM - MongoDB Backups Deletion Failed!! Please check pbm-agent logs!!"
+    fi
+    log INFO "${L}[END]" "MongoDB Backups Deletion Service Ended"
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+main() {
+    local cmd='' help=0 opt_retention=''
+    DRY_RUN=0
+    FORCE=0
+    LOG_LABEL='[PBM-BACKUP]'
+    LOG_FILE=''
+
+    while (( $# > 0 )); do
+        case $1 in
+            -h|--help)          help=1 ;;
+            -V|--version)       printf '%s %s\n' "$PROG" "$VERSION"; exit 0 ;;
+            -n|--dry-run)       DRY_RUN=1 ;;
+            -f|--force)         FORCE=1 ;;
+            --no-color)         PBM_BACKUP_COLOR=never ;;
+            -c|--config)        [[ $# -ge 2 ]] || { usage >&2; exit 2; }; PBM_BACKUP_CONF=$2; shift ;;
+            -e|--env-file)      [[ $# -ge 2 ]] || { usage >&2; exit 2; }; PBM_ENV_FILE=$2; shift ;;
+            -r|--retention-days) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; opt_retention=$2; shift ;;
+            full|incr|cleanup|check)
+                if [[ -n $cmd ]]; then
+                    printf '%s: only one command allowed\n' "$PROG" >&2
+                    exit 2
+                fi
+                cmd=$1 ;;
+            *)
+                setup_colors
+                printf '%s: unknown argument: %s\n\n' "$PROG" "$1" >&2
+                usage >&2
+                exit 2 ;;
+        esac
+        shift
+    done
+    setup_colors
+
+    if [[ $help == 1 || -z $cmd ]]; then
+        case $cmd in
+            full)    usage_full ;;
+            incr)    usage_incr ;;
+            cleanup) usage_cleanup ;;
+            check)   usage_check ;;
+            *)       usage ;;
+        esac
+        [[ $help == 1 ]] && exit 0
+        exit 2
+    fi
+
+    load_config
+    if [[ -n $opt_retention ]]; then
+        RETENTION_DAYS=$opt_retention
+    fi
+    validate_config
+
+    case $cmd in
+        full)    run_physical full ;;
+        incr)    run_physical incr ;;
+        cleanup) cmd_cleanup ;;
+        check)   cmd_check ;;
+    esac
+}
+
+main "$@"

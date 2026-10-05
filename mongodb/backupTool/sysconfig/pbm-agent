@@ -1,0 +1,3 @@
+#PBM_MONGODB_URI="mongodb://backupUser:backupPassword@localhost:27017/?authSource=admin"
+PBM_MONGODB_URI="mongodb://pbmuser:pbmPassword@mongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName&readConcernLevel=local&w=1"
+export PBM_MONGODB_URI

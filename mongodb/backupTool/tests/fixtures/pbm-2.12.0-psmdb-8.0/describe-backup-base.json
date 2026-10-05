@@ -1,0 +1,33 @@
+{
+  "name": "2026-10-02T00:00:45Z",
+  "opid": "6abef42d183ec39be299f1a0",
+  "type": "incremental",
+  "last_write_ts": 1790899247,
+  "last_transition_ts": 1790899440,
+  "last_write_time": "2026-10-02T00:00:47Z",
+  "last_transition_time": "2026-10-02T00:04:00Z",
+  "mongodb_version": "8.0.17-6",
+  "fcv": "8.0",
+  "pbm_version": "2.12.0",
+  "status": "done",
+  "size": 1507261557,
+  "size_uncompressed": 2518305004,
+  "size_h": "1.4 GiB",
+  "size_uncompressed_h": "2.3 GiB",
+  "replsets": [
+    {
+      "name": "gcssrs01",
+      "status": "done",
+      "node": "mongocluster-node03:27017",
+      "size": 1507261557,
+      "size_uncompressed": 2518305004,
+      "size_h": "1.4 GiB",
+      "size_uncompressed_h": "2.3 GiB",
+      "last_write_ts": 1790899247,
+      "last_transition_ts": 1790899439,
+      "last_write_time": "2026-10-02T00:00:47Z",
+      "last_transition_time": "2026-10-02T00:03:59Z",
+      "security": {}
+    }
+  ]
+}

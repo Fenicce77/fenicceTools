@@ -1,0 +1,13 @@
+# Hourly PBM MongoDB Incremental Backup
+[Unit]
+Description=Hourly PBM MongoDB Incremental Backup
+After=time-sync.target network.target
+
+[Service]
+EnvironmentFile=-/etc/sysconfig/pbm-agent
+#Type=simple
+Type=oneshot
+User=root
+Group=root
+PermissionsStartOnly=true
+ExecStart=/etc/sysconfig/pbm-physical-incremental
