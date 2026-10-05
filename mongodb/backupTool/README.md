@@ -165,10 +165,16 @@ tests/smoke.sh /bin/bash  # macOS bash 3.2
 Scenario tests with mocked `pbm` and `mongosh` and real PBM 2.12.0 JSON
 output as fixtures. No MongoDB needed.
 
+## Verified against PBM 2.12.0
+
+- `pbm status [-s backups|-s running] -o json`, `pbm describe-backup -o json`
+  (fixtures in `tests/fixtures/pbm-2.12.0-psmdb-8.0`).
+- `pbm backup` accepts `--compression` (none/gzip/snappy/lz4/s2/pgzip/zstd)
+  and `--compression-level` for every backup type; existing physical
+  backups are already compressed (`size` < `size_uncompressed`).
+
 ## Not yet verified against a live cluster
 
-- `pbm backup --compression=... --compression-level=...` on physical
-  incremental backups (PBM 2.12).
 - `pbm list -o json` PITR range format and `pbm config <key>` output with
   PITR enabled.
 - `pbm cleanup --older-than YYYY-MM-DDTHH:MM:SS`.
