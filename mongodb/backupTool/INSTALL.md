@@ -1,0 +1,310 @@
+# pbm-backup - installation and deployment guide
+
+How to build the pbm-backup package and deploy it on the members of a MongoDB
+replica set, by hand or with your own deployment tool (Satellite, Salt, CI/CD,
+...). For what the tool does, see [README.md](README.md).
+
+**Deployment in one paragraph:** build `pbm-backup-<version>.tar.gz` once,
+copy it to **every** member of the replica set, verify the checksum, extract
+it and run `install.sh`. Put the connection string and the tunables in
+`/etc/sysconfig`, run `pbm-backup check` on every member, and only then
+switch the timers on. All members run the same timers; pbm-backup's election
+makes sure only one of them acts.
+
+---
+
+## 1. Prerequisites (every member)
+
+| Item | Check |
+|---|---|
+| Linux with systemd, bash >= 3.2 | `systemctl --version`, `bash --version` |
+| PBM 2.x, pbm-agent running and `ok` | `pbm version`, `systemctl status pbm-agent`, `pbm status` |
+| Same PBM version for the CLI and every agent | `pbm status` (agent column) |
+| PBM storage = GCS bucket, compression configured | `pbm config` (`storage.type: gcs`) |
+| `jq` | `jq --version` |
+| `mongosh` (or legacy `mongo` on old 4.x nodes) | `mongosh --version` |
+| MongoDB >= 4.2. On 4.2/4.4: PBM < 2.6.0 and the package pinned | `dnf versionlock add percona-backup-mongodb` / `apt-mark hold percona-backup-mongodb` |
+| Members reach each other on the MongoDB port | the health probes connect to every member directly |
+| PBM user roles: standard PBM roles (include `clusterMonitor` and read on `local.oplog.rs`) | `db.getUser("<pbm_user>")` |
+| Clock in sync (NTP / chrony) | `timedatectl` |
+| Writable log directory (default `/data/backup/pbm/logs`) | created automatically if possible |
+
+PBM `filesystem` storage is **not** supported (it needs a path shared by all
+members, i.e. NFS). PSMDB members use the physical scheme and must have PITR
+disabled; Community members use the logical scheme and pbm-backup enables
+PITR itself.
+
+## 2. Build the package
+
+On any Linux or macOS machine with a clone of the repository:
+
+```bash
+cd mongodb/backupTool
+packaging/build-dist.sh
+```
+
+It runs the test suite first (`tests/smoke.sh`, no MongoDB needed) and writes:
+
+```
+dist/pbm-backup-<version>.tar.gz          # top directory pbm-backup-<version>/
+dist/pbm-backup-<version>.tar.gz.sha256   # sha256sum -c compatible
+```
+
+The version comes from `VERSION=` in `bin/pbm-backup`; bump it for every
+release. Options: `--output DIR`, `--skip-tests` (not recommended),
+`--help`.
+
+Package contents:
+
+| Path | Purpose |
+|---|---|
+| `install.sh` | installer / upgrader / uninstaller |
+| `bin/pbm-backup`, `lib/*.sh` | the tool |
+| `systemd/services`, `systemd/timers` | new units |
+| `systemd/legacy/` | the old `pbm-physical-*` / `pbm-deletion` units (reference, rollback) |
+| `etc/pbm-backup.conf.example` | all tunables with defaults |
+| `sysconfig/pbm-conf`, `sysconfig/pbm-agent` | templates for `PBM_MONGODB_URI` |
+| `sysconfig/pbm-physical-*`, `sysconfig/pbm-deletion` | wrappers for the old units |
+| `conf/pbm-conf.yaml`, `conf/pbm-agent.yaml` | PBM templates (reference) |
+| `README.md`, `INSTALL.md`, `CHANGES.md`, `VERSION` | documentation |
+
+## 3. Install on a member
+
+```bash
+scp dist/pbm-backup-0.6.0.tar.gz* rmateos@mongodbcluster-node01:/tmp/
+ssh rmateos@mongodbcluster-node01
+cd /tmp
+sha256sum -c pbm-backup-0.6.0.tar.gz.sha256
+tar -xzf pbm-backup-0.6.0.tar.gz
+sudo pbm-backup-0.6.0/install.sh --dry-run      # review
+sudo pbm-backup-0.6.0/install.sh                 # install, timers NOT enabled yet
+```
+
+`install.sh` options:
+
+| Option | Use |
+|---|---|
+| `--scheme physical` (default) | PSMDB members: hourly incremental timer (01:15..23:15) |
+| `--scheme logical --incr-every-min 360` | Community members: oplog check every N minutes (must divide a day) |
+| `--metrics` | also install/enable the 5-minute metrics timer |
+| `--enable` | enable and start the timers (see section 6 for when) |
+| `--disable-legacy` | disable and stop the old `pbm-physical-*` / `pbm-deletion` timers |
+| `--legacy-wrappers` | turn the old `/etc/sysconfig/pbm-*` scripts into wrappers around pbm-backup |
+| `--prefix DIR` | default `/usr/local` |
+| `--sysconfdir DIR` | default `/etc/sysconfig` (or `/etc/default` when missing) |
+| `--destdir DIR` | install under a staging root (image builds); no systemctl, no root |
+| `--uninstall` | remove timers, units, binary, libraries, docs (config and logs kept) |
+| `--dry-run` | print every action, change nothing |
+
+What it installs:
+
+```
+/usr/local/bin/pbm-backup
+/usr/local/lib/pbm-backup/*.sh
+/usr/local/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example}
+/etc/sysconfig/pbm-backup                        (only if it does not exist)
+/etc/systemd/system/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
+/etc/systemd/system/pbm-backup-incr.timer.d/schedule.conf   (logical scheme only)
+```
+
+It never overwrites `/etc/sysconfig/pbm-backup` or `/etc/sysconfig/pbm-conf`.
+
+## 4. Configure
+
+### 4.1 Connection string: `/etc/sysconfig/pbm-conf`
+
+Same content as the existing file of the old scripts (template:
+`sysconfig/pbm-conf` in the package):
+
+```bash
+PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName"
+export PBM_MONGODB_URI
+```
+
+```bash
+sudo chmod 0600 /etc/sysconfig/pbm-conf
+```
+
+- `replicaSet=` must be present (used for logs, metrics and the per-member
+  probes).
+- `mongodb+srv://` cannot be used: the probes connect to each member
+  directly.
+- This file holds a password: deploy it from your secret store, never from
+  the repository.
+
+### 4.2 Tunables: `/etc/sysconfig/pbm-backup`
+
+Created from `etc/pbm-backup.conf.example`, all values commented (defaults).
+The ones usually set:
+
+| Variable | Default | When to change |
+|---|---|---|
+| `RETENTION_DAYS` | `7` | retention policy |
+| `LOCAL_NODE_NAMES` | empty | when `hostname`/`hostname -f` differ from the member name in the replica set config |
+| `PREFERRED_NODES` | empty | order of members after the chain owner |
+| `OPLOG_INCR_MIN` | `360` | Community: minutes between oplog slices (keep in line with `--incr-every-min`) |
+| `METRICS_DIR` | empty | textfile-collector directory (node_exporter, PMM2, PMM3) |
+| `MAX_REPL_LAG_SEC` / `MAX_QUEUE` / `MAX_WT_DIRTY_PCT` | `60` / `50` / `20` | overload thresholds of the election |
+| `PBM_LOCAL_ROOT` / `LOG_DIR` | `/data/backup/pbm` / `.../logs` | log location |
+| `BACKUP_COMPRESSION` / `BACKUP_COMPRESSION_LEVEL` | `gzip` / `5` | compression (`none` is rejected) |
+
+Keep this file identical on every member of a replica set: they must all
+compute the same election.
+
+## 5. Validate (every member, before enabling)
+
+```bash
+sudo pbm-backup check
+```
+
+Read-only. Expect on every member:
+
+- `[PRECHECK][COMPAT][OK]` with the right MongoDB version, edition and scheme;
+- `[PRECHECK][STORAGE][OK] Storage GCS gs://...`;
+- an election table with exactly one `#0` member, the primary marked
+  `SKIP(primary)`;
+- no `This host (...) is not in the replica set member list`. If you see it,
+  set `LOCAL_NODE_NAMES`;
+- exit code `0`.
+
+Then simulate the jobs (nothing is executed):
+
+```bash
+sudo pbm-backup full --dry-run
+sudo pbm-backup incr --dry-run
+sudo pbm-backup cleanup --dry-run    # shows exactly which backups would be deleted
+```
+
+And check the units on one member:
+
+```bash
+systemd-analyze verify /etc/systemd/system/pbm-backup-*.service
+systemctl list-timers 'pbm-backup-*' --all
+```
+
+## 6. Switch over (whole replica set)
+
+Do it on **all members in the same window**, so the old and the new timers
+never run together. Avoid the minutes around 00:00, 00:40 and hh:15.
+
+1. Install (section 3) and validate (section 5) on every member, timers not enabled.
+2. On every member, stop the old timers:
+   ```bash
+   sudo systemctl disable --now pbm-physical-full-base.timer pbm-physical-incremental.timer pbm-deletion.timer
+   ```
+3. On every member, start the new ones:
+   ```bash
+   sudo systemctl enable --now pbm-backup-full.timer pbm-backup-incr.timer pbm-backup-cleanup.timer
+   sudo systemctl enable --now pbm-backup-metrics.timer   # only with METRICS_DIR
+   ```
+   Equivalent: rerun `install.sh` with `--disable-legacy --enable` (plus the
+   same `--scheme`/`--metrics` options).
+4. Next hour, check that exactly one member logged the incremental:
+   ```bash
+   sudo tail -n 20 /data/backup/pbm/logs/incr.log      # physical
+   sudo tail -n 20 /data/backup/pbm/logs/oplog.log     # logical
+   ```
+
+**Community (logical) members, first time:** the oplog check fails until a
+logical full exists. Either wait for the 00:00 full, or start it right away
+(the election still decides which member runs it):
+
+```bash
+sudo pbm-backup full
+```
+
+## 7. Deploying with your own tool
+
+The package is designed for unattended use:
+
+- **Idempotent:** running `install.sh` again with the same options gives the
+  same result. Binaries, libraries and units are replaced; configuration is
+  never touched.
+- **Exit codes:** `install.sh`: `0` ok, `1` a step failed, `2` usage or
+  environment error. `pbm-backup check`: `0` ok, `1` a backup would fail,
+  `2` configuration error.
+- **Installed version:** `/usr/local/share/doc/pbm-backup/VERSION` and
+  `pbm-backup --version`.
+
+Recommended job, per member:
+
+```bash
+set -e
+cd /tmp
+sha256sum -c pbm-backup-${VERSION}.tar.gz.sha256
+tar -xzf pbm-backup-${VERSION}.tar.gz
+# /etc/sysconfig/pbm-conf (secret) and /etc/sysconfig/pbm-backup are
+# templated by the deployment tool BEFORE this step.
+pbm-backup-${VERSION}/install.sh --scheme physical          # or: --scheme logical --incr-every-min 360
+/usr/local/bin/pbm-backup --no-color check
+rm -rf pbm-backup-${VERSION} pbm-backup-${VERSION}.tar.gz*
+```
+
+Enable the timers (`--disable-legacy --enable`) as a separate step, once
+`check` passed on **every** member of the replica set (section 6).
+
+To build images or OS packages, install into a staging root:
+
+```bash
+./install.sh --destdir /tmp/stage --scheme physical
+```
+
+## 8. Upgrade
+
+Same as an install with the new package (sections 3 and 5). Timers that are
+enabled stay enabled. A backup already running keeps its old code until it
+finishes.
+
+```bash
+sudo pbm-backup-0.7.0/install.sh --scheme physical
+pbm-backup --version
+```
+
+Read `CHANGES.md` for new tunables (they all have safe defaults).
+
+## 9. Rollback
+
+- **To a previous pbm-backup version:** install its package again.
+- **To the old scripts:**
+  ```bash
+  sudo systemctl disable --now pbm-backup-full.timer pbm-backup-incr.timer pbm-backup-cleanup.timer pbm-backup-metrics.timer
+  sudo systemctl enable --now pbm-physical-full-base.timer pbm-physical-incremental.timer pbm-deletion.timer
+  ```
+  The old timers call `/etc/sysconfig/pbm-*`. If those were replaced by
+  wrappers (`--legacy-wrappers`), they keep calling pbm-backup. Restore the
+  original scripts from git (they are in `CHANGES.md` too) to run the old code.
+
+## 10. Uninstall
+
+```bash
+sudo pbm-backup-0.6.0/install.sh --uninstall
+```
+
+It stops and removes the timers and units, the binary, the libraries and the
+docs. It keeps `/etc/sysconfig/pbm-backup`, `/etc/sysconfig/pbm-conf`, the
+logs, PBM itself and every backup in the bucket. If the old scripts in `/etc/sysconfig` were
+replaced by wrappers (`--legacy-wrappers`), it warns: they point to the
+removed binary, so restore the originals before re-enabling the old timers.
+
+## 11. Operations
+
+| What | Where |
+|---|---|
+| Timers and next runs | `systemctl list-timers 'pbm-backup-*'` |
+| Last run of a job | `journalctl -u pbm-backup-incr.service -n 50` |
+| Logs | `/data/backup/pbm/logs/{incrbase,incr,logical-full,oplog,deletion,restore}.log` |
+| Overall state | `pbm-backup check`, `pbm status`, `pbm list` |
+| Metrics | `${METRICS_DIR}/pbm_backup_state.prom`, `pbm_backup_run_*.prom` |
+
+## 12. Troubleshooting
+
+| Message | Cause / fix |
+|---|---|
+| `This host (...) is not in the replica set member list` | set `LOCAL_NODE_NAMES` to the member name used in the replica set config |
+| `No eligible node` | every secondary is down, lagging, overloaded or has no healthy pbm-agent: check `pbm status` and the election table in `pbm-backup check` |
+| `PBM storage is 'FS'...` | PBM uses filesystem storage: configure the GCS bucket (`pbm config --file`) |
+| `PITR is enabled, but the physical scheme runs without PITR` | PSMDB: `pbm config --set pitr.enabled=false` |
+| `Oplog window ... < 2 x expected dump` | Community: enlarge the oplog (`replSetResizeOplog`) or set `EXPECTED_DUMP_SEC` / `OPLOG_WINDOW_ENFORCE=false` |
+| `Last full ... started N min ago (< FULL_MIN_INTERVAL_SEC)` | normal: a full already ran today. Use `pbm-backup full --force` to take another one |
+| `PBM executed the backup on X, not on this node` | PBM picked another member by `backup.priority`; keep the primary lowest in `conf/pbm-conf.yaml` |
+| `Cannot read buildInfo` | `mongosh` missing or the URI is wrong; or set `MONGODB_VERSION` + `MONGODB_EDITION` |

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
-# install.sh - Install pbm-backup on a replica set member (Linux + systemd).
+# install.sh - Install, upgrade or remove pbm-backup on a replica set member
+# (Linux + systemd).
 #
 # Run it on EVERY member: all members run the same timers and pbm-backup's
-# election decides which one acts. Run "install.sh --help" for usage.
+# election decides which one acts. Safe to run again (upgrade): binaries,
+# libraries and units are replaced, configuration files are never touched.
+# Run "install.sh --help" for usage.
 
 set -euo pipefail
 
@@ -18,6 +21,9 @@ ENABLE=0
 LEGACY_WRAPPERS=0
 DISABLE_LEGACY=0
 DRY_RUN=0
+UNINSTALL=0
+DESTDIR=''
+SYSCONF_OPT=''
 UNIT_DIR=/etc/systemd/system
 
 if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
@@ -50,13 +56,23 @@ ${C_BLD}OPTIONS${C_OFF}
     --disable-legacy           Disable and stop the old pbm-physical-full-base,
                                pbm-physical-incremental and pbm-deletion timers
     --prefix DIR               Install prefix (default /usr/local)
+    --uninstall                Stop and remove timers, units, binary, libraries
+                               and docs. Configuration and logs are kept.
+    --destdir DIR              Install under DIR (staging root, e.g. to build an
+                               image). No systemctl calls, no root needed.
+    --sysconfdir DIR           Config directory (default /etc/sysconfig, or
+                               /etc/default when it does not exist)
     -n, --dry-run              Print what would be done, change nothing
     -h, --help                 Show this help
+
+${C_BLD}EXIT CODES${C_OFF}
+    0 done, 1 an install step failed, 2 usage or environment error
+    (not root, no systemd, invalid option).
 
 ${C_BLD}INSTALLS${C_OFF}
     \${PREFIX}/bin/pbm-backup
     \${PREFIX}/lib/pbm-backup/*.sh
-    \${PREFIX}/share/doc/pbm-backup/{README.md,CHANGES.md,pbm-backup.conf.example}
+    \${PREFIX}/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example}
     /etc/sysconfig/pbm-backup  (or /etc/default/pbm-backup; never overwritten)
     ${UNIT_DIR}/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
 
@@ -69,6 +85,9 @@ ${C_BLD}EXAMPLES${C_OFF}
 
     # See what would happen
     ./${PROG} --scheme logical --dry-run
+
+    # Remove it (configuration in /etc/sysconfig is kept)
+    sudo ./${PROG} --uninstall
 EOF
 }
 
@@ -109,6 +128,9 @@ while (( $# > 0 )); do
         --legacy-wrappers) LEGACY_WRAPPERS=1 ;;
         --disable-legacy)  DISABLE_LEGACY=1 ;;
         --prefix)          [[ $# -ge 2 ]] || die "--prefix needs a value" 2; PREFIX=${2%/}; shift ;;
+        --uninstall)       UNINSTALL=1 ;;
+        --destdir)         [[ $# -ge 2 ]] || die "--destdir needs a value" 2; DESTDIR=${2%/}; shift ;;
+        --sysconfdir)      [[ $# -ge 2 ]] || die "--sysconfdir needs a value" 2; SYSCONF_OPT=${2%/}; shift ;;
         -n|--dry-run)      DRY_RUN=1 ;;
         -h|--help)         usage; exit 0 ;;
         *)                 usage >&2; die "Unknown argument: $1" 2 ;;
@@ -117,18 +139,64 @@ while (( $# > 0 )); do
 done
 
 case $SCHEME in physical|logical) ;; *) die "--scheme must be physical or logical" 2 ;; esac
-[[ $DRY_RUN == 1 || $(id -u) == 0 ]] || die "Run as root (or use --dry-run)" 2
-[[ $DRY_RUN == 1 ]] || command -v systemctl >/dev/null 2>&1 || die "systemctl not found: this installer targets systemd hosts" 2
+# D = staging root ("" for a real install). Target paths are "${D}<path>";
+# paths written inside files (unit ExecStart) never include it.
+D=$DESTDIR
+if [[ -z $D ]]; then
+    [[ $DRY_RUN == 1 || $(id -u) == 0 ]] || die "Run as root (or use --dry-run / --destdir)" 2
+    [[ $DRY_RUN == 1 ]] || command -v systemctl >/dev/null 2>&1 || die "systemctl not found: this installer targets systemd hosts" 2
+fi
 
-SYSCONF=/etc/sysconfig
-[[ -d $SYSCONF ]] || SYSCONF=/etc/default
+# sc ARGS... - systemctl, skipped when installing into a staging root.
+sc() {
+    if [[ -n $D ]]; then
+        printf '  [DESTDIR] skipped: systemctl %s\n' "$*"
+        return 0
+    fi
+    run systemctl "$@"
+}
+
+if [[ -n $SYSCONF_OPT ]]; then
+    SYSCONF=$SYSCONF_OPT
+else
+    SYSCONF=/etc/sysconfig
+    [[ -d $SYSCONF ]] || SYSCONF=/etc/default
+fi
 LIBDIR="${PREFIX}/lib/pbm-backup"
 DOCDIR="${PREFIX}/share/doc/pbm-backup"
 BIN="${PREFIX}/bin/pbm-backup"
+PKG_VERSION=$(sed -n 's/^VERSION=//p' "${SRC}/bin/pbm-backup" | head -n 1)
+
+if [[ $UNINSTALL == 1 ]]; then
+    info "Uninstalling pbm-backup from ${PREFIX} (configuration and logs are kept)"
+    units=(pbm-backup-full pbm-backup-incr pbm-backup-cleanup pbm-backup-metrics)
+    for u in "${units[@]}"; do
+        if [[ $DRY_RUN == 1 ]] || [[ -e ${D}${UNIT_DIR}/${u}.timer ]]; then
+            sc disable --now "${u}.timer" || warn "Could not disable ${u}.timer"
+        fi
+    done
+    for u in "${units[@]}"; do
+        run rm -f "${D}${UNIT_DIR}/${u}.timer" "${D}${UNIT_DIR}/${u}.service"
+    done
+    run rm -rf "${D}${UNIT_DIR}/pbm-backup-incr.timer.d" "${D}${LIBDIR}" "${D}${DOCDIR}"
+    run rm -f "${D}${BIN}"
+    sc daemon-reload
+    for f in pbm-physical-full-base pbm-physical-incremental pbm-deletion; do
+        if grep -qs 'exec "${PBM_BACKUP_BIN:-/usr/local/bin/pbm-backup}"' "${D}${SYSCONF}/$f"; then
+            warn "${SYSCONF}/$f is a pbm-backup wrapper and now points to a removed binary: restore the original script before re-enabling the old timers"
+        fi
+    done
+    if [[ $DRY_RUN == 1 ]]; then
+        info "[DRY-RUN] Nothing was changed"
+    else
+        ok "Uninstalled. Kept: ${SYSCONF}/pbm-backup, ${SYSCONF}/pbm-conf, logs and PBM itself"
+    fi
+    exit 0
+fi
 
 # Interval for the logical scheme: CLI > config > 360.
 if [[ $SCHEME == logical && -z $INCR_MIN ]]; then
-    INCR_MIN=$( { [[ -r ${SYSCONF}/pbm-backup ]] && . "${SYSCONF}/pbm-backup" >/dev/null 2>&1; printf '%s' "${OPLOG_INCR_MIN:-}"; } || true)
+    INCR_MIN=$( { [[ -r ${D}${SYSCONF}/pbm-backup ]] && . "${D}${SYSCONF}/pbm-backup" >/dev/null 2>&1; printf '%s' "${OPLOG_INCR_MIN:-}"; } || true)
     INCR_MIN=${INCR_MIN:-360}
 fi
 if [[ $SCHEME == logical ]]; then
@@ -136,7 +204,10 @@ if [[ $SCHEME == logical ]]; then
     INCR_CAL=$(calendar_every "$INCR_MIN") || die "--incr-every-min ${INCR_MIN} must divide a day (e.g. 15, 30, 60, 120, 180, 240, 360, 480, 720)" 2
 fi
 
-info "Source ${SRC}, prefix ${PREFIX}, config dir ${SYSCONF}, scheme ${SCHEME}${INCR_CAL:+ (incr: ${INCR_CAL})}"
+info "pbm-backup ${PKG_VERSION:-?} from ${SRC}, prefix ${PREFIX}, config dir ${SYSCONF}, scheme ${SCHEME}${INCR_CAL:+ (incr: ${INCR_CAL})}${D:+, staging root ${D}}"
+if [[ -r ${D}${DOCDIR}/VERSION ]]; then
+    info "Currently installed: $(cat "${D}${DOCDIR}/VERSION") (upgrade in place)"
+fi
 
 # --- dependencies (warnings only: the node may be prepared later) ----------
 for c in pbm jq; do
@@ -146,31 +217,38 @@ command -v mongosh >/dev/null 2>&1 || command -v mongo >/dev/null 2>&1 \
     || warn "Neither mongosh nor mongo found in PATH (required at run time)"
 
 # --- files -------------------------------------------------------------------
-run install -d -m 0755 "${PREFIX}/bin" "$LIBDIR" "$DOCDIR"
-run install -m 0755 "${SRC}/bin/pbm-backup" "$BIN"
+run install -d -m 0755 "${D}${PREFIX}/bin" "${D}${LIBDIR}" "${D}${DOCDIR}" "${D}${SYSCONF}" "${D}${UNIT_DIR}"
+run install -m 0755 "${SRC}/bin/pbm-backup" "${D}${BIN}"
 for f in "${SRC}"/lib/*.sh; do
-    run install -m 0644 "$f" "${LIBDIR}/$(basename "$f")"
+    run install -m 0644 "$f" "${D}${LIBDIR}/$(basename "$f")"
 done
-for f in README.md CHANGES.md; do
-    [[ -r ${SRC}/$f ]] && run install -m 0644 "${SRC}/$f" "${DOCDIR}/$f"
+for f in README.md INSTALL.md CHANGES.md; do
+    if [[ -r ${SRC}/$f ]]; then
+        run install -m 0644 "${SRC}/$f" "${D}${DOCDIR}/$f"
+    fi
 done
-run install -m 0644 "${SRC}/etc/pbm-backup.conf.example" "${DOCDIR}/pbm-backup.conf.example"
-if [[ -e ${SYSCONF}/pbm-backup ]]; then
+if [[ $DRY_RUN == 1 ]]; then
+    printf '  [DRY-RUN] write %s/VERSION: %s\n' "$DOCDIR" "${PKG_VERSION:-unknown}"
+else
+    printf '%s\n' "${PKG_VERSION:-unknown}" >"${D}${DOCDIR}/VERSION"
+fi
+run install -m 0644 "${SRC}/etc/pbm-backup.conf.example" "${D}${DOCDIR}/pbm-backup.conf.example"
+if [[ -e ${D}${SYSCONF}/pbm-backup ]]; then
     info "Keeping existing ${SYSCONF}/pbm-backup (example in ${DOCDIR})"
 else
-    run install -m 0640 "${SRC}/etc/pbm-backup.conf.example" "${SYSCONF}/pbm-backup"
+    run install -m 0640 "${SRC}/etc/pbm-backup.conf.example" "${D}${SYSCONF}/pbm-backup"
 fi
-[[ -e ${SYSCONF}/pbm-conf ]] || warn "${SYSCONF}/pbm-conf (PBM_MONGODB_URI) does not exist: create it from ${SRC}/sysconfig/pbm-conf"
+[[ -e ${D}${SYSCONF}/pbm-conf ]] || warn "${SYSCONF}/pbm-conf (PBM_MONGODB_URI) does not exist: create it from ${SRC}/sysconfig/pbm-conf"
 
 if [[ $LEGACY_WRAPPERS == 1 ]]; then
     for f in pbm-physical-full-base pbm-physical-incremental pbm-deletion; do
-        run install -m 0700 "${SRC}/sysconfig/$f" "${SYSCONF}/$f"
+        run install -m 0700 "${SRC}/sysconfig/$f" "${D}${SYSCONF}/$f"
     done
 fi
 
 # --- systemd -----------------------------------------------------------------
 for f in "${SRC}"/systemd/services/pbm-backup-*.service "${SRC}"/systemd/timers/pbm-backup-*.timer; do
-    dst="${UNIT_DIR}/$(basename "$f")"
+    dst="${D}${UNIT_DIR}/$(basename "$f")"
     if [[ $PREFIX == /usr/local ]]; then
         run install -m 0644 "$f" "$dst"
     elif [[ $DRY_RUN == 1 ]]; then
@@ -181,7 +259,7 @@ for f in "${SRC}"/systemd/services/pbm-backup-*.service "${SRC}"/systemd/timers/
     fi
 done
 
-dropin="${UNIT_DIR}/pbm-backup-incr.timer.d"
+dropin="${D}${UNIT_DIR}/pbm-backup-incr.timer.d"
 if [[ $SCHEME == logical ]]; then
     run install -d -m 0755 "$dropin"
     if [[ $DRY_RUN == 1 ]]; then
@@ -193,12 +271,12 @@ if [[ $SCHEME == logical ]]; then
 elif [[ -e ${dropin}/schedule.conf ]]; then
     run rm -f "${dropin}/schedule.conf"
 fi
-run systemctl daemon-reload
+sc daemon-reload
 
 if [[ $DISABLE_LEGACY == 1 ]]; then
     for t in pbm-physical-full-base.timer pbm-physical-incremental.timer pbm-deletion.timer; do
-        if [[ $DRY_RUN == 1 ]] || systemctl list-unit-files "$t" >/dev/null 2>&1; then
-            run systemctl disable --now "$t" || warn "Could not disable $t"
+        if [[ $DRY_RUN == 1 || -n $D ]] || systemctl list-unit-files "$t" >/dev/null 2>&1; then
+            sc disable --now "$t" || warn "Could not disable $t"
         fi
     done
 fi
@@ -206,11 +284,15 @@ fi
 timers=(pbm-backup-full.timer pbm-backup-incr.timer pbm-backup-cleanup.timer)
 [[ $METRICS == 1 ]] && timers+=(pbm-backup-metrics.timer)
 if [[ $ENABLE == 1 ]]; then
-    run systemctl enable --now "${timers[@]}"
-    [[ $DRY_RUN == 1 ]] || ok "Timers enabled: ${timers[*]}"
+    sc enable --now "${timers[@]}"
+    [[ $DRY_RUN == 1 || -n $D ]] || ok "Timers enabled: ${timers[*]}"
 else
     info "Timers installed but not enabled. Enable with: systemctl enable --now ${timers[*]}"
 fi
 [[ $METRICS == 1 ]] && info "Metrics timer: set METRICS_DIR in ${SYSCONF}/pbm-backup"
 
-ok "Installed. Next: '${BIN} check' on this member (read-only), then on the others"
+if [[ $DRY_RUN == 1 ]]; then
+    info "[DRY-RUN] Nothing was changed"
+else
+    ok "pbm-backup ${PKG_VERSION:-?} installed. Next: '${BIN} check' on this member (read-only), then on the others"
+fi

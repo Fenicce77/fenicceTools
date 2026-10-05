@@ -204,6 +204,18 @@ Metrics (optional, `METRICS_DIR`):
 - Confirmed from the source: PITR range JSON (`pbm list`, `pbm status`) and
   the `YYYY-MM-DDTHH:MM:SS` UTC format of `--older-than` / `--time`.
 
+## Packaging (0.6.0)
+
+- `packaging/build-dist.sh`: runs the tests and builds
+  `dist/pbm-backup-<version>.tar.gz` plus `.sha256` (explicit file list, no
+  tests/fixtures, owner root, no macOS metadata).
+- `install.sh`: records the installed version (`share/doc/pbm-backup/VERSION`),
+  reports upgrades, `--uninstall` (keeps configuration and logs; warns about
+  legacy wrappers), `--destdir` (staging root, no systemctl) and
+  `--sysconfdir`; documented exit codes.
+- `INSTALL.md`: installation and deployment guide.
+- Version 0.6.0.
+
 ## Diffs of the replaced scripts
 
 <details>
