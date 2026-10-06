@@ -16,6 +16,55 @@ full, so any point in time between fulls can be restored.
 
 Change history against the original scripts: [CHANGES.md](CHANGES.md).
 
+## Layout
+
+Repository (`mongodb/backupTool/`). `[pkg]` = shipped in the deployment
+package (`packaging/build-dist.sh`), `[dev]` = repository only.
+
+```
+backupTool/
+├── bin/
+│   └── pbm-backup                    [pkg] entry point: full | incr | cleanup | restore | check | metrics
+├── lib/                              [pkg] sourced by bin/pbm-backup
+│   ├── common.sh                           logging, config, locking, portable dates
+│   ├── mongo.sh                            mongosh wrapper, URI parsing, local node identity
+│   ├── pbm.sh                              pbm CLI wrappers, backup metadata, PITR, retention
+│   ├── compat.sh                           version/edition detection, PBM compatibility matrix
+│   ├── topology.sh                         member health probes and node election
+│   └── metrics.sh                          Prometheus textfile metrics
+├── install.sh                        [pkg] install / upgrade / uninstall on a member
+├── etc/
+│   └── pbm-backup.conf.example       [pkg] tunables  -> /etc/sysconfig/pbm-backup
+├── sysconfig/                        [pkg] environment files (templates) for /etc/sysconfig
+│   ├── pbm-conf                            PBM_MONGODB_URI for pbm CLI + pbm-backup -> /etc/sysconfig/pbm-conf
+│   ├── pbm-agent                           pbm-agent environment, every PBM 2.x     -> /etc/sysconfig/pbm-agent
+│   └── pbm-physical-full-base              wrappers for the legacy units (install.sh --legacy-wrappers)
+│       pbm-physical-incremental
+│       pbm-deletion
+├── conf/                             [pkg] PBM templates
+│   ├── pbm-conf.yaml                       PBM cluster config (storage, backup, PITR) -> pbm config --file
+│   ├── pbm-agent.yaml                      pbm-agent config file, PBM >= 2.9         -> /etc/pbm-agent.yaml
+│   └── pbm-agent-config.conf               systemd drop-in loading it, PBM >= 2.9   -> pbm-agent.service.d/
+├── systemd/                          [pkg]
+│   ├── services/pbm-backup-{full,incr,cleanup,metrics}.service
+│   ├── timers/pbm-backup-{full,incr,cleanup,metrics}.timer
+│   └── legacy/{services,timers}/           original pbm-physical-* / pbm-deletion units (reference, rollback)
+├── mongodb/
+│   └── pbmuser.create.js             [pkg] creates/fixes the PBM user and role (run by hand, once per replica set)
+├── packaging/
+│   └── build-dist.sh                 [dev] runs the tests, builds dist/pbm-backup-<version>.tar.gz + .sha256
+├── tests/                            [dev]
+│   ├── smoke.sh                            scenario tests (mocked pbm/mongosh)
+│   ├── pbmuser.test.sh                     pbmuser.create.js in mongosh, fake admin DB
+│   ├── mock/{pbm,mongosh}                  mocks reproducing real PBM output
+│   └── fixtures/pbm-2.12.0-psmdb-8.0/      real (anonymized) pbm JSON output
+├── README.md  INSTALL.md  CHANGES.md [pkg] docs (the package also adds VERSION)
+└── CLAUDE.md  .gitignore             [dev]
+```
+
+What ends up on each member, and which files must be configured there
+(pbm-backup and pbm-agent): [INSTALL.md §3](INSTALL.md#3-install-on-a-member).
+
 ## How it works
 
 Every member runs the same systemd timers. On each run, every member:

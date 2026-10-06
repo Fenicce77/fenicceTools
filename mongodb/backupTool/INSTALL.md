@@ -143,17 +143,53 @@ sudo pbm-backup-${VERSION}/install.sh                 # install, timers NOT enab
 | `--uninstall` | remove timers, units, binary, libraries, docs (config and logs kept) |
 | `--dry-run` | print every action, change nothing |
 
-What it installs:
+What a member looks like after `install.sh` (✎ = file you configure;
+⚙ = created/managed by `install.sh`; ◆ = owned by the Percona package):
 
 ```
-/usr/local/bin/pbm-backup
-/usr/local/lib/pbm-backup/*.sh
-/usr/local/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example,pbmuser.create.js}
-/etc/sysconfig/pbm-backup                        (only if it does not exist)
-/etc/sysconfig/pbm-conf                          (template, 0600, only if it does not exist)
-/etc/systemd/system/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
-/etc/systemd/system/pbm-backup-incr.timer.d/schedule.conf   (logical scheme only)
+/
+├── usr/local/
+│   ├── bin/pbm-backup                          ⚙ entry point
+│   ├── lib/pbm-backup/                         ⚙ common.sh compat.sh metrics.sh mongo.sh pbm.sh topology.sh
+│   └── share/doc/pbm-backup/                   ⚙ README.md INSTALL.md CHANGES.md VERSION
+│                                                  pbm-backup.conf.example pbmuser.create.js
+├── etc/
+│   ├── sysconfig/                              (/etc/default on Debian-like systems)
+│   │   ├── pbm-conf                         ✎ ⚙ 0600 PBM_MONGODB_URI for pbm CLI + pbm-backup (§4.1);
+│   │   │                                         created from the template if missing, never overwritten
+│   │   ├── pbm-backup                       ✎ ⚙ 0640 pbm-backup tunables (§4.2); created if missing
+│   │   ├── pbm-agent                        ✎ ◆ 0640 pbm-agent environment, every PBM 2.x (§4.3);
+│   │   │                                         template: sysconfig/pbm-agent
+│   │   └── pbm-physical-full-base              ⚙ only with --legacy-wrappers (old units -> pbm-backup)
+│   │       pbm-physical-incremental
+│   │       pbm-deletion
+│   ├── pbm-agent.yaml                       ✎   0600 PBM >= 2.9 only, optional (§4.3); template: conf/pbm-agent.yaml
+│   └── systemd/system/
+│       ├── pbm-backup-full.service / .timer    ⚙ daily full, 00:00
+│       ├── pbm-backup-incr.service / .timer    ⚙ physical: hourly 01:15..23:15
+│       ├── pbm-backup-incr.timer.d/
+│       │   └── schedule.conf                   ⚙ logical scheme only: every OPLOG_INCR_MIN (e.g. 00/6:30)
+│       ├── pbm-backup-cleanup.service / .timer ⚙ retention, 00:40
+│       ├── pbm-backup-metrics.service / .timer ⚙ every 5 min (enabled with --metrics)
+│       └── pbm-agent.service.d/
+│           └── config.conf                  ✎   PBM >= 2.9 only, optional (§4.3); template: conf/pbm-agent-config.conf
+├── usr/lib/systemd/system/pbm-agent.service    ◆ not modified (/lib/systemd/system on Debian-like)
+├── data/backup/pbm/                            PBM_LOCAL_ROOT
+│   ├── logs/                                   incrbase.log incr.log logical-full.log oplog.log deletion.log restore.log
+│   └── <replset>.lastbackup.index              physical scheme: last base (JSON)
+├── run/lock/pbm-backup-<command>.lock          one run per command and member
+└── <METRICS_DIR>/                              only if METRICS_DIR is set:
+                                                pbm_backup_state.prom pbm_backup_run_{full,incr,cleanup}.prom
 ```
+
+Not files on the members:
+
+- **PBM cluster configuration** (storage, backup compression, PITR): stored in
+  MongoDB and applied once with `pbm config --file` (template
+  `conf/pbm-conf.yaml`). pbm-backup sets the `pitr.*` keys itself in the
+  logical scheme.
+- **PBM user password file**: `~/.pbm-backup/<user>.<replset>.<timestamp>.env`
+  on the machine where `pbmuser.create.js` ran (§1.1). Delete it after use.
 
 It creates `/etc/sysconfig/pbm-backup` and `/etc/sysconfig/pbm-conf` from
 their templates only when they do not exist, and never overwrites them
@@ -210,6 +246,15 @@ compute the same election.
 
 pbm-backup does not install the agent configuration (the Percona package
 owns it), but the package ships templates for both agent generations:
+
+Files of the agent, by PBM version:
+
+```
+PBM 2.0 - 2.8 (e.g. 2.5.0 for MongoDB 4.4)     PBM >= 2.9
+/etc/sysconfig/pbm-agent   ✎ (required)        /etc/sysconfig/pbm-agent                          ✎ (required, or…)
+                                               /etc/pbm-agent.yaml                               ✎ (optional, with…)
+                                               /etc/systemd/system/pbm-agent.service.d/config.conf  (…this drop-in)
+```
 
 | PBM version | Agent configuration | Templates |
 |---|---|---|
