@@ -47,8 +47,10 @@ pbm-backup checks afterwards and warns if it differs. Keep the primary lowest.
 - MongoDB >= 4.2. 4.2/4.4 need PBM < 2.6.0; pin the package
   (`dnf versionlock add percona-backup-mongodb` / `apt-mark hold percona-backup-mongodb`).
 - PBM storage: GCS bucket (filesystem storage needs NFS and is refused).
-- The PBM user needs `clusterMonitor` (health probes) and read on
-  `local.oplog.rs` (oplog window); the standard PBM roles include both.
+- The PBM user must have exactly the roles PBM documents; create or fix
+  it with `mongodb/pbmuser.create.js` (see [INSTALL.md](INSTALL.md) 1.1).
+  They cover the health probes (`clusterMonitor`) and the oplog window
+  (read on `local.oplog.rs`).
 
 ## Install
 
@@ -164,6 +166,7 @@ min by (rs, command) (pbm_backup_run_success) == 0
 ```bash
 tests/smoke.sh            # bash from PATH
 tests/smoke.sh /bin/bash  # macOS bash 3.2
+tests/pbmuser.test.sh     # pbmuser.create.js in mongosh, fake admin DB
 ```
 
 Scenario tests with mocked `pbm` and `mongosh` and real PBM 2.12.0 JSON
