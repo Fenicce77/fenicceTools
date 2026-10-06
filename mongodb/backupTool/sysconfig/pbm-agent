@@ -1,3 +1,6 @@
-#PBM_MONGODB_URI="mongodb://backupUser:backupPassword@localhost:27017/?authSource=admin"
-PBM_MONGODB_URI="mongodb://pbmuser:pbmPassword@mongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName&readConcernLevel=local&w=1"
+# /etc/sysconfig/pbm-agent - reference template for the pbm-agent service
+# (normally installed and owned by the Percona package; install.sh does not
+# touch it). Each member's agent connects to its OWN mongod: use that
+# member's host. mongodb/pbmuser.create.js prints the line for every member.
+PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017/?authSource=admin"
 export PBM_MONGODB_URI

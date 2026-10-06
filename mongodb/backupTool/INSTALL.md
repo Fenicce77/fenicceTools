@@ -114,10 +114,10 @@ The examples use `VERSION`: set it to the version of the package you
 deploy (the `VERSION=` line in `bin/pbm-backup`, also in the package name).
 
 ```bash
-VERSION=0.6.1
+VERSION=0.6.2
 scp dist/pbm-backup-${VERSION}.tar.gz* rmateos@mongodbcluster-node01:/tmp/
 ssh rmateos@mongodbcluster-node01
-VERSION=0.6.1
+VERSION=0.6.2
 cd /tmp
 sha256sum -c pbm-backup-${VERSION}.tar.gz.sha256
 tar -xzf pbm-backup-${VERSION}.tar.gz
@@ -148,21 +148,29 @@ What it installs:
 /usr/local/lib/pbm-backup/*.sh
 /usr/local/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example,pbmuser.create.js}
 /etc/sysconfig/pbm-backup                        (only if it does not exist)
+/etc/sysconfig/pbm-conf                          (template, 0600, only if it does not exist)
 /etc/systemd/system/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
 /etc/systemd/system/pbm-backup-incr.timer.d/schedule.conf   (logical scheme only)
 ```
 
-It never overwrites `/etc/sysconfig/pbm-backup` or `/etc/sysconfig/pbm-conf`.
+It creates `/etc/sysconfig/pbm-backup` and `/etc/sysconfig/pbm-conf` from
+their templates only when they do not exist, and never overwrites them
+(install, upgrade or uninstall). A freshly created `pbm-conf` holds
+placeholders: `pbm-backup` refuses to run (exit code 2) until they are
+replaced (section 4.1).
 
 ## 4. Configure
 
 ### 4.1 Connection string: `/etc/sysconfig/pbm-conf`
 
-Same content as the existing file of the old scripts (template:
-`sysconfig/pbm-conf` in the package):
+`install.sh` creates it from the template (`sysconfig/pbm-conf` in the
+package) when it does not exist. Replace the placeholders; the
+`PBM_MONGODB_URI` line printed by `pbmuser.create.js` (section 1.1) can be
+pasted as is. Members that already have the file from the old scripts keep
+it untouched.
 
 ```bash
-PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName"
+PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017,mongodbcluster-node02:27017,mongodbcluster-node03:27017/?authSource=admin&replicaSet=<replica_set>"
 export PBM_MONGODB_URI
 ```
 
@@ -348,6 +356,7 @@ removed binary, so restore the originals before re-enabling the old timers.
 |---|---|
 | `This host (...) is not in the replica set member list` | set `LOCAL_NODE_NAMES` to the member name used in the replica set config |
 | `No eligible node` | every secondary is down, lagging, overloaded or has no healthy pbm-agent: check `pbm status` and the election table in `pbm-backup check` |
+| `PBM_MONGODB_URI in ... still has template placeholders` | fill in `/etc/sysconfig/pbm-conf` (section 4.1) |
 | `PBM storage is 'FS'...` | PBM uses filesystem storage: configure the GCS bucket (`pbm config --file`) |
 | `PITR is enabled, but the physical scheme runs without PITR` | PSMDB: `pbm config --set pitr.enabled=false` |
 | `Oplog window ... < 2 x expected dump` | Community: enlarge the oplog (`replSetResizeOplog`) or set `EXPECTED_DUMP_SEC` / `OPLOG_WINDOW_ENFORCE=false` |
