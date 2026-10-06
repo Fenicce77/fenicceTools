@@ -78,6 +78,7 @@ FILES=(
     systemd/legacy/timers/pbm-physical-full-base.timer
     systemd/legacy/timers/pbm-physical-incremental.timer
     systemd/legacy/timers/pbm-deletion.timer
+    mongodb/pbmuser.create.js
     install.sh README.md INSTALL.md CHANGES.md
 )
 for f in "${FILES[@]}"; do
@@ -91,6 +92,12 @@ if [[ $RUN_TESTS == 1 ]]; then
         die "Tests failed (full log: ${TMPDIR:-/tmp}/pbm-backup-build-tests.log). Not packaging"
     fi
     ok "$(tail -n 1 "${TMPDIR:-/tmp}/pbm-backup-build-tests.log" | sed 's/\x1b\[[0-9;]*m//g')"
+    info "Running tests/pbmuser.test.sh"
+    if ! "${ROOT}/tests/pbmuser.test.sh" >"${TMPDIR:-/tmp}/pbm-backup-build-tests-js.log" 2>&1; then
+        tail -n 20 "${TMPDIR:-/tmp}/pbm-backup-build-tests-js.log" >&2
+        die "pbmuser.create.js tests failed. Not packaging"
+    fi
+    ok "$(tail -n 1 "${TMPDIR:-/tmp}/pbm-backup-build-tests-js.log" | sed 's/\x1b\[[0-9;]*m//g')"
 fi
 
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/pbm-backup-dist.XXXXXX")

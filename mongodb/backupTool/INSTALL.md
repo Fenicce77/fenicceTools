@@ -25,7 +25,7 @@ makes sure only one of them acts.
 | `mongosh` (or legacy `mongo` on old 4.x nodes) | `mongosh --version` |
 | MongoDB >= 4.2. On 4.2/4.4: PBM < 2.6.0 and the package pinned | `dnf versionlock add percona-backup-mongodb` / `apt-mark hold percona-backup-mongodb` |
 | Members reach each other on the MongoDB port | the health probes connect to every member directly |
-| PBM user roles: standard PBM roles (include `clusterMonitor` and read on `local.oplog.rs`) | `db.getUser("<pbm_user>")` |
+| PBM user with exactly the PBM roles (section 1.1) | `db.getSiblingDB("admin").getUser("pbmuser")` |
 | Clock in sync (NTP / chrony) | `timedatectl` |
 | Writable log directory (default `/data/backup/pbm/logs`) | created automatically if possible |
 
@@ -33,6 +33,43 @@ PBM `filesystem` storage is **not** supported (it needs a path shared by all
 members, i.e. NFS). PSMDB members use the physical scheme and must have PITR
 disabled; Community members use the logical scheme and pbm-backup enables
 PITR itself.
+
+### 1.1 Create or fix the PBM user (once per replica set)
+
+`mongodb/pbmuser.create.js` (in the package; also installed in
+`/usr/local/share/doc/pbm-backup/`) creates the `pbmAnyAction` role and the
+PBM user with exactly the roles PBM documents: `readWrite` (admin),
+`backup`, `clusterMonitor`, `restore` and `pbmAnyAction`. Run it **by
+hand** with mongosh, connected to the **primary** as an administrator. Users
+and roles replicate, so once per replica set is enough.
+
+```bash
+# New user, generated 32-character password (default)
+mongosh "mongodb://rmateos@mongodbcluster-node01:27017/admin?replicaSet=rsName" --file pbmuser.create.js
+
+# New user, password typed by hand (asked twice)
+PBM_PASSWORD_MODE=prompt mongosh "mongodb://rmateos@mongodbcluster-node01:27017/admin?replicaSet=rsName" --file pbmuser.create.js
+```
+
+- **New user:** the password (generated or typed) is **shown on screen in
+  plain text** and saved to `~/.pbm-backup/<user>.<replset>.<timestamp>.env`
+  on the machine where mongosh runs (directory `0700`, file `0600`, never
+  overwritten). The path is printed. The file also contains the
+  `PBM_MONGODB_URI` line for `/etc/sysconfig/pbm-conf` (every member) and
+  one line per member for `/etc/sysconfig/pbm-agent` (each agent uses its
+  own member), with the password already URI-encoded.
+- **Existing user:** its roles are set to the PBM ones (extra roles such as
+  `clusterAdmin`, `readWriteAnyDatabase` or `userAdminAnyDatabase` are
+  removed and reported); **the password is not changed**, so running
+  pbm-agents keep working. Nothing is shown or saved.
+- **Rotate the password:** `PBM_ROTATE_PASSWORD=1`. Then update
+  `pbm-conf` and `pbm-agent` on **every** member and restart `pbm-agent`.
+- Other variables: `PBM_USER` (default `pbmuser`), `PBM_SECRET_DIR`
+  (default `~/.pbm-backup`), `PBM_HELP=1`. Requires mongosh (not the legacy
+  `mongo` shell).
+
+The password is in your terminal scrollback and in that file: move it to
+its final place (or your secret store) and delete the file.
 
 ## 2. Build the package
 
@@ -66,6 +103,7 @@ Package contents:
 | `sysconfig/pbm-conf`, `sysconfig/pbm-agent` | templates for `PBM_MONGODB_URI` |
 | `sysconfig/pbm-physical-*`, `sysconfig/pbm-deletion` | wrappers for the old units |
 | `conf/pbm-conf.yaml`, `conf/pbm-agent.yaml` | PBM templates (reference) |
+| `mongodb/pbmuser.create.js` | creates/fixes the PBM user and role (section 1.1) |
 | `README.md`, `INSTALL.md`, `CHANGES.md`, `VERSION` | documentation |
 
 ## 3. Install on a member
@@ -101,7 +139,7 @@ What it installs:
 ```
 /usr/local/bin/pbm-backup
 /usr/local/lib/pbm-backup/*.sh
-/usr/local/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example}
+/usr/local/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example,pbmuser.create.js}
 /etc/sysconfig/pbm-backup                        (only if it does not exist)
 /etc/systemd/system/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
 /etc/systemd/system/pbm-backup-incr.timer.d/schedule.conf   (logical scheme only)

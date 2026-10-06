@@ -72,7 +72,7 @@ ${C_BLD}EXIT CODES${C_OFF}
 ${C_BLD}INSTALLS${C_OFF}
     \${PREFIX}/bin/pbm-backup
     \${PREFIX}/lib/pbm-backup/*.sh
-    \${PREFIX}/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example}
+    \${PREFIX}/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example,pbmuser.create.js}
     /etc/sysconfig/pbm-backup  (or /etc/default/pbm-backup; never overwritten)
     ${UNIT_DIR}/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
 
@@ -233,6 +233,9 @@ else
     printf '%s\n' "${PKG_VERSION:-unknown}" >"${D}${DOCDIR}/VERSION"
 fi
 run install -m 0644 "${SRC}/etc/pbm-backup.conf.example" "${D}${DOCDIR}/pbm-backup.conf.example"
+if [[ -r ${SRC}/mongodb/pbmuser.create.js ]]; then
+    run install -m 0644 "${SRC}/mongodb/pbmuser.create.js" "${D}${DOCDIR}/pbmuser.create.js"
+fi
 if [[ -e ${D}${SYSCONF}/pbm-backup ]]; then
     info "Keeping existing ${SYSCONF}/pbm-backup (example in ${DOCDIR})"
 else

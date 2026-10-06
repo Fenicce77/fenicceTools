@@ -216,6 +216,24 @@ Metrics (optional, `METRICS_DIR`):
 - `INSTALL.md`: installation and deployment guide.
 - Version 0.6.0.
 
+## PBM user script (0.6.1)
+
+- `mongodb/pbmuser.create.js` (moved from `mongodb/js_scripts/`): creates
+  or fixes the `pbmAnyAction` role and the PBM user with exactly the roles
+  in the PBM documentation (`readWrite` admin, `backup`, `clusterMonitor`,
+  `restore`, `pbmAnyAction`). The first version created `pbmAnyAction`
+  without granting it, and granted `clusterAdmin`, `readWriteAnyDatabase`
+  and `userAdminAnyDatabase`, which PBM does not need.
+- Idempotent: an existing role/user is updated (extra roles removed and
+  reported). Its password is kept unless `PBM_ROTATE_PASSWORD=1`.
+- Password generated (32 alphanumeric) or typed twice
+  (`PBM_PASSWORD_MODE=prompt`), shown in plain text and saved to
+  `~/.pbm-backup/<user>.<rs>.<ts>.env` (0700/0600, never overwritten) with
+  ready `PBM_MONGODB_URI` lines (URI-encoded).
+- Requires the primary; writes with `w: majority`.
+- `tests/pbmuser.test.sh`: 45 checks in mongosh with a fake admin database.
+  Shipped in the package and installed in the doc directory.
+
 ## Diffs of the replaced scripts
 
 <details>
