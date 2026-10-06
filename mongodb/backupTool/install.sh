@@ -73,7 +73,9 @@ ${C_BLD}INSTALLS${C_OFF}
     \${PREFIX}/bin/pbm-backup
     \${PREFIX}/lib/pbm-backup/*.sh
     \${PREFIX}/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example,pbmuser.create.js}
-    /etc/sysconfig/pbm-backup  (or /etc/default/pbm-backup; never overwritten)
+    /etc/sysconfig/pbm-backup  (or /etc/default/...; created if missing, never overwritten)
+    /etc/sysconfig/pbm-conf    (PBM_MONGODB_URI template, 0600; created if missing,
+                                never overwritten; must be filled in)
     ${UNIT_DIR}/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
 
 ${C_BLD}EXAMPLES${C_OFF}
@@ -241,7 +243,15 @@ if [[ -e ${D}${SYSCONF}/pbm-backup ]]; then
 else
     run install -m 0640 "${SRC}/etc/pbm-backup.conf.example" "${D}${SYSCONF}/pbm-backup"
 fi
-[[ -e ${D}${SYSCONF}/pbm-conf ]] || warn "${SYSCONF}/pbm-conf (PBM_MONGODB_URI) does not exist: create it from ${SRC}/sysconfig/pbm-conf"
+# Connection string: created from the template when missing (0600, it will
+# hold the PBM password), never overwritten. pbm-backup refuses to run while
+# the template placeholders are still there.
+if [[ -e ${D}${SYSCONF}/pbm-conf ]]; then
+    info "Keeping existing ${SYSCONF}/pbm-conf"
+else
+    run install -m 0600 "${SRC}/sysconfig/pbm-conf" "${D}${SYSCONF}/pbm-conf"
+    warn "${SYSCONF}/pbm-conf created from the template: set PBM_MONGODB_URI (user, password, replica set) before using pbm-backup"
+fi
 
 if [[ $LEGACY_WRAPPERS == 1 ]]; then
     for f in pbm-physical-full-base pbm-physical-incremental pbm-deletion; do

@@ -6,8 +6,15 @@
 
 # pbm_init - resolve the pbm binary and check the connection URI it needs.
 pbm_init() {
+    local envf=${PBM_ENV_FILE:-/etc/sysconfig/pbm-conf}
+    # "<" and ">" are literal in ERE; do not write \< \> (word boundaries in glibc).
+    local placeholder='<[A-Za-z_]+>'
     require_cmd pbm PBM_BIN
-    [[ -n ${PBM_MONGODB_URI:-} ]] || die "PBM_MONGODB_URI is not set (check ${PBM_ENV_FILE:-/etc/sysconfig/pbm-conf})" 2
+    [[ -n ${PBM_MONGODB_URI:-} ]] || die "PBM_MONGODB_URI is not set (check ${envf})" 2
+    # Template not filled in (install.sh creates pbm-conf from a template).
+    if [[ $PBM_MONGODB_URI =~ $placeholder || $PBM_MONGODB_URI == *:pbmPassword@* ]]; then
+        die "PBM_MONGODB_URI in ${envf} still has template placeholders. Fill in user, password and replica set (mongodb/pbmuser.create.js prints the line)" 2
+    fi
     export PBM_MONGODB_URI
 }
 

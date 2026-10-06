@@ -466,6 +466,16 @@ check "metrics without METRICS_DIR -> rc 2"                                   2 
 LOCAL_NODE_NAMES=$N3 METRICS_DIR=/dev/null/nope EXPECT_OUT="METRICS" \
     check "unwritable METRICS_DIR never fails the backup"                     0 "$BASE" "" -- full
 
+printf '\n[pbm-conf template]\n'
+cp "${ROOT}/sysconfig/pbm-conf" "$WORK/env-template"
+PBM_ENV_FILE=$WORK/env-template EXPECT_OUT="still has template placeholders" \
+    check "pbm-conf template not filled in -> rc 2"                          2 "" "backup --type" -- full
+PBM_ENV_FILE=$WORK/env-template EXPECT_OUT="still has template placeholders" \
+    check "...also for check"                                                 2 "" "" -- check
+printf 'PBM_MONGODB_URI="mongodb://pbmuser:pbmPassword@n1:27017/?replicaSet=rs"\n' >"$WORK/env-oldtemplate"
+PBM_ENV_FILE=$WORK/env-oldtemplate EXPECT_OUT="still has template placeholders" \
+    check "old template password (pbmPassword) -> rc 2"                       2 "" "backup --type" -- full
+
 printf '\n[CLI]\n'
 BACKUP_MODE=bogus check "invalid BACKUP_MODE" 2 "" "" -- check
 check "help"                        0 "" "" -- --help

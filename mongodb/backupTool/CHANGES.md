@@ -234,6 +234,19 @@ Metrics (optional, `METRICS_DIR`):
 - `tests/pbmuser.test.sh`: 45 checks in mongosh with a fake admin database.
   Shipped in the package and installed in the doc directory.
 
+## pbm-conf on install (0.6.2)
+
+- `install.sh` now creates `/etc/sysconfig/pbm-conf` from the template when
+  it does not exist (mode 0600) and warns that it must be filled in. It
+  never overwrites an existing one (install, upgrade, uninstall). Until
+  0.6.1 it only warned, so a fresh install had no connection file.
+- Templates `sysconfig/pbm-conf` and `sysconfig/pbm-agent` use explicit
+  placeholders (`<pbm_user>`, `<pbm_password>`, `<replica_set>`) instead of
+  realistic-looking values, and `pbm-conf` lists the members (seed list).
+- `pbm-backup` refuses to run (exit code 2) while `PBM_MONGODB_URI` still
+  holds placeholders or the old template password, instead of failing to
+  authenticate.
+
 ## Diffs of the replaced scripts
 
 <details>

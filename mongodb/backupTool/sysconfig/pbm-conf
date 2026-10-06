@@ -1,3 +1,12 @@
-#PBM_MONGODB_URI="mongodb://backupUser:backupPassword@localhost:27017/?authSource=admin"
-PBM_MONGODB_URI="mongodb://pbmuser:pbmPassword@mongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName&readConcernLevel=local&w=1"
+# /etc/sysconfig/pbm-conf - connection string for the pbm CLI and pbm-backup.
+# Created by install.sh from this template when missing (mode 0600) and never
+# overwritten. Replace every <placeholder>: pbm-backup refuses to run while
+# any is left. Same content on every member of the replica set.
+#
+# - User and password: create them with mongodb/pbmuser.create.js; it prints
+#   this exact line, with the password already URI-encoded.
+# - List the members (seed list) and keep replicaSet=, so the CLI works
+#   whichever member is down.
+# - mongodb+srv:// is not supported (pbm-backup probes each member directly).
+PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017,mongodbcluster-node02:27017,mongodbcluster-node03:27017/?authSource=admin&replicaSet=<replica_set>"
 export PBM_MONGODB_URI
