@@ -1,6 +1,18 @@
-# /etc/sysconfig/pbm-agent - reference template for the pbm-agent service
-# (normally installed and owned by the Percona package; install.sh does not
-# touch it). Each member's agent connects to its OWN mongod: use that
-# member's host. mongodb/pbmuser.create.js prints the line for every member.
-PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017/?authSource=admin"
-export PBM_MONGODB_URI
+# /etc/sysconfig/pbm-agent - environment file of the pbm-agent service
+# (EnvironmentFile of the unit shipped in the Percona package; the package
+# owns this path, install.sh does not install it).
+#
+# Valid for EVERY PBM 2.x, and the ONLY way to configure the agent on
+# PBM 2.0 - 2.8 (e.g. PBM 2.5.0, the last release for MongoDB 4.4): those
+# agents read no config file and log to journald (journalctl -u pbm-agent).
+# From PBM 2.9 you may use conf/pbm-agent.yaml + conf/pbm-agent-config.conf
+# instead (log file, log level); this file then only needs to exist.
+#
+# Each member's agent connects to its OWN mongod: use that member's host.
+# mongodb/pbmuser.create.js prints this line for every member, with the
+# password URI-encoded. "replicaSet=<name>" may be added (PBM 2.5 package
+# default); it is not needed. Restart pbm-agent after editing.
+PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@<this_member_host>:27017/?authSource=admin"
+
+# Collections dumped in parallel by logical backups (default: CPUs / 2).
+#PBM_DUMP_PARALLEL_COLLECTIONS=4

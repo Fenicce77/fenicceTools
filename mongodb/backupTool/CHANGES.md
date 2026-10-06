@@ -247,6 +247,30 @@ Metrics (optional, `METRICS_DIR`):
   holds placeholders or the old template password, instead of failing to
   authenticate.
 
+## PBM 2.5.0 / MongoDB 4.4 (0.6.3)
+
+Review of every PBM interaction against the PBM 2.5.0 source, the last
+release that supports MongoDB 4.4 (2.6.0 dropped it).
+
+- All commands, options and JSON fields used exist with the same shape in
+  2.5.0. Two gaps fixed:
+  - Storage: PBM < 2.10 has no native GCS, so the bucket is configured as
+    S3 with the `storage.googleapis.com` endpoint and `pbm status` reports
+    `S3`. pbm-backup rejected it with the default `REQUIRED_STORAGE_TYPES=GCS`;
+    it now treats S3 on `storage.googleapis.com` as GCS. Clearer rejection
+    message (type, path, allowed types).
+  - Compatibility matrix: PBM dropped MongoDB 4.2 in 2.4.0, not 2.6.0
+    (PBM 2.4.x/2.5.x with 4.2 was accepted).
+- `check`: before the first logical full, PITR disabled is a warning, not
+  an error (the first full enables it).
+- pbm-agent templates by PBM version: `sysconfig/pbm-agent` (environment,
+  every PBM 2.x, the only option on 2.0 - 2.8), `conf/pbm-agent.yaml`
+  (PBM >= 2.9, verified keys) and the new `conf/pbm-agent-config.conf`
+  systemd drop-in that loads it. `conf/pbm-conf.yaml` gains the
+  GCS-through-S3 block for PBM < 2.10.
+- INSTALL.md: §4.3 agent configuration, §13 MongoDB 4.4 / PBM 2.5.0 with the
+  downgrade procedure. Tests: 8 new scenarios (153 total).
+
 ## Diffs of the replaced scripts
 
 <details>

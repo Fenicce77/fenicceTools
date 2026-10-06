@@ -1,14 +1,27 @@
-# pbm-agent configuration template (one per replica set member).
-# Replace the placeholders; keep this file readable by the pbm-agent user only.
-# Each member's pbm-agent talks to its own mongod: use that member's host.
-mongodb-uri: "mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017/?authSource=admin&replicaSet=rsName&readConcernLevel=local&w=1"
+# /etc/pbm-agent.yaml - pbm-agent configuration file. PBM >= 2.9 ONLY.
+#
+# PBM 2.0 - 2.8 (e.g. 2.5.0 for MongoDB 4.4) cannot read it: their pbm-agent
+# has no --config option and fails to start with it. Use sysconfig/pbm-agent
+# (environment file) for those versions.
+#
+# The agent reads this file only when started with "--config": install
+# conf/pbm-agent-config.conf as a systemd drop-in, then
+#   systemctl daemon-reload && systemctl restart pbm-agent
+# Keep it readable by the pbm-agent user only (it holds the password).
+# Keys verified against PBM 2.12.0 (cmd/pbm-agent/main.go).
+
+# Each member's agent connects to its OWN mongod: use that member's host.
+mongodb-uri: "mongodb://<pbm_user>:<pbm_password>@<this_member_host>:27017/?authSource=admin"
 
 # PITR and backup priorities are cluster settings: they belong in
-# pbm-conf.yaml ("pbm config --file"), not here. See the notes there.
+# pbm-conf.yaml ("pbm config --file"), not here.
 backup:
+  # Collections dumped in parallel by logical backups (default: CPUs / 2).
   dump-parallel-collections: 4
 
 log:
-  path: "/data/log/pbm/pbm.log"
+  path: "/data/log/pbm/pbm.log"   # default /dev/stderr (journald)
   # D (debug) is very verbose; I (info) is enough for daily operation.
+  # Allowed: D, I, W, E, F.
   level: "D"
+  json: false

@@ -20,10 +20,10 @@ makes sure only one of them acts.
 | Linux with systemd, bash >= 3.2 | `systemctl --version`, `bash --version` |
 | PBM 2.x, pbm-agent running and `ok` | `pbm version`, `systemctl status pbm-agent`, `pbm status` |
 | Same PBM version for the CLI and every agent | `pbm status` (agent column) |
-| PBM storage = GCS bucket, compression configured | `pbm config` (`storage.type: gcs`) |
+| PBM storage = GCS bucket, compression configured | `pbm config` (`storage.type: gcs`; PBM < 2.10: `s3` + `endpointUrl: https://storage.googleapis.com`, see §13) |
 | `jq` | `jq --version` |
 | `mongosh` (or legacy `mongo` on old 4.x nodes) | `mongosh --version` |
-| MongoDB >= 4.2. On 4.2/4.4: PBM < 2.6.0 and the package pinned | `dnf versionlock add percona-backup-mongodb` / `apt-mark hold percona-backup-mongodb` |
+| MongoDB >= 4.2. 4.4: PBM <= 2.5.0 (§13); 4.2: PBM < 2.4.0. Package pinned on 4.x | `dnf versionlock add percona-backup-mongodb` / `apt-mark hold percona-backup-mongodb` |
 | Members reach each other on the MongoDB port | the health probes connect to every member directly |
 | PBM user with exactly the PBM roles (section 1.1) | `db.getSiblingDB("admin").getUser("pbmuser")` |
 | Clock in sync (NTP / chrony) | `timedatectl` |
@@ -102,9 +102,11 @@ Package contents:
 | `systemd/services`, `systemd/timers` | new units |
 | `systemd/legacy/` | the old `pbm-physical-*` / `pbm-deletion` units (reference, rollback) |
 | `etc/pbm-backup.conf.example` | all tunables with defaults |
-| `sysconfig/pbm-conf`, `sysconfig/pbm-agent` | templates for `PBM_MONGODB_URI` |
+| `sysconfig/pbm-conf` | template for `/etc/sysconfig/pbm-conf` (pbm CLI and pbm-backup) |
+| `sysconfig/pbm-agent` | pbm-agent environment file, every PBM 2.x (the only agent config on PBM 2.0 - 2.8), §4.3 |
 | `sysconfig/pbm-physical-*`, `sysconfig/pbm-deletion` | wrappers for the old units |
-| `conf/pbm-conf.yaml`, `conf/pbm-agent.yaml` | PBM templates (reference) |
+| `conf/pbm-conf.yaml` | PBM cluster configuration template (`pbm config --file`), GCS native or through S3 |
+| `conf/pbm-agent.yaml`, `conf/pbm-agent-config.conf` | pbm-agent config file + systemd drop-in, PBM >= 2.9 only, §4.3 |
 | `mongodb/pbmuser.create.js` | creates/fixes the PBM user and role (section 1.1) |
 | `README.md`, `INSTALL.md`, `CHANGES.md`, `VERSION` | documentation |
 
@@ -203,6 +205,32 @@ The ones usually set:
 
 Keep this file identical on every member of a replica set: they must all
 compute the same election.
+
+### 4.3 pbm-agent configuration (per member, by PBM version)
+
+pbm-backup does not install the agent configuration (the Percona package
+owns it), but the package ships templates for both agent generations:
+
+| PBM version | Agent configuration | Templates |
+|---|---|---|
+| 2.0 - 2.8 (e.g. **2.5.0 for MongoDB 4.4**) | environment only: `/etc/sysconfig/pbm-agent` (`PBM_MONGODB_URI`, `PBM_DUMP_PARALLEL_COLLECTIONS`); logs in journald | `sysconfig/pbm-agent` |
+| >= 2.9 | the same environment file, or `/etc/pbm-agent.yaml` loaded with `--config` (adds log file, level, JSON) | `conf/pbm-agent.yaml` + `conf/pbm-agent-config.conf` |
+
+```bash
+# PBM 2.0 - 2.8 (and any version): environment file
+sudo install -m 0640 sysconfig/pbm-agent /etc/sysconfig/pbm-agent     # then edit
+sudo systemctl restart pbm-agent
+
+# PBM >= 2.9, optional: YAML file + drop-in
+sudo install -m 0600 -o mongod -g mongod conf/pbm-agent.yaml /etc/pbm-agent.yaml   # then edit
+sudo install -D -m 0644 conf/pbm-agent-config.conf /etc/systemd/system/pbm-agent.service.d/config.conf
+sudo systemctl daemon-reload && sudo systemctl restart pbm-agent
+```
+
+Each agent uses the URI of **its own** member (`pbmuser.create.js` prints one
+line per member). The `--config` drop-in must not exist on PBM 2.0 - 2.8:
+those agents do not know the option and do not start (remove it before a
+downgrade).
 
 ## 5. Validate (every member, before enabling)
 
@@ -357,9 +385,67 @@ removed binary, so restore the originals before re-enabling the old timers.
 | `This host (...) is not in the replica set member list` | set `LOCAL_NODE_NAMES` to the member name used in the replica set config |
 | `No eligible node` | every secondary is down, lagging, overloaded or has no healthy pbm-agent: check `pbm status` and the election table in `pbm-backup check` |
 | `PBM_MONGODB_URI in ... still has template placeholders` | fill in `/etc/sysconfig/pbm-conf` (section 4.1) |
-| `PBM storage is 'FS'...` | PBM uses filesystem storage: configure the GCS bucket (`pbm config --file`) |
+| `PBM storage is 'FS' ...; allowed: ...` | PBM uses filesystem storage: configure the GCS bucket (`pbm config --file`) |
+| `PBM storage is 'S3' (s3://...); allowed: ...` | S3 that is not GCS: fix the endpoint, or allow it with `REQUIRED_STORAGE_TYPES="GCS S3"` |
+| `PBM x.y does not support MongoDB 4.4 / 4.2` | install PBM 2.5.0 (4.4) or < 2.4.0 (4.2), §13 |
+| pbm-agent does not start after a downgrade | remove the `--config` drop-in (§4.3) |
 | `PITR is enabled, but the physical scheme runs without PITR` | PSMDB: `pbm config --set pitr.enabled=false` |
 | `Oplog window ... < 2 x expected dump` | Community: enlarge the oplog (`replSetResizeOplog`) or set `EXPECTED_DUMP_SEC` / `OPLOG_WINDOW_ENFORCE=false` |
 | `Last full ... started N min ago (< FULL_MIN_INTERVAL_SEC)` | normal: a full already ran today. Use `pbm-backup full --force` to take another one |
 | `PBM executed the backup on X, not on this node` | PBM picked another member by `backup.priority`; keep the primary lowest in `conf/pbm-conf.yaml` |
 | `Cannot read buildInfo` | `mongosh` missing or the URI is wrong; or set `MONGODB_VERSION` + `MONGODB_EDITION` |
+
+## 13. MongoDB 4.4: PBM 2.5.0
+
+PBM 2.6.0 dropped MongoDB 4.4, so **PBM 2.5.0 is the last release for 4.4**
+(from the PBM source: v2.5.0 "PBM works with v4.4, v5.0, v6.0, v7.0", v2.6.0
+"v5.0, v6.0, v7.0"). pbm-backup works with it as is (all the `pbm` commands
+and JSON fields it uses were checked in the v2.5.0 source). Two differences
+matter:
+
+- **No native GCS before PBM 2.10:** the bucket is configured as S3 with
+  `endpointUrl: https://storage.googleapis.com` and GCS HMAC keys (block in
+  `conf/pbm-conf.yaml`). `pbm status` reports `S3
+  s3://https://storage.googleapis.com/...`; pbm-backup accepts it as GCS,
+  so `REQUIRED_STORAGE_TYPES=GCS` (default) still applies.
+- **Agent configuration by environment only** (§4.3): no `/etc/pbm-agent.yaml`,
+  no `--config` drop-in.
+
+### Downgrade from a newer PBM (EL8, every member of the replica set)
+
+All agents must run the same version: do every member in the same window.
+
+```bash
+# 0. Check: package, available version, drop-ins, lock
+rpm -q percona-backup-mongodb
+sudo dnf --showduplicates list percona-backup-mongodb | grep 2.5.0   # else: sudo percona-release enable pbm release
+systemctl cat pbm-agent                                              # look for a --config drop-in
+pbm config > /root/pbm-config-before.yaml && chmod 600 /root/pbm-config-before.yaml   # once; holds secrets
+
+# 1. Stop backups and agents (all members)
+sudo systemctl disable --now pbm-backup-full.timer pbm-backup-incr.timer pbm-backup-cleanup.timer pbm-backup-metrics.timer
+pbm status -s running            # must be idle: {"running":{}}
+sudo systemctl stop pbm-agent
+
+# 2. Downgrade (each member)
+sudo dnf versionlock delete percona-backup-mongodb    # only if locked
+sudo dnf downgrade percona-backup-mongodb-2.5.0-1.el8 # exact name from --showduplicates
+sudo dnf versionlock add percona-backup-mongodb
+sudo rm -f /etc/systemd/system/pbm-agent.service.d/config.conf && sudo systemctl daemon-reload
+# /etc/sysconfig/pbm-agent is %config(noreplace): it is kept. Check its URI (§4.3).
+
+# 3. Storage compatible with 2.5.0 (once, agents still stopped), if it was "type: gcs"
+pbm config --file /root/pbm-config-2.5.yaml           # S3 block of conf/pbm-conf.yaml, chmod 600
+
+# 4. Start and verify
+sudo systemctl start pbm-agent                        # all members
+pbm status                                            # every agent v2.5.0 and ok, storage S3 s3://https://storage.googleapis.com/...
+pbm config --force-resync && pbm list
+
+# 5. pbm-backup (each member)
+sudo pbm-backup check
+sudo systemctl enable --now pbm-backup-full.timer pbm-backup-incr.timer pbm-backup-cleanup.timer
+```
+
+Install pbm-backup on these members with `--scheme logical`; before the first
+logical full `check` warns that PITR is disabled (the first full enables it).

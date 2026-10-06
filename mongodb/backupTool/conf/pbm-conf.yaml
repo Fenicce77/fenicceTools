@@ -14,6 +14,8 @@ storage:
 ##  Remote backup storage type. Supported types: S3, GCS, shared filesystem, Azure
 
 #--------------------Google Cloud Storage Configuration-----------------
+## Native "gcs" type: PBM >= 2.10 only. For PBM < 2.10 (e.g. 2.5.0, the last
+## release for MongoDB 4.4) use the S3-compatible block below instead.
 
   type: gcs
   gcs:
@@ -48,6 +50,21 @@ storage:
 #
 ## The maximum object size that will be stored on the storage
 #      maxObjSizeGB: 5018
+
+#--------------------Google Cloud Storage through S3 (PBM < 2.10)--------
+## PBM < 2.10 has no "gcs" type: replace the whole gcs block above with this
+## one. It needs GCS HMAC keys (a service account JSON key cannot be used).
+## "pbm status" then reports "S3 s3://https://storage.googleapis.com/...",
+## which pbm-backup accepts as GCS.
+#  type: s3
+#  s3:
+#     region: us-east-1
+#     endpointUrl: https://storage.googleapis.com
+#     bucket: BackupBucket
+#     prefix: mongocluster/betBuilder
+#     credentials:
+#       access-key-id: <GCS HMAC access key>
+#       secret-access-key: <GCS HMAC secret>
 
 #--------------------Filesystem Configuration---------------------------
 ## NOT USED by pbm-backup: PBM filesystem storage needs the same path mounted
