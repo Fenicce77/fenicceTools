@@ -271,6 +271,25 @@ release that supports MongoDB 4.4 (2.6.0 dropped it).
 - INSTALL.md: §4.3 agent configuration, §13 MongoDB 4.4 / PBM 2.5.0 with the
   downgrade procedure. Tests: 8 new scenarios (153 total).
 
+## PBM 2.5.0 status format fix (0.6.4)
+
+Found on the first real run on MongoDB 4.4 / PBM 2.5.0 (every member was
+skipped, probes returned nothing).
+
+- PBM 2.5.0 `pbm status -o json` reports members as `<replset>/<host>:<port>`
+  and leaves the role of secondaries empty (`cmd/pbm/status.go`:
+  `Host: c.RS + "/" + n.Host`, roles set only for P/A/D/H); PBM 2.12.0
+  reports `<host>:<port>` and `S`. pbm-backup used the prefixed string as a
+  host name: health probes failed, the local member could not be
+  recognised and secondaries showed `role=?`. Members are now normalized
+  (prefix stripped, empty role shown as `S`) in the election, the
+  preflight agent warnings and the `pbm_agent_ok` metric.
+- When a pbm-agent is not ok, the agent version (`NOT FOUND`, ...) and the
+  errors reported by PBM are now shown in the preflight warning and in the
+  election `SKIP(...)` reason.
+- Tests use the real PBM 2.5.0 cluster format (8 new scenarios, 160 total);
+  without the fix 7 scenarios fail.
+
 ## Diffs of the replaced scripts
 
 <details>

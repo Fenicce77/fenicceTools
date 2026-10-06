@@ -110,7 +110,8 @@ metrics_state() {
             else empty end ),
           "# HELP pbm_agent_ok 1 if the pbm-agent of the member is ok.",
           "# TYPE pbm_agent_ok gauge",
-          ( $st.cluster[]?.nodes[]? | "pbm_agent_ok{\($l),member=\"\(.host)\",role=\"\(.role)\"} \(if .ok then 1 else 0 end)" ),
+          ( $st.cluster[]?.nodes[]?
+            | "pbm_agent_ok{\($l),member=\"\(.host | sub("^[^/]*/"; ""))\",role=\"\(if (.role // "") == "" then "S" else .role end)\"} \(if .ok then 1 else 0 end)" ),
           ( if $el != null then
               "# HELP pbm_backup_member_eligible 1 if the member can take backups now (healthy secondary).",
               "# TYPE pbm_backup_member_eligible gauge",

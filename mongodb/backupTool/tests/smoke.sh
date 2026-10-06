@@ -470,14 +470,44 @@ printf '\n[PBM 2.5.0 / MongoDB 4.4 (Community)]\n'
 # PBM 2.5.0 output has the same JSON shape (checked in its source); what
 # changes is the storage (no native GCS before PBM 2.10: S3 endpoint) and
 # the agent versions.
-jq '.backups.type = "S3" | .backups.path = "s3://https://storage.googleapis.com/mybucket/mongocluster/rs44"
-    | .cluster[0].nodes |= map(.agent = "v2.5.0")' "$FIX/status-all-agents-ok.json" >"$WORK/status-pbm25-gcs.json"
-jq '.backups.type = "S3" | .backups.path = "s3://mybucket/mongocluster/rs44"
-    | .cluster[0].nodes |= map(.agent = "v2.5.0")' "$FIX/status-all-agents-ok.json" >"$WORK/status-pbm25-aws.json"
+# PBM 2.5.0 cluster section (cmd/pbm/status.go): host = "<rs>/<host>:<port>",
+# role left empty for secondaries.
+PBM25_NODES='.cluster[0].rs = "rs44" | .cluster[0].nodes |= map(.agent = "v2.5.0" | .host = "rs44/" + .host | (if .role == "S" then .role = "" else . end))'
+jq ".backups.type = \"S3\" | .backups.path = \"s3://https://storage.googleapis.com/mybucket/mongocluster/rs44\" | $PBM25_NODES" \
+    "$FIX/status-all-agents-ok.json" >"$WORK/status-pbm25-gcs.json"
+jq ".backups.type = \"S3\" | .backups.path = \"s3://mybucket/mongocluster/rs44\" | $PBM25_NODES" \
+    "$FIX/status-all-agents-ok.json" >"$WORK/status-pbm25-aws.json"
+jq '.cluster[0].nodes |= map(.ok = false | .errors = ["storage: check storage connection: 403 Forbidden"])' \
+    "$WORK/status-pbm25-gcs.json" >"$WORK/status-pbm25-agents-ko.json"
+jq '.cluster[0].nodes |= map(.ok = false | .agent = "NOT FOUND" | del(.errors))' \
+    "$WORK/status-pbm25-gcs.json" >"$WORK/status-pbm25-notfound.json"
 C44='{"version":"4.4.15","modules":[]}'
 MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
     LOCAL_NODE_NAMES=$N2 EXPECT_OUT="Storage GCS (GCS through the S3-compatible endpoint)" \
     check "4.4.15 + PBM 2.5.0 + GCS via S3 -> logical full"                   0 "$LOG" "" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_OUT="#0 mongocluster-node02.example.private:27017 role=S lag=0" \
+    check "rs-prefixed hosts: probes work, secondary role shown as S"          0 "$LOG" "" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N3 EXPECT_OUT="Standby #1" \
+    check "rs-prefixed hosts: this member is recognised (node03 standby)"     0 "" "backup --type" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-agents-ko.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_OUT="SKIP(pbm-agent not ok: storage: check storage connection: 403 Forbidden)" \
+    check "agents not ok: PBM error shown in the election"                    1 "" "backup --type" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-agents-ko.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_OUT="AGENTS\]\[WARN\] mongocluster-node02.example.private:27017: pbm-agent NOT ok (agent: v2.5.0) - storage: check" \
+    check "...and in the preflight warning, without the rs/ prefix"           1 "" "backup --type" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-notfound.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_OUT="agent not registered" \
+    check "agent NOT FOUND -> explained"                                      1 "" "backup --type" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
+    METRICS_DIR=$WORK/m25 LOCAL_NODE_NAMES=$N2 \
+    check "metrics with PBM 2.5 status"                                       0 "" "" -- metrics
+if grep -q 'pbm_agent_ok{rs="gcssrs01",node="[^"]*",member="mongocluster-node02.example.private:27017",role="S"} 1' "$WORK/m25/pbm_backup_state.prom"; then
+    pass=$((pass + 1)); printf '  \033[32mPASS\033[0m %s\n' "...pbm_agent_ok member without rs/ prefix, role S"
+else
+    fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s\n' "...pbm_agent_ok member without rs/ prefix, role S"; grep pbm_agent_ok "$WORK/m25/pbm_backup_state.prom" | sed 's/^/       | /'
+fi
 MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
     LOCAL_NODE_NAMES=$N2 EXPECT_NO_OUT="differs from CLI" \
     check "...agents v2.5.0 match the 2.5.0 CLI"                              0 "" "" -- full --dry-run
