@@ -8,16 +8,20 @@
 # ---------------------------------------------------------------------------
 # Compatibility matrix (edit here when PBM releases change support)
 # ---------------------------------------------------------------------------
-# Sources: project requirements (CLAUDE.md) and PBM documentation.
+# Sources: project requirements (CLAUDE.md) and the PBM source code
+# (pbm/version/version.go, FeatureSupport.PBMSupport):
 #   - PBM 2.x is required by this tool (MongoDB 4.0 needs PBM 1.x).
-#   - PBM 2.3.0 deprecated MongoDB 4.2.
-#   - PBM 2.6.0 dropped MongoDB 4.4 (and therefore 4.2).
+#   - PBM 2.3.0 deprecated MongoDB 4.2; PBM 2.4.0 dropped it
+#     (v2.4.0/v2.5.0: "PBM works with v4.4, v5.0, v6.0, v7.0").
+#   - PBM 2.6.0 dropped MongoDB 4.4 ("PBM works with v5.0, v6.0, v7.0"):
+#     PBM 2.5.0 is the last release for MongoDB 4.4.
 #   - Physical incremental backups need PSMDB >= the versions below.
 # Items marked "verify" come from the PBM docs and were not tested here.
 COMPAT_PBM_MIN=2.0.0
 COMPAT_MONGO_MIN=4.2
 COMPAT_PBM_DEPRECATES_42=2.3.0
-COMPAT_PBM_DROPS_4X=2.6.0
+COMPAT_PBM_DROPS_42=2.4.0
+COMPAT_PBM_DROPS_44=2.6.0
 # PSMDB minimum versions for physical incremental backups (verify).
 COMPAT_PSMDB_INCR_MIN_42=4.2.24-24
 COMPAT_PSMDB_INCR_MIN_44=4.4.18-18
@@ -150,9 +154,11 @@ compat_report() {
     fi
     case $mm in
         4.2|4.4)
-            if version_ge "$pv" "$COMPAT_PBM_DROPS_4X"; then
+            local drops=$COMPAT_PBM_DROPS_44
+            [[ $mm == 4.2 ]] && drops=$COMPAT_PBM_DROPS_42
+            if version_ge "$pv" "$drops"; then
                 printf 'ERROR\tPBM %s does not support MongoDB %s (dropped in PBM %s). Install PBM < %s\n' \
-                    "$pv" "$mm" "$COMPAT_PBM_DROPS_4X" "$COMPAT_PBM_DROPS_4X"
+                    "$pv" "$mm" "$drops" "$drops"
             elif [[ $mm == 4.2 ]] && version_ge "$pv" "$COMPAT_PBM_DEPRECATES_42"; then
                 printf 'WARN\tMongoDB 4.2 is deprecated since PBM %s\n' "$COMPAT_PBM_DEPRECATES_42"
             fi

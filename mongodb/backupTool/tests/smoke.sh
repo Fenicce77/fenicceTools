@@ -337,7 +337,7 @@ MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/sta
 
 printf '\n[storage / compression]\n'
 jq '.backups.type = "FS" | .backups.path = "/data/backup/pbm"' "$FIX/status-all-agents-ok.json" >"$WORK/status-fs.json"
-MOCK_STATUS=$WORK/status-fs.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="backups must go to a bucket" \
+MOCK_STATUS=$WORK/status-fs.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="allowed: REQUIRED_STORAGE_TYPES=GCS" \
     check "filesystem storage -> rc 1"                                        1 "" "backup --type" -- full
 MOCK_STATUS=$WORK/status-fs.json LOCAL_NODE_NAMES=$N3 REQUIRED_STORAGE_TYPES="GCS FS" \
     check "REQUIRED_STORAGE_TYPES can allow it"                               0 "$BASE" "" -- full
@@ -465,6 +465,40 @@ fmtcheck "exposition format is valid (logical)"
 check "metrics without METRICS_DIR -> rc 2"                                   2 "" "" -- metrics
 LOCAL_NODE_NAMES=$N3 METRICS_DIR=/dev/null/nope EXPECT_OUT="METRICS" \
     check "unwritable METRICS_DIR never fails the backup"                     0 "$BASE" "" -- full
+
+printf '\n[PBM 2.5.0 / MongoDB 4.4 (Community)]\n'
+# PBM 2.5.0 output has the same JSON shape (checked in its source); what
+# changes is the storage (no native GCS before PBM 2.10: S3 endpoint) and
+# the agent versions.
+jq '.backups.type = "S3" | .backups.path = "s3://https://storage.googleapis.com/mybucket/mongocluster/rs44"
+    | .cluster[0].nodes |= map(.agent = "v2.5.0")' "$FIX/status-all-agents-ok.json" >"$WORK/status-pbm25-gcs.json"
+jq '.backups.type = "S3" | .backups.path = "s3://mybucket/mongocluster/rs44"
+    | .cluster[0].nodes |= map(.agent = "v2.5.0")' "$FIX/status-all-agents-ok.json" >"$WORK/status-pbm25-aws.json"
+C44='{"version":"4.4.15","modules":[]}'
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_OUT="Storage GCS (GCS through the S3-compatible endpoint)" \
+    check "4.4.15 + PBM 2.5.0 + GCS via S3 -> logical full"                   0 "$LOG" "" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_NO_OUT="differs from CLI" \
+    check "...agents v2.5.0 match the 2.5.0 CLI"                              0 "" "" -- full --dry-run
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-aws.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_OUT="allowed: REQUIRED_STORAGE_TYPES=GCS" \
+    check "S3 that is not GCS -> rc 1"                                        1 "" "backup --type" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-aws.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 REQUIRED_STORAGE_TYPES="GCS S3" \
+    check "...allowed with REQUIRED_STORAGE_TYPES=\"GCS S3\""                  0 "$LOG" "" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.6.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json LOCAL_NODE_NAMES=$N2 \
+    EXPECT_OUT="does not support MongoDB 4.4 (dropped in PBM 2.6.0)" \
+    check "4.4 + PBM 2.6.0 -> rc 1"                                           1 "" "backup --type" -- full
+MOCK_BUILDINFO='{"version":"4.2.24","modules":[]}' MOCK_PBM_VERSION=2.4.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json LOCAL_NODE_NAMES=$N2 \
+    EXPECT_OUT="does not support MongoDB 4.2 (dropped in PBM 2.4.0)" \
+    check "4.2 + PBM 2.4.0 -> rc 1 (was accepted before)"                     1 "" "backup --type" -- full
+MOCK_BUILDINFO='{"version":"4.2.24","modules":[]}' MOCK_PBM_VERSION=2.3.1 MOCK_STATUS=$WORK/status-pbm25-gcs.json \
+    MOCK_BACKUPS=$WORK/backups-none.json LOCAL_NODE_NAMES=$N2 EXPECT_OUT="deprecated since PBM 2.3.0" \
+    check "4.2 + PBM 2.3.1 -> deprecated warning, runs"                       0 "$LOG" "" -- full
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
+    LOCAL_NODE_NAMES=$N2 EXPECT_OUT="No logical full yet and PITR is disabled: expected" \
+    check "check before the first logical full -> warning, rc 0"              0 "" "backup --type" -- check
 
 printf '\n[pbm-conf template]\n'
 cp "${ROOT}/sysconfig/pbm-conf" "$WORK/env-template"

@@ -65,7 +65,7 @@ FILES=(
     bin/pbm-backup
     lib/common.sh lib/compat.sh lib/metrics.sh lib/mongo.sh lib/pbm.sh lib/topology.sh
     etc/pbm-backup.conf.example
-    conf/pbm-agent.yaml conf/pbm-conf.yaml
+    conf/pbm-agent.yaml conf/pbm-agent-config.conf conf/pbm-conf.yaml
     sysconfig/pbm-agent sysconfig/pbm-conf
     sysconfig/pbm-physical-full-base sysconfig/pbm-physical-incremental sysconfig/pbm-deletion
     systemd/services/pbm-backup-full.service systemd/services/pbm-backup-incr.service

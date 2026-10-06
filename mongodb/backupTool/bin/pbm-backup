@@ -15,7 +15,7 @@
 set -euo pipefail
 
 PROG=pbm-backup
-VERSION=0.6.2
+VERSION=0.6.3
 
 # ---------------------------------------------------------------------------
 # Locate and load libraries
@@ -376,15 +376,23 @@ EOF
 
     # Backups always go to a bucket (no PBM filesystem storage: it needs a
     # path shared by every node, i.e. NFS).
-    local stype
+    local stype spath note=''
     stype=$(printf '%s\n' "$status" | jq -r '.backups.type // empty')
+    spath=$(printf '%s\n' "$status" | jq -r '.backups.path // empty')
+    # PBM < 2.10 has no native GCS storage: a GCS bucket is configured as S3
+    # with endpointUrl https://storage.googleapis.com, and "pbm status"
+    # reports type "S3", path "s3://https://storage.googleapis.com/<bucket>/...".
+    if [[ $(lower "$stype") == s3 && $spath == *storage.googleapis.com* ]]; then
+        stype=GCS
+        note=' (GCS through the S3-compatible endpoint)'
+    fi
     if [[ -z $stype ]]; then
         log WARN "${L}[PRECHECK][STORAGE]" "Cannot read the PBM storage type from 'pbm status'"
     elif ! printf '%s\n' $REQUIRED_STORAGE_TYPES | grep -qix -- "$stype"; then
         errors=$((errors + 1))
-        log ERROR "${L}[PRECHECK][STORAGE]" "PBM storage is '${stype}'; backups must go to a bucket (REQUIRED_STORAGE_TYPES=${REQUIRED_STORAGE_TYPES})"
+        log ERROR "${L}[PRECHECK][STORAGE]" "PBM storage is '${stype}' (${spath:-no path}); allowed: REQUIRED_STORAGE_TYPES=${REQUIRED_STORAGE_TYPES}"
     else
-        log OK "${L}[PRECHECK][STORAGE]" "Storage ${stype} $(printf '%s\n' "$status" | jq -r '.backups.path // ""'), compression ${BACKUP_COMPRESSION}${BACKUP_COMPRESSION_LEVEL:+ level ${BACKUP_COMPRESSION_LEVEL}}"
+        log OK "${L}[PRECHECK][STORAGE]" "Storage ${stype}${note} ${spath}, compression ${BACKUP_COMPRESSION}${BACKUP_COMPRESSION_LEVEL:+ level ${BACKUP_COMPRESSION_LEVEL}}"
     fi
 
     if [[ $STRATEGY == physical && $(printf '%s\n' "$status" | jq -r '.pitr.conf // false') == true ]]; then
@@ -884,7 +892,12 @@ cmd_check() {
             fi ;;
     esac
     if [[ $STRATEGY == logical ]]; then
-        pitr_report "$L" "$status" "$last" || rc=1
+        if [[ -z $last && $(printf '%s\n' "$status" | jq -r '.pitr.conf // false') != true ]]; then
+            # Fresh setup: the first logical full enables PITR (PITR_AUTOCONFIG).
+            log WARN "${L}[PITR]" "No logical full yet and PITR is disabled: expected before the first full ('${PROG} full' enables PITR)"
+        else
+            pitr_report "$L" "$status" "$last" || rc=1
+        fi
     fi
     return "$rc"
 }

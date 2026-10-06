@@ -44,9 +44,12 @@ pbm-backup checks afterwards and warns if it differs. Keep the primary lowest.
 - Linux with systemd on every member; bash >= 3.2.
 - `pbm` (PBM 2.x, same version as the pbm-agents), `jq`, `mongosh` (or the
   legacy `mongo` shell).
-- MongoDB >= 4.2. 4.2/4.4 need PBM < 2.6.0; pin the package
+- MongoDB >= 4.2. 4.4 needs PBM 2.5.0 (last release for 4.4), 4.2 needs
+  PBM < 2.4.0; pin the package
   (`dnf versionlock add percona-backup-mongodb` / `apt-mark hold percona-backup-mongodb`).
 - PBM storage: GCS bucket (filesystem storage needs NFS and is refused).
+  PBM < 2.10 has no native GCS: use the S3-compatible endpoint
+  (`storage.googleapis.com`), accepted as GCS (see INSTALL.md §13).
 - The PBM user must have exactly the roles PBM documents; create or fix
   it with `mongodb/pbmuser.create.js` (see [INSTALL.md](INSTALL.md) 1.1).
   They cover the health probes (`clusterMonitor`) and the oplog window
@@ -171,6 +174,15 @@ tests/pbmuser.test.sh     # pbmuser.create.js in mongosh, fake admin DB
 
 Scenario tests with mocked `pbm` and `mongosh` and real PBM 2.12.0 JSON
 output as fixtures. No MongoDB needed.
+
+## Verified against PBM 2.5.0 (source)
+
+- Every `pbm` command, option and JSON field used by pbm-backup exists with
+  the same shape in v2.5.0 (`backup`, `cleanup`, `restore`, `status -s`,
+  `describe-backup`, `list`, `config KEY -o json`, `config --set pitr.*`,
+  `version`). Storage is reported as `S3` (no native GCS before 2.10).
+- pbm-agent 2.5.0 reads only `PBM_MONGODB_URI` / `PBM_DUMP_PARALLEL_COLLECTIONS`
+  (no config file before 2.9).
 
 ## Verified against PBM 2.12.0
 

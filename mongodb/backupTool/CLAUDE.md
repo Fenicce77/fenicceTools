@@ -13,8 +13,9 @@ original scripts, which are kept as diffs there and as units in `systemd/legacy/
   healthy secondary, never the primary.
 - Chain-aligned safe retention, `restore` with coverage validation, optional Prometheus
   textfile metrics, systemd units, `install.sh`, tarball packaging, PBM user script.
-- Verified against PBM 2.12.0 output and source; not yet run on a live cluster (see the
-  "Not yet verified" list in README.md).
+- Verified against PBM 2.12.0 output and source, and the PBM 2.5.0 source (last release for
+  MongoDB 4.4; no native GCS before 2.10, no agent config file before 2.9); not yet run on a
+  live cluster (see the "Not yet verified" list in README.md).
 
 ## Goal
 Extend the system to support MongoDB >= 4.x, both PSMDB and MongoDB Community:
