@@ -232,6 +232,9 @@ output as fixtures. No MongoDB needed.
   `version`). Storage is reported as `S3` (no native GCS before 2.10).
 - pbm-agent 2.5.0 reads only `PBM_MONGODB_URI` / `PBM_DUMP_PARALLEL_COLLECTIONS`
   (no config file before 2.9).
+- `pbm status -o json` lists members as `<replset>/<host>:<port>` with an
+  empty role for secondaries (2.12.0: `<host>:<port>`, `S`); pbm-backup
+  normalizes both.
 
 ## Verified against PBM 2.12.0
 

@@ -111,13 +111,23 @@ probe_node() {
 # Election
 # ---------------------------------------------------------------------------
 # cluster_nodes_json STATUS_JSON - print the nodes of the (single) replica set
-# as reported by "pbm status": [{"host","role","agent","ok"}, ...].
+# as reported by "pbm status": [{"host","role","agent","ok","errors"}, ...].
+# Normalized across PBM versions (checked in the PBM source):
+#   - PBM 2.5.0 reports host as "<replset>/<host>:<port>" and leaves role
+#     empty for secondaries; PBM 2.12.0 reports "<host>:<port>" and "S".
+#   - Empty role -> "S", as "pbm status" text output does.
 # Fails if the cluster is sharded (more than one replica set).
 cluster_nodes_json() {
     local n
     n=$(printf '%s\n' "$1" | jq '.cluster | length')
     [[ $n == 1 ]] || return 1
-    printf '%s\n' "$1" | jq -c '[.cluster[0].nodes[] | {host, role, agent, ok}]'
+    printf '%s\n' "$1" | jq -c '[.cluster[0].nodes[] | {
+        host: (.host | sub("^[^/]*/"; "")),
+        role: (if (.role // "") == "" then "S" else .role end),
+        agent: (.agent // ""),
+        ok: (.ok == true),
+        errors: (.errors // [])
+    }]'
 }
 
 # elect_nodes STATUS_JSON OWNER_HOST - probe every member and print the
@@ -156,7 +166,8 @@ elect_nodes() {
         all=$(printf '%s\n' "$all" | jq -c \
             --argjson n "$(printf '%s\n' "$nodes" | jq -c --arg h "$host" '.[] | select(.host == $h)')" \
             --argjson probe "$probe" --argjson owner "$is_owner" --argjson pref "$pref_idx" \
-            '. + [{host: $n.host, role: $n.role, agent_ok: ($n.ok == true), owner: $owner, pref: $pref, probe: $probe}]')
+            '. + [{host: $n.host, role: $n.role, agent_ok: ($n.ok == true), agent: $n.agent, agent_errors: $n.errors,
+                   owner: $owner, pref: $pref, probe: $probe}]')
     done <<EOF
 $(printf '%s\n' "$nodes" | jq -r '.[].host')
 EOF
@@ -170,6 +181,9 @@ EOF
             if .role == "A" then "arbiter"
             elif .role == "D" then "delayed member"
             elif (.agent_ok | not) then "pbm-agent not ok"
+                + (if (.agent_errors | length) > 0 then ": \(.agent_errors | join("; "))"
+                   elif .agent == "NOT FOUND" or .agent == "" then ": agent not registered (pbm-agent not running on this member?)"
+                   else "" end)
             elif .probe.reachable != true then "mongod unreachable: \(.probe.error // "unknown")"
             elif .probe.error != null then "probe failed: \(.probe.error)"
             elif (.probe.primary or .role == "P") and ($allow_primary | not) then "primary"

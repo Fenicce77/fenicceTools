@@ -15,7 +15,7 @@
 set -euo pipefail
 
 PROG=pbm-backup
-VERSION=0.6.3
+VERSION=0.6.4
 
 # ---------------------------------------------------------------------------
 # Locate and load libraries
@@ -363,8 +363,10 @@ EOF
     # Agents on a different version than the CLI, or not ok.
     agents=$(printf '%s\n' "$status" | jq -r --arg v "v${pv}" '
         .cluster[]?.nodes[]?
-        | if (.ok | not) then "\(.host): pbm-agent NOT ok"
-          elif .agent != $v then "\(.host): pbm-agent \(.agent) differs from CLI \($v)"
+        | (.host | sub("^[^/]*/"; "")) as $h
+        | if (.ok | not) then "\($h): pbm-agent NOT ok (agent: \(.agent // "?"))"
+              + (if ((.errors // []) | length) > 0 then " - \(.errors | join("; "))" else "" end)
+          elif .agent != $v then "\($h): pbm-agent \(.agent) differs from CLI \($v)"
           else empty end')
     if [[ -n $agents ]]; then
         while IFS= read -r msg; do
