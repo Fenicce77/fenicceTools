@@ -80,7 +80,9 @@ cd mongodb/backupTool
 packaging/build-dist.sh
 ```
 
-It runs the test suite first (`tests/smoke.sh`, no MongoDB needed) and writes:
+It runs both test suites first, `tests/smoke.sh` (no MongoDB needed) and
+`tests/pbmuser.test.sh` (needs mongosh; skipped if it is missing), and stops
+if any check fails. Then it writes:
 
 ```
 dist/pbm-backup-<version>.tar.gz          # top directory pbm-backup-<version>/
@@ -108,14 +110,19 @@ Package contents:
 
 ## 3. Install on a member
 
+The examples use `VERSION`: set it to the version of the package you
+deploy (the `VERSION=` line in `bin/pbm-backup`, also in the package name).
+
 ```bash
-scp dist/pbm-backup-0.6.0.tar.gz* rmateos@mongodbcluster-node01:/tmp/
+VERSION=0.6.1
+scp dist/pbm-backup-${VERSION}.tar.gz* rmateos@mongodbcluster-node01:/tmp/
 ssh rmateos@mongodbcluster-node01
+VERSION=0.6.1
 cd /tmp
-sha256sum -c pbm-backup-0.6.0.tar.gz.sha256
-tar -xzf pbm-backup-0.6.0.tar.gz
-sudo pbm-backup-0.6.0/install.sh --dry-run      # review
-sudo pbm-backup-0.6.0/install.sh                 # install, timers NOT enabled yet
+sha256sum -c pbm-backup-${VERSION}.tar.gz.sha256
+tar -xzf pbm-backup-${VERSION}.tar.gz
+sudo pbm-backup-${VERSION}/install.sh --dry-run      # review
+sudo pbm-backup-${VERSION}/install.sh                 # install, timers NOT enabled yet
 ```
 
 `install.sh` options:
@@ -294,7 +301,8 @@ enabled stay enabled. A backup already running keeps its old code until it
 finishes.
 
 ```bash
-sudo pbm-backup-0.7.0/install.sh --scheme physical
+VERSION=<new version>
+sudo pbm-backup-${VERSION}/install.sh --scheme physical   # same options as the first install
 pbm-backup --version
 ```
 
@@ -315,7 +323,7 @@ Read `CHANGES.md` for new tunables (they all have safe defaults).
 ## 10. Uninstall
 
 ```bash
-sudo pbm-backup-0.6.0/install.sh --uninstall
+sudo pbm-backup-${VERSION}/install.sh --uninstall
 ```
 
 It stops and removes the timers and units, the binary, the libraries and the
