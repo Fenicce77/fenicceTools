@@ -1,0 +1,127 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "bash",
+  "instance": {
+    "name": "gh",
+    "alias": "gh",
+    "role": "source",
+    "conf_file": "../conf//gh.conf",
+    "uri": "mongodb://gh-mongodbcluster01.betika.private:27017,gh-mongodbcluster02.betika.private:27017,gh-mongodbcluster03.betika.private:27017/?replicaSet=gh-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000"
+  },
+  "collected_at": "2026-10-08T14:23:18Z",
+  "status": "ok",
+  "error": null,
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5,
+    "activity": true,
+    "member_stats": false,
+    "modified_pattern": "modif",
+    "modified_scan": false,
+    "oplog_window_hours": 0,
+    "activity_samples": 0,
+    "activity_interval_s": 10
+  },
+  "server": {
+    "version": "4.4.29",
+    "fcv": "4.4",
+    "set_name": "gh-mongodbcluster",
+    "storage_engine": "wiredTiger",
+    "topology": "replicaset"
+  },
+  "databases": [
+    {
+      "name": "betika_gh",
+      "size_on_disk": 65536,
+      "empty": false,
+      "collections": [
+        {
+          "name": "user",
+          "type": "collection",
+          "options": {},
+          "stats": {
+            "count": 1,
+            "size": 52,
+            "storage_size": 20480,
+            "total_index_size": 20480,
+            "avg_obj_size": 52
+          },
+          "stats_error": null,
+          "indexes": [
+            {
+              "key": {
+                "_id": 1
+              },
+              "name": "_id_"
+            }
+          ],
+          "shard_key": null,
+          "shard_key_unique": false,
+          "schema": {
+            "sampled": 1,
+            "truncated": false,
+            "fields": {
+              "_id": {
+                "count": 1,
+                "types": {
+                  "objectId": 1
+                }
+              },
+              "age": {
+                "count": 1,
+                "types": {
+                  "double": 1
+                }
+              },
+              "name": {
+                "count": 1,
+                "types": {
+                  "string": 1
+                }
+              }
+            },
+            "modified_max": {}
+          },
+          "schema_error": null,
+          "activity": {
+            "first_insert": "2024-10-14T14:49:25Z",
+            "last_insert": "2024-10-14T14:49:25Z",
+            "id_type": "objectId",
+            "modified": [],
+            "last_modified": null,
+            "last_modified_field": null,
+            "last_modified_method": null,
+            "top": null,
+            "oplog": null,
+            "sampled": null
+          }
+        }
+      ]
+    }
+  ],
+  "database_listing": {
+    "listed": [
+      "admin",
+      "betika_gh",
+      "config",
+      "local"
+    ],
+    "system": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "excluded_by_filter": [],
+    "can_list_all": true
+  },
+  "security": null,
+  "activity": {
+    "members": [],
+    "oplog": null,
+    "sampling": null,
+    "uid_map": null,
+    "users": {}
+  }
+}

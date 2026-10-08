@@ -1,0 +1,57 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "bash",
+  "instance": {
+    "name": "ug",
+    "alias": "ug",
+    "role": "source",
+    "conf_file": "../conf//ug.conf",
+    "uri": "mongodb://ug-mongodbcluster01-node01.betika.private:27017,ug-mongodbcluster01-node02.betika.private:27017,ug-mongodbcluster01-node03.betika.private:27017/?replicaSet=ug-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000"
+  },
+  "collected_at": "2026-10-08T14:23:18Z",
+  "status": "ok",
+  "error": null,
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5,
+    "activity": true,
+    "member_stats": false,
+    "modified_pattern": "modif",
+    "modified_scan": false,
+    "oplog_window_hours": 0,
+    "activity_samples": 0,
+    "activity_interval_s": 10
+  },
+  "server": {
+    "version": "4.4.25",
+    "fcv": "4.4",
+    "set_name": "ug-mongodbcluster01",
+    "storage_engine": "wiredTiger",
+    "topology": "replicaset"
+  },
+  "databases": [],
+  "database_listing": {
+    "listed": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "system": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "excluded_by_filter": [],
+    "can_list_all": true
+  },
+  "security": null,
+  "activity": {
+    "members": [],
+    "oplog": null,
+    "sampling": null,
+    "uid_map": null,
+    "users": {}
+  }
+}
