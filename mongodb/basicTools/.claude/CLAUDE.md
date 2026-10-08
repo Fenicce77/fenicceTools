@@ -27,7 +27,7 @@
    - ANSI color formatting must be used for UX (info, success, warning, error, headers).
    - Reference local/system username: use `rmateos` when a default or sample user is required.
 3. **Cross-Platform Compatibility:**
-   - Shell scripts must be POSIX/portable across macOS (BSD coreutils) and Linux (GNU coreutils).
+   - Shell scripts target bash >= 3.2 (macOS default) and must run on macOS (BSD coreutils) and Linux (GNU coreutils): no associative arrays, `mapfile`, `${var,,}`; guard empty arrays under `set -u` with `${arr[@]+"${arr[@]}"}`.
    - Use standard parameter expansion or portable syntax; avoid non-standard GNU extensions unless wrapped in platform-checks.
 4. **Language-Specific Conventions:**
    - **Bash:** Enforce `set -euo pipefail` at the start of every script. Handle cleanup with `trap`. Initialize raw color variables via ANSI-C quoting (`$'\e[...'`) to avoid literal escape leakage.
@@ -40,6 +40,11 @@
 2. **MySQL Precision:**
    - Leverage `performance_schema` with exact consumers (e.g., `events_statements_summary_by_digest`).
    - Account for cloud-managed restrictions (lack of `SUPER` privilege on RDS / Cloud SQL / Azure); use dynamic grants (`SYSTEM_VARIABLES_ADMIN`, `REPLICATION_SLAVE_ADMIN`, etc.).
-3. **Query & Code Formatting:**
-   - SQL keywords must be strictly **UPPERCASE** (`SELECT`, `JOIN`, `WHERE`, `EXPLAIN`).
-   - Code and queries must be cleanly formatted and indented (2 or 4 spaces consistently).
+3. **MongoDB Shell Scripts (`js/`, run through `sh/mongo_exec.sh`):**
++3. **MongoDB Shell Scripts (`js/`, run through `sh/mongo_exec.sh`):**
+   - Must run on both mongosh and the legacy `mongo` 4.x shell (MongoDB 4.x - 8.x): ES5 syntax inside an IIFE, `print()` for stdout, `console.error` only when `process` is defined.
+   - Normalise `runCommand` results (mongosh throws on `ok: 0`, legacy returns it). Exit with `quit(n)`: 1 server error, 2 usage error, 3 reserved for wrapper auth failure.
+   - Script arguments come from `MONGO_EXEC_CTX.args` (wrapper `-a`) or `MONGO_SCRIPT_ARGS` (mongosh only); never parse `process.argv`.
+   - Never put credentials on a command line or in a URI; the wrapper authenticates via its 0600 preamble.
+   - Use `isMaster` (not `hello`) for topology checks while 4.0-4.4 servers are supported.
+4. **Query & Code Formatting:**

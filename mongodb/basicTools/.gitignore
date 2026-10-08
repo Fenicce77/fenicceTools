@@ -1,0 +1,3 @@
+# Real connection configs carry credentials: only templates are versioned.
+conf/*.conf
+!conf/*.template.conf
