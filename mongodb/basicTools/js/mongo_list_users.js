@@ -1,7 +1,8 @@
 /**
  * Script: mongo_list_users.js
  * Description: Audits MongoDB users: authentication database, SCRAM mechanisms, direct
- *              and inherited roles, and the databases/resources those roles grant.
+ *              and inherited roles, and an abbreviated access summary per database
+ *              (RO / RW / ALL, +ADM / +USR) with short tags for system roles (ROOT, MON, ...).
  * Compatibility: mongosh 1.x/2.x and the legacy mongo shell 4.x, against MongoDB 4.0 - 8.x.
  *              Written in ES5 on purpose so the legacy shell's SpiderMonkey engine can
  *              parse it. Shell API calls are kept out of array callbacks (mongosh
@@ -15,7 +16,7 @@
  * Exit codes: 0 ok, 1 server/command error, 2 usage error.
  */
 (function () {
-  var SCRIPT_VERSION = "2.0.0";
+  var SCRIPT_VERSION = "2.1.0";
 
   // --- Runtime detection --------------------------------------------------------
   var CTX = (typeof MONGO_EXEC_CTX !== "undefined" && MONGO_EXEC_CTX) ? MONGO_EXEC_CTX : null;
@@ -78,6 +79,7 @@
       "  " + C.green + "--auth-db=<db>" + C.reset + "        Authentication database of --user (default: admin).",
       "  " + C.green + "--no-resolve" + C.reset + "          Cluster-wide mode: skip rolesInfo resolution and report",
       "                        direct roles only (needs viewUser only, no viewRole).",
+      "  " + C.green + "--compact" + C.reset + "             One line per user (user@db, SCRAM, access).",
       "  " + C.green + "--no-color" + C.reset + "            Disable ANSI colors.",
       "",
       C.bold + "REQUIRED PRIVILEGES:" + C.reset,
@@ -88,12 +90,20 @@
       C.bold + "NOTES:" + C.reset,
       "  - Sharded clusters: connect through mongos. A direct connection to a shard member",
       "    only shows that shard's local users.",
-      "  - 'Databases' is derived from inherited privileges when roles are resolved; '*' means",
-      "    all non-system collections of every database, 'cluster' a cluster-level resource.",
+      "  - Access is derived from the effective privileges' actions ('*' = every database):",
+      "      RO read-only (find) | RW read/write (insert/update/remove) | ALL write+ADM+USR or anyAction",
+      "      +ADM db admin (collMod/compact/dropDatabase/profiler) | +USR user/role admin",
+      "      INFO metadata only | db.coll:XX collection-scoped grant | role@db:? role not resolved",
+      "  - Built-in system roles are shown as tags and not expanded: ROOT, SYSTEM, CLU-ADMIN,",
+      "    CLU-MGR, MON (clusterMonitor), HOST, BACKUP, RESTORE, SHARDING, SEARCH.",
+      "    Custom cluster grants: CLU-RO (monitoring actions) or CLU-OPS (anything else).",
       "",
       C.bold + "EXAMPLES:" + C.reset,
       "  " + C.gray + "# Cluster-wide audit:" + C.reset,
       "  mongo_exec.sh -c ~/.mongo/prod.conf -f js/mongo_list_users.js",
+      "",
+      "  " + C.gray + "# Compact, one line per user:" + C.reset,
+      "  mongo_exec.sh -c ~/.mongo/prod.conf -f js/mongo_list_users.js -a --compact",
       "",
       "  " + C.gray + "# One user, JSON for jq:" + C.reset,
       "  mongo_exec.sh -q -c ~/.mongo/prod.conf -f js/mongo_list_users.js -a --json -a --user=rmateos | jq .",
@@ -116,7 +126,7 @@
   }
 
   function parseArgs(args) {
-    var o = { help: false, json: false, user: null, authDb: "admin", resolve: true, color: null, errors: [] };
+    var o = { help: false, json: false, user: null, authDb: "admin", resolve: true, color: null, compact: false, errors: [] };
     var i = 0;
 
     function valueOf(arg, name) {
@@ -132,6 +142,7 @@
       else if (a === "--json") { o.json = true; }
       else if (a === "--no-resolve") { o.resolve = false; }
       else if (a === "--no-color") { o.color = false; }
+      else if (a === "--compact") { o.compact = true; }
       else if (a === "--user" || a.indexOf("--user=") === 0) { o.user = valueOf(a, "--user"); }
       else if (a === "--auth-db" || a.indexOf("--auth-db=") === 0) { o.authDb = valueOf(a, "--auth-db"); }
       else { o.errors.push("Unknown option: " + a); }
@@ -245,6 +256,272 @@
     return res;
   }
 
+  // --- Abbreviated access model -----------------------------------------------------------
+  // Data level per scope (database, '*' = every database, or db.collection):
+  //   RO  read-only (find)          RW  read/write (insert/update/remove)
+  //   ALL write + db admin + user admin on the scope (dbOwner level) or anyAction
+  //   +ADM db administration (collMod/compact/dropDatabase/profiler/...)
+  //   +USR user/role administration (createUser/grantRole/...)
+  //   INFO metadata only (dbStats/listCollections/...)   ?  unresolved role
+  // Built-in system/monitoring roles (admin db) are shown as a short tag instead, and
+  // their privileges are subtracted so they do not leak into the per-database list.
+  var TAG_ORDER = ["SYSTEM", "ROOT", "ANY", "CLU-ADMIN", "CLU-MGR", "MON", "HOST", "BACKUP",
+    "RESTORE", "QBACKUP", "SHARDING", "SHARD-DIRECT", "SEARCH", "CLU-OPS", "CLU-RO"];
+  var TAG_LEGEND = {
+    "SYSTEM": "__system (internal)", "ROOT": "root (everything)", "ANY": "anyResource grant",
+    "CLU-ADMIN": "clusterAdmin", "CLU-MGR": "clusterManager", "MON": "clusterMonitor",
+    "HOST": "hostManager", "BACKUP": "backup", "RESTORE": "restore", "QBACKUP": "__queryableBackup",
+    "SHARDING": "enableSharding", "SHARD-DIRECT": "directShardOperations", "SEARCH": "searchCoordinator",
+    "CLU-OPS": "custom cluster ops", "CLU-RO": "custom cluster read/monitoring"
+  };
+  var KNOWN_ROLES = {          // only when defined in the admin database
+    root: { tag: "ROOT", all: true },
+    __system: { tag: "SYSTEM", all: true },
+    clusterAdmin: { tag: "CLU-ADMIN" },
+    clusterManager: { tag: "CLU-MGR" },
+    clusterMonitor: { tag: "MON" },
+    hostManager: { tag: "HOST" },
+    backup: { tag: "BACKUP" },
+    restore: { tag: "RESTORE" },
+    __queryableBackup: { tag: "QBACKUP" },
+    enableSharding: { tag: "SHARDING" },
+    directShardOperations: { tag: "SHARD-DIRECT" },
+    searchCoordinator: { tag: "SEARCH" },
+    readAnyDatabase: { scope: { r: 1 } },
+    readWriteAnyDatabase: { scope: { r: 1, w: 1 } },
+    dbAdminAnyDatabase: { scope: { adm: 1 } },
+    userAdminAnyDatabase: { scope: { usr: 1 } }
+  };
+  var TAG_IMPLIES = { "CLU-ADMIN": ["CLU-MGR", "MON", "HOST"] };
+  var DB_BUILTINS = {          // fallback when privileges are not available
+    read: { r: 1 }, readWrite: { r: 1, w: 1 }, dbAdmin: { adm: 1 }, userAdmin: { usr: 1 },
+    dbOwner: { r: 1, w: 1, adm: 1, usr: 1 }
+  };
+  var ACT_WRITE = { insert: 1, update: 1, remove: 1 };
+  var ACT_ADM = { collMod: 1, compact: 1, dropDatabase: 1, enableProfiler: 1, reIndex: 1, validate: 1 };
+  var ACT_USR = {
+    createUser: 1, dropUser: 1, grantRole: 1, revokeRole: 1, createRole: 1, dropRole: 1,
+    changePassword: 1, changeCustomData: 1, setAuthenticationRestriction: 1
+  };
+  var ACT_CLUSTER_RO = {
+    serverStatus: 1, replSetGetStatus: 1, replSetGetConfig: 1, top: 1, inprog: 1, getCmdLineOpts: 1,
+    getLog: 1, hostInfo: 1, connPoolStats: 1, netstat: 1, getParameter: 1, listShards: 1,
+    getShardMap: 1, listSessions: 1, useUUID: 1, changeStream: 1, getDefaultRWConcern: 1,
+    checkFreeMonitoringStatus: 1, getClusterParameter: 1, listDatabases: 1
+  };
+  var LEVEL_RANK = { "": 0, INFO: 0, RO: 1, RW: 2, ALL: 3 };
+
+  function knownRole(r) { return (r.db === "admin" && KNOWN_ROLES.hasOwnProperty(r.role)) ? KNOWN_ROLES[r.role] : null; }
+
+  function resourceKey(res) {
+    if (res.anyResource) { return "ANY"; }
+    if (res.cluster) { return "CLUSTER"; }
+    var sub = (res.collection !== undefined) ? "c:" + res.collection
+      : (res.system_buckets !== undefined ? "b:" + res.system_buckets : "");
+    return res.db + "/" + sub;
+  }
+
+  // (resource, action) pairs granted by a list of privileges.
+  function privilegePairs(privs) {
+    var pairs = {};
+    for (var i = 0; i < privs.length; i += 1) {
+      var p = privs[i];
+      if (!p || !p.resource) { continue; }
+      var rk = resourceKey(p.resource);
+      var acts = p.actions || [];
+      for (var j = 0; j < acts.length; j += 1) { pairs[rk + "|" + acts[j]] = 1; }
+    }
+    return pairs;
+  }
+
+  function newScope(key, dbName, coll) {
+    return { key: key, db: dbName, coll: coll, r: 0, w: 0, adm: 0, usr: 0, any: 0, meta: 0, unknown: 0 };
+  }
+
+  function mergeScope(s, bits) {
+    for (var b in bits) { if (bits.hasOwnProperty(b) && bits[b]) { s[b] = 1; } }
+  }
+
+  function scopeLevel(s) {
+    if (s.any || (s.w && s.adm && s.usr)) { return "ALL"; }
+    if (s.w) { return "RW"; }
+    if (s.r) { return "RO"; }
+    return "";
+  }
+
+  function scopeLabel(s) {
+    var lvl = scopeLevel(s);
+    if (lvl === "ALL") { return lvl; }
+    var parts = [];
+    if (lvl) { parts.push(lvl); }
+    if (s.adm) { parts.push("ADM"); }
+    if (s.usr) { parts.push("USR"); }
+    if (parts.length === 0) { return s.unknown ? "?" : "INFO"; }
+    return parts.join("+") + (s.unknown ? "?" : "");
+  }
+
+  // true when scope b grants at least everything scope a grants.
+  function dominates(b, a) {
+    if (!b || a.unknown) { return false; }
+    var lb = scopeLevel(b), la = scopeLevel(a);
+    if (LEVEL_RANK[lb] < LEVEL_RANK[la]) { return false; }
+    if (lb === "ALL") { return true; }
+    return (!a.adm || b.adm) && (!a.usr || b.usr);
+  }
+
+  /**
+   * Builds the abbreviated access summary.
+   *   effective  all roles of the user (direct + inherited)
+   *   privileges merged inherited privileges, or null when unavailable
+   *   knownPairs roleKey -> privilege pairs of built-in system roles (may be partial)
+   *   fallback   roles whose privileges are unknown (unresolved or --no-resolve)
+   */
+  function computeAccess(effective, privileges, knownPairs, fallback) {
+    var tags = {}, scopes = {}, order = [], i, j, k;
+
+    function scope(key, dbName, coll) {
+      if (!scopes[key]) { scopes[key] = newScope(key, dbName, coll); order.push(key); }
+      return scopes[key];
+    }
+
+    // 1. Built-in system roles -> tags / '*' scope; collect their pairs for subtraction.
+    var subtract = {}, missingKnown = false, hasKnown = false;
+    for (i = 0; i < effective.length; i += 1) {
+      var kr = knownRole(effective[i]);
+      if (!kr) { continue; }
+      hasKnown = true;
+      if (kr.all) { return { tags: [kr.tag], scopes: [], summary: kr.tag }; }
+      if (kr.tag) { tags[kr.tag] = 1; } else { mergeScope(scope("*", "*", null), kr.scope); }
+      var pairs = knownPairs[roleKey(effective[i])];
+      if (pairs) { for (k in pairs) { if (pairs.hasOwnProperty(k)) { subtract[k] = 1; } } }
+      else { missingKnown = true; }
+    }
+
+    // 2. Remaining privileges -> per-scope bits.
+    var clusterActs = {};
+    if (privileges !== null) {
+      for (i = 0; i < privileges.length; i += 1) {
+        var res = privileges[i] && privileges[i].resource;
+        if (!res) { continue; }
+        var rk = resourceKey(res);
+        var acts = privileges[i].actions || [];
+        // Without the built-in roles' exact privileges, drop the resources they typically
+        // touch (cluster, every-database '*', config/local, system.*) to keep it readable.
+        var heuristicDrop = hasKnown && missingKnown && (res.cluster || res.db === "" ||
+          res.db === "config" || res.db === "local" ||
+          (res.collection !== undefined && String(res.collection).indexOf("system.") === 0));
+        for (j = 0; j < acts.length; j += 1) {
+          var a = acts[j];
+          if (subtract[rk + "|" + a] || heuristicDrop) { continue; }
+          if (res.anyResource) { tags.ANY = 1; continue; }
+          if (res.cluster) { clusterActs[a] = 1; continue; }
+          if (res.db === undefined || res.system_buckets !== undefined) { continue; }
+          var coll = res.collection;
+          if (coll && coll.indexOf("system.") === 0) { continue; }   // internal collections
+          var dbName = res.db === "" ? "*" : res.db;
+          var s = coll ? scope(dbName + "." + coll, dbName, coll) : scope(dbName, dbName, null);
+          if (a === "anyAction") { s.any = 1; }
+          else if (a === "find") { s.r = 1; }
+          else if (ACT_WRITE[a]) { s.w = 1; }
+          else if (ACT_ADM[a]) { s.adm = 1; }
+          else if (ACT_USR[a]) { s.usr = 1; }
+          else { s.meta = 1; }
+        }
+      }
+    }
+
+    // 3. Roles without privilege data: map built-in db roles by name; custom or dropped
+    //    roles are listed by name as 'role@db:?' (a custom role may grant on any db).
+    var unknownRoles = [];
+    for (i = 0; i < fallback.length; i += 1) {
+      var fr = fallback[i];
+      if (knownRole(fr)) { continue; }
+      if (DB_BUILTINS.hasOwnProperty(fr.role)) { mergeScope(scope(fr.db, fr.db, null), DB_BUILTINS[fr.role]); }
+      else { unknownRoles.push(roleKey(fr)); }
+    }
+
+    // 4. Custom cluster-level grants (listDatabases alone is too common to be worth a tag).
+    delete clusterActs.listDatabases;
+    var clusterRO = true, anyCluster = false;
+    for (k in clusterActs) {
+      if (clusterActs.hasOwnProperty(k)) { anyCluster = true; if (!ACT_CLUSTER_RO[k]) { clusterRO = false; } }
+    }
+    if (anyCluster) { tags[clusterRO ? "CLU-RO" : "CLU-OPS"] = 1; }
+    for (k in TAG_IMPLIES) {
+      if (TAG_IMPLIES.hasOwnProperty(k) && tags[k]) {
+        for (j = 0; j < TAG_IMPLIES[k].length; j += 1) { delete tags[TAG_IMPLIES[k][j]]; }
+      }
+    }
+
+    // 5. Drop scopes already covered by a broader one, collapse collection grants.
+    var star = scopes["*"];
+    var kept = [], collsByDb = {};
+    for (i = 0; i < order.length; i += 1) {
+      var sc = scopes[order[i]];
+      if (!sc.r && !sc.w && !sc.adm && !sc.usr && !sc.any && !sc.unknown && !sc.meta) { continue; }
+      if (sc.key !== "*" && dominates(star, sc)) { continue; }
+      if (sc.coll) {
+        if (dominates(scopes[sc.db], sc) || dominates(scopes["*." + sc.coll], sc)) { continue; }
+        if (!collsByDb[sc.db]) { collsByDb[sc.db] = []; }
+        collsByDb[sc.db].push(sc);
+        continue;
+      }
+      kept.push({ name: sc.key, label: scopeLabel(sc) });
+    }
+    for (var d in collsByDb) {
+      if (!collsByDb.hasOwnProperty(d)) { continue; }
+      var list = collsByDb[d], byLabel = {};
+      for (i = 0; i < list.length; i += 1) {
+        var lb = scopeLabel(list[i]);
+        if (!byLabel[lb]) { byLabel[lb] = []; }
+        byLabel[lb].push(list[i].coll);
+      }
+      for (var l in byLabel) {
+        if (!byLabel.hasOwnProperty(l)) { continue; }
+        if (byLabel[l].length <= 2) {
+          for (i = 0; i < byLabel[l].length; i += 1) { kept.push({ name: d + "." + byLabel[l][i], label: l }); }
+        } else {
+          kept.push({ name: d + "(" + byLabel[l].length + " colls)", label: l });
+        }
+      }
+    }
+    kept.sort(function (x, y) {
+      var sx = x.name.charAt(0) === "*" ? 0 : 1, sy = y.name.charAt(0) === "*" ? 0 : 1;
+      if (sx !== sy) { return sx - sy; }
+      return x.name < y.name ? -1 : (x.name > y.name ? 1 : 0);
+    });
+
+    for (i = 0; i < unknownRoles.length; i += 1) { kept.push({ name: unknownRoles[i], label: "?" }); }
+
+    var tagList = [];
+    for (i = 0; i < TAG_ORDER.length; i += 1) { if (tags[TAG_ORDER[i]]) { tagList.push(TAG_ORDER[i]); } }
+    var parts = tagList.slice(0);
+    for (i = 0; i < kept.length; i += 1) { parts.push(kept[i].name + ":" + kept[i].label); }
+    return { tags: tagList, scopes: kept, summary: parts.length ? parts.join(", ") : "NONE" };
+  }
+
+  // Privilege pairs of the built-in system roles present in any user's effective roles.
+  function fetchKnownPairs(effectiveLists, cache) {
+    var pairs = {}, wanted = [], seen = {}, i, j;
+    for (i = 0; i < effectiveLists.length; i += 1) {
+      for (j = 0; j < effectiveLists[i].length; j += 1) {
+        var r = effectiveLists[i][j], kr = knownRole(r), key = roleKey(r);
+        if (!kr || kr.all || seen[key]) { continue; }
+        seen[key] = 1;
+        if (cache[key] && cache[key].inheritedPrivileges) { pairs[key] = privilegePairs(cache[key].inheritedPrivileges); }
+        else { wanted.push({ role: r.role, db: "admin" }); }
+      }
+    }
+    if (wanted.length > 0) {
+      var res = runCmd(db.getSiblingDB("admin"), { rolesInfo: wanted, showPrivileges: true });
+      if (res.ok) {
+        var docs = res.roles || [];
+        for (i = 0; i < docs.length; i += 1) { pairs[roleKey(docs[i])] = privilegePairs(docs[i].inheritedPrivileges || []); }
+      }
+    }
+    return pairs;
+  }
+
   // --- Cluster-wide role resolution (rolesInfo, grouped per database) ------------------
   function resolveRoles(users) {
     var byDb = {}, cache = {}, denied = [];
@@ -319,6 +596,11 @@
       resolution: privileges !== null ? "privileges" : "roles"
     };
     if (unresolved.length > 0) { model.unresolvedRoles = unresolved; }
+    // Inputs for computeAccess(); removed before output.
+    model._effective = effective;
+    model._privileges = privileges;
+    model._fallback = (privileges === null) ? direct
+      : direct.filter(function (r) { return unresolved.indexOf(roleKey(r)) !== -1; });
     if (u.authenticationRestrictions && u.authenticationRestrictions.length) {
       model.authenticationRestrictions = u.authenticationRestrictions;
     }
@@ -326,7 +608,31 @@
   }
 
   // --- Rendering -----------------------------------------------------------------------
-  function renderText(info, users, mode) {
+  function colorLabel(label) {
+    var lvl = label.split("+")[0].replace("?", "");
+    var col = lvl === "ALL" ? C.red : (lvl === "RW" ? C.yellow : (lvl === "RO" ? C.green : C.gray));
+    return col + label + C.reset;
+  }
+
+  function colorAccess(u) {
+    var parts = [], i;
+    for (i = 0; i < u.accessTags.length; i += 1) {
+      var t = u.accessTags[i];
+      parts.push((t === "ROOT" || t === "SYSTEM" || t === "ANY" ? C.red : C.magenta) + C.bold + t + C.reset);
+    }
+    for (var name in u.accessScopes) {
+      if (u.accessScopes.hasOwnProperty(name)) { parts.push(name + ":" + colorLabel(u.accessScopes[name])); }
+    }
+    return parts.length ? parts.join(", ") : C.gray + "NONE" + C.reset;
+  }
+
+  function pad(str, len) {
+    var s = String(str);
+    while (s.length < len) { s += " "; }
+    return s;
+  }
+
+  function renderHeader(info, users, mode) {
     var modeLabel = mode === "single" ? "single user, showPrivileges"
       : (mode === "resolved" ? "cluster-wide, roles resolved via rolesInfo" : "cluster-wide, direct roles only");
     out("");
@@ -334,6 +640,54 @@
     out(C.gray + "Server: " + info.version + " | Topology: " + info.topology + " | Mode: " + modeLabel + C.reset);
     out(C.gray + "Users: " + users.length + C.reset);
     out("");
+  }
+
+  // One line per user: user@authdb, mechanisms, access summary.
+  function renderCompact(info, users, mode) {
+    renderHeader(info, users, mode);
+    var w = 4, i;
+    for (i = 0; i < users.length; i += 1) {
+      w = Math.max(w, (users[i].user + "@" + users[i].authenticationDatabase).length);
+    }
+    out(C.bold + pad("USER", w) + "  " + pad("SCRAM", 7) + "  ACCESS" + C.reset);
+    for (i = 0; i < users.length; i += 1) {
+      var u = users[i];
+      var m = u.mechanisms, mech;
+      if (m.length === 1 && m[0] === "SCRAM-SHA-1") { mech = C.yellow + pad("SHA1", 7) + C.reset; }
+      else if (m.length === 1 && m[0] === "SCRAM-SHA-256") { mech = pad("SHA256", 7); }
+      else if (m.length === 2) { mech = pad("BOTH", 7); }
+      else { mech = pad(m.length ? m.join("/") : "n/a", 7); }
+      out(C.green + pad(u.user + "@" + u.authenticationDatabase, w) + C.reset + "  " + mech + "  " + colorAccess(u));
+    }
+  }
+
+  // Legend limited to the codes that actually appear in the output.
+  function renderLegend(users) {
+    var used = {}, i, k;
+    for (i = 0; i < users.length; i += 1) {
+      for (k = 0; k < users[i].accessTags.length; k += 1) { used[users[i].accessTags[k]] = 1; }
+      for (var n in users[i].accessScopes) {
+        if (!users[i].accessScopes.hasOwnProperty(n)) { continue; }
+        var bits = users[i].accessScopes[n].replace("?", "+?").split("+");
+        for (k = 0; k < bits.length; k += 1) { used[bits[k]] = 1; }
+      }
+    }
+    var scopeLegend = [["RO", "read-only"], ["RW", "read/write"], ["ALL", "dbOwner-level/anyAction"],
+      ["ADM", "db admin"], ["USR", "user admin"], ["INFO", "metadata only"], ["?", "role not resolved (custom/dropped or no viewRole)"]];
+    var parts = [];
+    for (i = 0; i < scopeLegend.length; i += 1) {
+      if (used[scopeLegend[i][0]]) { parts.push(scopeLegend[i][0] + "=" + scopeLegend[i][1]); }
+    }
+    for (i = 0; i < TAG_ORDER.length; i += 1) {
+      if (used[TAG_ORDER[i]]) { parts.push(TAG_ORDER[i] + "=" + TAG_LEGEND[TAG_ORDER[i]]); }
+    }
+    if (parts.length) {
+      out(C.gray + "Legend: " + parts.join(" | ") + "; '*' = every database" + C.reset);
+    }
+  }
+
+  function renderText(info, users, mode) {
+    renderHeader(info, users, mode);
 
     for (var i = 0; i < users.length; i += 1) {
       var u = users[i];
@@ -350,8 +704,7 @@
         out("    " + C.bold + "Inherited roles:" + C.reset + " " +
           (u.inheritedRoles.length ? u.inheritedRoles.join(", ") : C.gray + "None" + C.reset));
       }
-      out("    " + C.bold + "Databases:" + C.reset + "       " + C.magenta +
-        (u.authorizedDatabases.length ? u.authorizedDatabases.join(", ") : "None") + C.reset);
+      out("    " + C.bold + "Access:" + C.reset + "          " + colorAccess(u));
       if (u.unresolvedRoles) {
         out("    " + C.bold + C.yellow + "Unresolved:" + C.reset + "      " + u.unresolvedRoles.join(", "));
       }
@@ -410,8 +763,24 @@
       }
     }
 
-    var users = [];
-    for (var i = 0; i < raw.length; i += 1) { users.push(buildUser(raw[i], mode, cache)); }
+    var users = [], i;
+    for (i = 0; i < raw.length; i += 1) { users.push(buildUser(raw[i], mode, cache)); }
+
+    var knownPairs = {};
+    if (mode !== "direct") {
+      var effLists = [];
+      for (i = 0; i < users.length; i += 1) { effLists.push(users[i]._effective); }
+      knownPairs = fetchKnownPairs(effLists, cache);
+    }
+    for (i = 0; i < users.length; i += 1) {
+      var u = users[i];
+      var acc = computeAccess(u._effective, u._privileges, knownPairs, u._fallback);
+      u.access = acc.summary;
+      u.accessTags = acc.tags;
+      u.accessScopes = {};
+      for (var j = 0; j < acc.scopes.length; j += 1) { u.accessScopes[acc.scopes[j].name] = acc.scopes[j].label; }
+      delete u._effective; delete u._privileges; delete u._fallback;
+    }
 
     if (opts.json) {
       out(JSON.stringify(users, null, 2));
@@ -423,7 +792,8 @@
       warn("No users found.");
       return;
     }
-    renderText(info, users, mode);
+    if (opts.compact) { renderCompact(info, users, mode); } else { renderText(info, users, mode); }
+    renderLegend(users);
   }
 
   main();
