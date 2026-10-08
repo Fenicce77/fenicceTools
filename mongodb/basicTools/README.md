@@ -7,6 +7,7 @@ Percona Server for MongoDB) from macOS or Linux.
 |------|---------|
 | `sh/mongo_exec.sh` | Wrapper: reads a config file, connects with a credential-less URI and authenticates through a 0600 preamble (password never in `ps`). Runs mongosh or the legacy `mongo` shell. |
 | `js/mongo_list_users.js` | User audit: auth DB, SCRAM mechanisms, direct/inherited roles and an abbreviated access summary. Text (default), `--compact` (one line per user), `--table` (full report as a table) or JSON. |
+| `js/mongo_grant_oplog_reader.js` | Idempotently creates/reconciles a custom role (default `oplogReader@admin`, `find` on `local.oplog.rs`) and grants it to a user. `--dry-run` shows the changes first. |
 | `conf/mongodb_config.template.conf` | Config template (copy, fill in, `chmod 600`). |
 
 ## Quick start
@@ -18,6 +19,9 @@ chmod 600 conf/prod_rs.conf && vim conf/prod_rs.conf
 sh/mongo_exec.sh -c conf/prod_rs.conf -f js/mongo_list_users.js
 sh/mongo_exec.sh -q -c conf/prod_rs.conf -f js/mongo_list_users.js -a --json -a --user=rmateos | jq .
 sh/mongo_exec.sh -f js/mongo_list_users.js -a --help
+
+sh/mongo_exec.sh -c conf/prod_rs.conf -f js/mongo_grant_oplog_reader.js -a --user=rmateos -a --dry-run
+sh/mongo_exec.sh -c conf/prod_rs.conf -f js/mongo_grant_oplog_reader.js -a --user=cdc_app -a --auth-db=app
 ```
 
 Script arguments go with `-a` (repeatable); client arguments (TLS, etc.) after `--`.
