@@ -200,6 +200,7 @@ function analyze(snapshots, params) {
     if (s.status !== 'ok') F.add('ERROR', 'COLLECT_ERROR', sName(s), '', `snapshot collection failed: ${s.error || 'unknown error'}`);
   }
   const sources = snaps.filter((s) => s.status === 'ok' && sName(s) !== targetName);
+  for (const s of sources) listingFindings(s, F);
   const instances = snaps.map((s) => instanceSummary(s, sName(s) === targetName ? 'target' : 'source'));
 
   const tver = target ? parseVersion((target.server || {}).version) : [0, 0, 0];
@@ -274,6 +275,7 @@ function analyze(snapshots, params) {
 
         const mixed = [];
         const numeric = [];
+        const polymorphic = [];
         const fields = sFields(c);
         for (const p of sortStr(Object.keys(fields))) {
           const types = fields[p].types || {};
@@ -282,6 +284,10 @@ function analyze(snapshots, params) {
           const line = `${p}: ${fmtTypes(types)}`;
           if (cls === 'numeric') {
             numeric.push(line);
+            continue;
+          }
+          if (isPolymorphicArray(p, fields[p])) {
+            polymorphic.push(`${line} (in ${num(fields[p].count)} doc(s))`);
             continue;
           }
           mixed.push(line);
@@ -294,6 +300,10 @@ function analyze(snapshots, params) {
           normalization.push({ instance: iname, source_ns: sns, target_ns: tns, db: tdb, collection: cname, path: p, dominant_type: dominant, types: ordered, sampled: num(schema.sampled) });
         }
         if (mixed.length) F.add('WARN', 'FIELD_TYPE_MIXED', iname, sns, `${mixed.length} field(s) with inconsistent BSON types in a sample of ${num(schema.sampled)} document(s)`, mixed);
+        if (polymorphic.length) {
+          F.add('INFO', 'ARRAY_TYPES_POLYMORPHIC', iname, sns, `${polymorphic.length} array field(s) mix BSON types inside the same document `
+            + '(polymorphic / key-value pattern, usually by design; not a normalization candidate)', polymorphic);
+        }
         if (numeric.length) F.add('INFO', 'NUMERIC_TYPE_MIXED', iname, sns, `${numeric.length} field(s) mix numeric widths (int/long/double/decimal)`, numeric);
 
         const features = [];
@@ -496,6 +506,41 @@ function analyze(snapshots, params) {
     capacity,
     summary,
   };
+}
+
+// Array element path whose types co-occur in the same documents (per-type counts exceed doc count).
+function isPolymorphicArray(p, field) {
+  if (!p.includes('[]')) return false;
+  const total = Object.entries(field.types || {}).filter(([t]) => !NULLISH_TYPES.has(t)).reduce((acc, [, n]) => acc + num(n), 0);
+  return total > num(field.count);
+}
+
+function listingFindings(s, F) {
+  const iname = sName(s);
+  const listing = s.database_listing === undefined ? null : s.database_listing;
+  const hasUserDbs = (s.databases || []).length > 0;
+  if (listing === null) {
+    if (!hasUserDbs) {
+      F.add('WARN', 'NO_USER_DATABASES', iname, '', 'no user databases collected and the snapshot has no listing details (older collector): '
+        + 'the instance may be empty or the user may lack privileges; re-collect to verify');
+    }
+    return;
+  }
+  const listed = (listing.listed || []).join(', ') || '-';
+  const excluded = listing.excluded_by_filter || [];
+  const canList = listing.can_list_all === undefined ? null : listing.can_list_all;
+  if (canList === false) {
+    F.add('WARN', 'DB_LISTING_PARTIAL', iname, '', 'the user lacks the listDatabases privilege: only databases it is authorized on are listed, '
+      + `other databases may exist (listed: ${listed})`);
+  }
+  if (hasUserDbs) return;
+  if (excluded.length) {
+    F.add('INFO', 'NO_USER_DATABASES', iname, '', `all ${excluded.length} user database(s) were excluded by --include-dbs/--exclude-dbs`, sortStr(excluded));
+  } else if (canList === true) {
+    F.add('INFO', 'NO_USER_DATABASES', iname, '', `the instance has no user databases (listed: ${listed}): nothing to migrate`);
+  } else if (canList === null) {
+    F.add('INFO', 'NO_USER_DATABASES', iname, '', `no user databases listed (listed: ${listed}); the listDatabases privilege could not be verified`);
+  }
 }
 
 function splitRole(ref) {

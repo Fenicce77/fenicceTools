@@ -98,5 +98,21 @@
       ]
     }
   ],
-  "security": null
+  "security": null,
+  "database_listing": {
+    "listed": [
+      "admin",
+      "config",
+      "local",
+      "orders",
+      "reporting"
+    ],
+    "system": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "excluded_by_filter": [],
+    "can_list_all": true
+  }
 }

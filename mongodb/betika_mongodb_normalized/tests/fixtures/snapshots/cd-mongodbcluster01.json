@@ -202,6 +202,20 @@
                   "date": 90,
                   "null": 10
                 }
+              },
+              "lines[].qty": {
+                "count": 100,
+                "types": {
+                  "int": 100,
+                  "string": 100
+                }
+              },
+              "lines[].discount": {
+                "count": 40,
+                "types": {
+                  "double": 30,
+                  "string": 10
+                }
               }
             },
             "modified_max": {
@@ -788,5 +802,22 @@
         }
       }
     }
+  },
+  "database_listing": {
+    "listed": [
+      "admin",
+      "billing",
+      "config",
+      "geo",
+      "local",
+      "orders"
+    ],
+    "system": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "excluded_by_filter": [],
+    "can_list_all": true
   }
 }

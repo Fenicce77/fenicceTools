@@ -136,6 +136,8 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                   f"snapshot collection failed: {s.get('error') or 'unknown error'}")
 
     sources = [s for s in snaps if s.get("status") == "ok" and _name(s) != target_name]
+    for s in sources:
+        _listing_findings(s, F)
     instances = [_instance_summary(s, "target" if _name(s) == target_name else "source") for s in snaps]
 
     tver = parse_version((target or {}).get("server", {}).get("version")) if target else (0, 0, 0)
@@ -228,6 +230,7 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
 
                 mixed: List[str] = []
                 numeric: List[str] = []
+                polymorphic: List[str] = []
                 fields = _fields(c)
                 for path in sorted(fields):
                     types = fields[path].get("types") or {}
@@ -237,6 +240,9 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                     line = f"{path}: {fmt_types(types)}"
                     if cls == "numeric":
                         numeric.append(line)
+                        continue
+                    if is_polymorphic_array(path, fields[path]):
+                        polymorphic.append(f"{line} (in {int(fields[path].get('count') or 0)} doc(s))")
                         continue
                     mixed.append(line)
                     non_null = {t: n for t, n in types.items() if t not in NULLISH_TYPES}
@@ -253,6 +259,11 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                     F.add("WARN", "FIELD_TYPE_MIXED", iname, sns,
                           f"{len(mixed)} field(s) with inconsistent BSON types in a sample of "
                           f"{int(schema.get('sampled') or 0)} document(s)", mixed)
+                if polymorphic:
+                    F.add("INFO", "ARRAY_TYPES_POLYMORPHIC", iname, sns,
+                          f"{len(polymorphic)} array field(s) mix BSON types inside the same document "
+                          "(polymorphic / key-value pattern, usually by design; not a normalization candidate)",
+                          polymorphic)
                 if numeric:
                     F.add("INFO", "NUMERIC_TYPE_MIXED", iname, sns,
                           f"{len(numeric)} field(s) mix numeric widths (int/long/double/decimal)", numeric)
@@ -476,6 +487,44 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
         "capacity": capacity,
         "summary": summary,
     }
+
+
+def is_polymorphic_array(path: str, field: dict) -> bool:
+    """Array element path whose types co-occur in the same documents (per-type counts exceed doc count)."""
+    if "[]" not in path:
+        return False
+    non_null = [int(n) for t, n in (field.get("types") or {}).items() if t not in NULLISH_TYPES]
+    return sum(non_null) > int(field.get("count") or 0)
+
+
+def _listing_findings(s: dict, F: Findings) -> None:
+    iname = _name(s)
+    listing = s.get("database_listing")
+    has_user_dbs = bool(s.get("databases"))
+    if listing is None:
+        if not has_user_dbs:
+            F.add("WARN", "NO_USER_DATABASES", iname, "",
+                  "no user databases collected and the snapshot has no listing details (older collector): "
+                  "the instance may be empty or the user may lack privileges; re-collect to verify")
+        return
+    listed = ", ".join(listing.get("listed") or []) or "-"
+    excluded = listing.get("excluded_by_filter") or []
+    can_list = listing.get("can_list_all")
+    if can_list is False:
+        F.add("WARN", "DB_LISTING_PARTIAL", iname, "",
+              "the user lacks the listDatabases privilege: only databases it is authorized on are listed, "
+              f"other databases may exist (listed: {listed})")
+    if has_user_dbs:
+        return
+    if excluded:
+        F.add("INFO", "NO_USER_DATABASES", iname, "",
+              f"all {len(excluded)} user database(s) were excluded by --include-dbs/--exclude-dbs", sorted(excluded))
+    elif can_list is True:
+        F.add("INFO", "NO_USER_DATABASES", iname, "",
+              f"the instance has no user databases (listed: {listed}): nothing to migrate")
+    elif can_list is None:
+        F.add("INFO", "NO_USER_DATABASES", iname, "",
+              f"no user databases listed (listed: {listed}); the listDatabases privilege could not be verified")
 
 
 def _split_role(ref: str) -> Dict[str, str]:

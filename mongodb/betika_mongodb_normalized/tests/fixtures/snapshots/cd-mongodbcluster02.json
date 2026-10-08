@@ -536,5 +536,15 @@
     "sampling": null,
     "uid_map": null,
     "users": {}
+  },
+  "database_listing": {
+    "listed": [
+      "events",
+      "orders",
+      "secure"
+    ],
+    "system": [],
+    "excluded_by_filter": [],
+    "can_list_all": false
   }
 }

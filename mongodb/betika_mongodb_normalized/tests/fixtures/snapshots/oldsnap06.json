@@ -1,0 +1,29 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "fixture",
+  "instance": {
+    "name": "oldsnap06",
+    "alias": "oldsnap06",
+    "role": "source",
+    "conf_file": "conf/oldsnap06.conf",
+    "uri": "mongodb://oldsnap06-node01.betika.private:27017/?replicaSet=oldsnap06"
+  },
+  "collected_at": "2026-09-30T10:00:00Z",
+  "status": "ok",
+  "error": null,
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5
+  },
+  "server": {
+    "version": "6.0.19",
+    "fcv": "6.0",
+    "topology": "replicaset",
+    "set_name": "oldsnap06",
+    "storage_engine": "wiredTiger"
+  },
+  "databases": [],
+  "security": null
+}

@@ -1,0 +1,43 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "fixture",
+  "instance": {
+    "name": "empty05",
+    "alias": "empty05",
+    "role": "source",
+    "conf_file": "conf/empty05.conf",
+    "uri": "mongodb://empty05-node01.betika.private:27017/?replicaSet=empty05"
+  },
+  "collected_at": "2026-09-30T10:00:00Z",
+  "status": "ok",
+  "error": null,
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5
+  },
+  "server": {
+    "version": "6.0.19",
+    "fcv": "6.0",
+    "topology": "replicaset",
+    "set_name": "empty05",
+    "storage_engine": "wiredTiger"
+  },
+  "databases": [],
+  "security": null,
+  "database_listing": {
+    "listed": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "system": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "excluded_by_filter": [],
+    "can_list_all": true
+  }
+}

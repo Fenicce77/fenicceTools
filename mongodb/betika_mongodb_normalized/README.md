@@ -201,12 +201,16 @@ database-tools YAML files (`uri: ...`, `chmod 600`) in
 | ERROR | `INDEX_TYPE_REMOVED` | `geoHaystack` index (removed in 5.0) |
 | WARN | `SCHEMA_DRIFT_INDEXES/OPTIONS/TYPES` | same namespace differs across instances |
 | WARN | `FIELD_TYPE_MIXED` | field with inconsistent non-numeric BSON types |
+| WARN | `NO_USER_DATABASES` | no user databases and no listing details (snapshot from an older collector): re-collect |
+| WARN | `DB_LISTING_PARTIAL` | user without the `listDatabases` privilege: only authorized databases were listed |
 | WARN | `VERSION_DOWNGRADE` | source newer than target |
 | WARN | `SHARD_KEY_LOST`, `TIMESERIES_RENAME`, `TARGET_DB_EXISTS` | sharding / time-series remap / existing target database |
 | WARN | `USER_CONFLICT`, `ROLE_CONFLICT`, `OPTION_LEGACY`, `STATS_ERROR`, `SAMPLE_ERROR` | security conflicts, legacy options, partial collection |
 | WARN | `ACTIVITY_ERROR` | unreachable member, oplog/sampling/user-resolution failure |
 | INFO | `NO_RECENT_ACTIVITY` | no writes in the oplog window nor reads/writes since restart: archiving candidate |
 | INFO | `OPLOG_WINDOW_SHORT` | the oplog covers less than the requested window |
+| INFO | `NO_USER_DATABASES` | instance with only `admin`/`config`/`local` (or all databases filtered out): nothing to migrate |
+| INFO | `ARRAY_TYPES_POLYMORPHIC` | array elements mixing types inside the same document (key/value pattern), not a normalization candidate |
 | INFO | `STALE_COLLECTION` | no inserts/modifications for `--stale-days` (exact dates only) |
 | INFO | `MODIFIED_FROM_SAMPLE` | last modification is a lower bound from the sample (field not indexed) |
 | INFO | `USER_NO_ACTIVITY`, `USER_UNRESOLVED` | user with access but no observed activity / session user not resolvable |

@@ -227,6 +227,23 @@ function collectServer(conn) {
   return server;
 }
 
+// True if the user holds listDatabases on the cluster (otherwise only authorized DBs are listed).
+function canListAll(conn) {
+  let status;
+  try {
+    status = run(conn.getDB('admin'), { connectionStatus: 1, showPrivileges: true });
+  } catch (e) {
+    return null;
+  }
+  const auth = status.authInfo || {};
+  if (!(auth.authenticatedUsers || []).length) return null; // no authentication: privileges are not reported
+  for (const priv of auth.authenticatedUserPrivileges || []) {
+    const res = priv.resource || {};
+    if ((res.cluster || res.anyResource) && (priv.actions || []).includes('listDatabases')) return true;
+  }
+  return false;
+}
+
 function collectDb(conn, info, shardKeys, opts) {
   const dbh = conn.getDB(info.name);
   const out = { name: info.name, size_on_disk: toNum(info.sizeOnDisk), empty: !!info.empty, collections: [] };
@@ -683,7 +700,7 @@ function main() {
       member_stats: opts.activity.memberStats, modified_pattern: opts.activity.modifiedPattern, modified_scan: opts.activity.modifiedScan,
       oplog_window_hours: opts.activity.oplogHours, activity_samples: opts.activity.samples, activity_interval_s: opts.activity.interval,
     },
-    server: {}, databases: [], security: null, activity: null,
+    server: {}, databases: [], database_listing: null, security: null, activity: null,
   };
 
   let conn = null;
@@ -704,12 +721,20 @@ function main() {
     }
     const listing = run(conn.getDB('admin'), { listDatabases: 1, nameOnly: false });
     const dbs = (listing.databases || []).slice().sort((a, b) => strcmp(a.name, b.name));
+    const dbListing = { listed: [], system: [], excluded_by_filter: [], can_list_all: canListAll(conn) };
     for (const info of dbs) {
-      if (SYSTEM_DBS.has(info.name)) continue;
-      if (opts.includeRe && !opts.includeRe.test(info.name)) continue;
-      if (opts.excludeRe && opts.excludeRe.test(info.name)) continue;
+      dbListing.listed.push(info.name);
+      if (SYSTEM_DBS.has(info.name)) {
+        dbListing.system.push(info.name);
+        continue;
+      }
+      if ((opts.includeRe && !opts.includeRe.test(info.name)) || (opts.excludeRe && opts.excludeRe.test(info.name))) {
+        dbListing.excluded_by_filter.push(info.name);
+        continue;
+      }
       snap.databases.push(collectDb(conn, info, shardKeys, opts));
     }
+    snap.database_listing = dbListing;
     if (opts.security) snap.security = collectSecurity(conn, ['admin'].concat(snap.databases.map((d) => d.name)));
     if (opts.activity.enabled) {
       const hello = collectHello(conn);

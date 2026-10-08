@@ -183,7 +183,7 @@ def base_snapshot(cfg: InstanceConfig, uri: str, collector: str, opts: CollectOp
                    "modified_pattern": opts.activity.modified_pattern, "modified_scan": opts.activity.modified_scan,
                    "oplog_window_hours": opts.activity.oplog_hours,
                    "activity_samples": opts.activity.samples, "activity_interval_s": opts.activity.interval},
-        "server": {}, "databases": [], "security": None, "activity": None,
+        "server": {}, "databases": [], "database_listing": None, "security": None, "activity": None,
     }
 
 
@@ -246,16 +246,20 @@ def _collect(client, snap: dict, opts: CollectOptions, OperationFailure,  # noqa
 
     listing = admin.command({"listDatabases": 1, "nameOnly": False})
     databases = []
+    db_listing: Dict[str, Any] = {"listed": [], "system": [], "excluded_by_filter": [],
+                                  "can_list_all": _can_list_all(admin, OperationFailure)}
     for info in sorted(listing.get("databases", []), key=lambda d: d["name"]):
         name = info["name"]
+        db_listing["listed"].append(name)
         if name in SYSTEM_DBS:
+            db_listing["system"].append(name)
             continue
-        if opts.include_re and not opts.include_re.search(name):
-            continue
-        if opts.exclude_re and opts.exclude_re.search(name):
+        if (opts.include_re and not opts.include_re.search(name)) or (opts.exclude_re and opts.exclude_re.search(name)):
+            db_listing["excluded_by_filter"].append(name)
             continue
         databases.append(_collect_db(client[name], info, shard_keys, opts, OperationFailure))
     snap["databases"] = databases
+    snap["database_listing"] = db_listing
 
     if opts.include_security:
         snap["security"] = _collect_security(client, ["admin"] + [d["name"] for d in databases])
@@ -273,6 +277,22 @@ def _collect(client, snap: dict, opts: CollectOptions, OperationFailure,  # noqa
                                                        activity, top, oplog_by_ns, since)
         activity.pop("_sampled", None)
         snap["activity"] = activity
+
+
+def _can_list_all(admin, OperationFailure) -> Optional[bool]:  # noqa: N803
+    """True if the user holds listDatabases on the cluster (otherwise only authorized DBs are listed)."""
+    try:
+        status = admin.command({"connectionStatus": 1, "showPrivileges": True})
+    except OperationFailure:
+        return None
+    auth = status.get("authInfo") or {}
+    if not auth.get("authenticatedUsers"):
+        return None  # no authentication: privileges are not reported
+    for priv in auth.get("authenticatedUserPrivileges") or []:
+        res = priv.get("resource") or {}
+        if (res.get("cluster") or res.get("anyResource")) and "listDatabases" in (priv.get("actions") or []):
+            return True
+    return False
 
 
 def _collect_db(db, info: dict, shard_keys: dict, opts: CollectOptions, OperationFailure) -> dict:  # noqa: N803

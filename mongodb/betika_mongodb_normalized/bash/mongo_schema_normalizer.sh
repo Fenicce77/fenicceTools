@@ -512,6 +512,7 @@ write_error_snapshot() { # <file> <name> <alias> <role> <conf> <error>
   "params": {"sample_size": ${SAMPLE_SIZE}, "max_depth": ${MAX_DEPTH}},
   "server": {},
   "databases": [],
+  "database_listing": null,
   "security": null
 }
 EOF
