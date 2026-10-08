@@ -1,0 +1,3482 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "analysis_format": 1,
+  "implementation": "bash",
+  "generated_at": "2026-10-08T18:17:16Z",
+  "params": {
+    "naming_strategy": "auto",
+    "prefix_sep": "_",
+    "target": null,
+    "mapping_entries": 0,
+    "stale_days": 15
+  },
+  "target": null,
+  "instances": [
+    {
+      "name": "cd",
+      "alias": "cd",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://cd-mongodbcluster01-node01.betika.private:27017,cd-mongodbcluster01-node02.betika.private:27017,cd-mongodbcluster01-node03.betika.private:27017/?replicaSet=cd-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.15",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 1,
+      "collections": 19,
+      "views": 0,
+      "documents": 52611,
+      "data_size": 32567377407,
+      "storage_size": 5046738944,
+      "index_size": 1540096
+    },
+    {
+      "name": "gh",
+      "alias": "gh",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://gh-mongodbcluster01.betika.private:27017,gh-mongodbcluster02.betika.private:27017,gh-mongodbcluster03.betika.private:27017/?replicaSet=gh-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.29",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 1,
+      "collections": 1,
+      "views": 0,
+      "documents": 1,
+      "data_size": 52,
+      "storage_size": 20480,
+      "index_size": 20480
+    },
+    {
+      "name": "ke",
+      "alias": "ke",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://ke-mongodbcluster01.betika.private:27017,ke-mongodbcluster02.betika.private:27017,ke-mongodbcluster03.betika.private:27017/?replicaSet=ke-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.3",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 3,
+      "collections": 17,
+      "views": 0,
+      "documents": 130682,
+      "data_size": 3582430991,
+      "storage_size": 570294272,
+      "index_size": 3682304
+    },
+    {
+      "name": "mw",
+      "alias": "mw",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://mw-mongodbcluster01.betika.private:27017,mw-mongodbcluster02.betika.private:27017,mw-mongodbcluster03.betika.private:27017/?replicaSet=mw-mongodbcluster&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.13",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 0,
+      "collections": 0,
+      "views": 0,
+      "documents": 0,
+      "data_size": 0,
+      "storage_size": 0,
+      "index_size": 0
+    },
+    {
+      "name": "tz",
+      "alias": "tz",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://tz-mongodbcluster01-node01.betika.private:27017,tz-mongodbcluster01-node02.betika.private:27017,tz-mongodbcluster01-node03.betika.private:27017/?replicaSet=tz-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.22",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 0,
+      "collections": 0,
+      "views": 0,
+      "documents": 0,
+      "data_size": 0,
+      "storage_size": 0,
+      "index_size": 0
+    },
+    {
+      "name": "ug",
+      "alias": "ug",
+      "role": "source",
+      "status": "ok",
+      "error": null,
+      "uri": "mongodb://ug-mongodbcluster01-node01.betika.private:27017,ug-mongodbcluster01-node02.betika.private:27017,ug-mongodbcluster01-node03.betika.private:27017/?replicaSet=ug-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000",
+      "version": "4.4.25",
+      "fcv": "4.4",
+      "topology": "replicaset",
+      "databases": 0,
+      "collections": 0,
+      "views": 0,
+      "documents": 0,
+      "data_size": 0,
+      "storage_size": 0,
+      "index_size": 0
+    }
+  ],
+  "db_mapping": [
+    {
+      "instance": "cd",
+      "alias": "cd",
+      "source_db": "betika_cd",
+      "target_db": "betika_cd",
+      "reason": "keep",
+      "collections": 19,
+      "views": 0,
+      "documents": 52611,
+      "data_size": 32567377407,
+      "storage_size": 5046738944,
+      "index_size": 1540096
+    },
+    {
+      "instance": "gh",
+      "alias": "gh",
+      "source_db": "betika_gh",
+      "target_db": "betika_gh",
+      "reason": "keep",
+      "collections": 1,
+      "views": 0,
+      "documents": 1,
+      "data_size": 52,
+      "storage_size": 20480,
+      "index_size": 20480
+    },
+    {
+      "instance": "ke",
+      "alias": "ke",
+      "source_db": "betika_favorites",
+      "target_db": "betika_favorites",
+      "reason": "keep",
+      "collections": 1,
+      "views": 0,
+      "documents": 3,
+      "data_size": 1309,
+      "storage_size": 32768,
+      "index_size": 32768
+    },
+    {
+      "instance": "ke",
+      "alias": "ke",
+      "source_db": "betika_help_center",
+      "target_db": "betika_help_center",
+      "reason": "keep",
+      "collections": 3,
+      "views": 0,
+      "documents": 124835,
+      "data_size": 13557785,
+      "storage_size": 7315456,
+      "index_size": 3108864
+    },
+    {
+      "instance": "ke",
+      "alias": "ke",
+      "source_db": "recon-engine",
+      "target_db": "recon-engine",
+      "reason": "keep",
+      "collections": 13,
+      "views": 0,
+      "documents": 5844,
+      "data_size": 3568871897,
+      "storage_size": 562946048,
+      "index_size": 540672
+    }
+  ],
+  "ns_mapping": [
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.doc.extension",
+      "target_ns": "betika_cd.recon.config.doc.extension",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.doc.type",
+      "target_ns": "betika_cd.recon.config.doc.type",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.field",
+      "target_ns": "betika_cd.recon.config.field",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.filter",
+      "target_ns": "betika_cd.recon.config.filter",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.job",
+      "target_ns": "betika_cd.recon.config.job",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.provider",
+      "target_ns": "betika_cd.recon.config.provider",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.settlement",
+      "target_ns": "betika_cd.recon.config.settlement",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.transaction.type",
+      "target_ns": "betika_cd.recon.config.transaction.type",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.config.transfer.expiry",
+      "target_ns": "betika_cd.recon.config.transfer.expiry",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.history",
+      "target_ns": "betika_cd.recon.history",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.job",
+      "target_ns": "betika_cd.recon.job",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.job.entries",
+      "target_ns": "betika_cd.recon.job.entries",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.job.info",
+      "target_ns": "betika_cd.recon.job.info",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.notification",
+      "target_ns": "betika_cd.recon.notification",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.progress",
+      "target_ns": "betika_cd.recon.progress",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.provider",
+      "target_ns": "betika_cd.recon.provider",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.provider.query",
+      "target_ns": "betika_cd.recon.provider.query",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.stage",
+      "target_ns": "betika_cd.recon.stage",
+      "type": "collection"
+    },
+    {
+      "instance": "cd",
+      "source_ns": "betika_cd.recon.transfer",
+      "target_ns": "betika_cd.recon.transfer",
+      "type": "collection"
+    },
+    {
+      "instance": "gh",
+      "source_ns": "betika_gh.user",
+      "target_ns": "betika_gh.user",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_favorites.favorites",
+      "target_ns": "betika_favorites.favorites",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_help_center.kb",
+      "target_ns": "betika_help_center.kb",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_help_center.users",
+      "target_ns": "betika_help_center.users",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "betika_help_center.votes",
+      "target_ns": "betika_help_center.votes",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.doc.extension",
+      "target_ns": "recon-engine.recon.config.doc.extension",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.doc.type",
+      "target_ns": "recon-engine.recon.config.doc.type",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.field",
+      "target_ns": "recon-engine.recon.config.field",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.filter",
+      "target_ns": "recon-engine.recon.config.filter",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.job",
+      "target_ns": "recon-engine.recon.config.job",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.provider",
+      "target_ns": "recon-engine.recon.config.provider",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.settlement",
+      "target_ns": "recon-engine.recon.config.settlement",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.transaction.type",
+      "target_ns": "recon-engine.recon.config.transaction.type",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.config.transfer.expiry",
+      "target_ns": "recon-engine.recon.config.transfer.expiry",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.history",
+      "target_ns": "recon-engine.recon.history",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.job.entries",
+      "target_ns": "recon-engine.recon.job.entries",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.recon.job.info",
+      "target_ns": "recon-engine.recon.job.info",
+      "type": "collection"
+    },
+    {
+      "instance": "ke",
+      "source_ns": "recon-engine.test",
+      "target_ns": "recon-engine.test",
+      "type": "collection"
+    }
+  ],
+  "drift": [],
+  "findings": [
+    {
+      "severity": "WARN",
+      "code": "ROLE_CONFLICT",
+      "instance": "cd,gh,ke,mw,tz,ug",
+      "namespace": "explainRole@admin",
+      "message": "custom role differs across sources; bootstrap uses the definition from 'cd'",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "ARRAY_TYPES_POLYMORPHIC",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.filter",
+      "message": "1 array field(s) mix BSON types inside the same document (polymorphic / key-value pattern, usually by design; not a normalization candidate)",
+      "details": [
+        "columns[].functions[].parameters[]: string=12, double=1 (in 12 doc(s))"
+      ]
+    },
+    {
+      "severity": "INFO",
+      "code": "ARRAY_TYPES_POLYMORPHIC",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.job.info",
+      "message": "1 array field(s) mix BSON types inside the same document (polymorphic / key-value pattern, usually by design; not a normalization candidate)",
+      "details": [
+        "steps[].attachments[].value: int=100, string=100 (in 100 doc(s))"
+      ]
+    },
+    {
+      "severity": "INFO",
+      "code": "ARRAY_TYPES_POLYMORPHIC",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.filter",
+      "message": "1 array field(s) mix BSON types inside the same document (polymorphic / key-value pattern, usually by design; not a normalization candidate)",
+      "details": [
+        "columns[].functions[].parameters[]: string=6, int=1 (in 6 doc(s))"
+      ]
+    },
+    {
+      "severity": "INFO",
+      "code": "ARRAY_TYPES_POLYMORPHIC",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.job.info",
+      "message": "1 array field(s) mix BSON types inside the same document (polymorphic / key-value pattern, usually by design; not a normalization candidate)",
+      "details": [
+        "steps[].attachments[].value: int=100, string=100 (in 100 doc(s))"
+      ]
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.doc.extension",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.doc.type",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.field",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.filter",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.job",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.provider",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.settlement",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.transaction.type",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.transfer.expiry",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.history",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.job",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.notification",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.progress",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.provider",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.provider.query",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.stage",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.transfer",
+      "message": "no writes since 2026-10-07T18:12:17Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "gh",
+      "namespace": "betika_gh.user",
+      "message": "no writes since 2026-10-07T18:10:48Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "betika_favorites.favorites",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "betika_help_center.users",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "betika_help_center.votes",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.doc.extension",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.doc.type",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.field",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.filter",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.job",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.provider",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.settlement",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.transaction.type",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.transfer.expiry",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.history",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.job.entries",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.job.info",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_RECENT_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine.test",
+      "message": "no writes since 2026-10-07T18:11:50Z (oplog) and no reads/writes since -: candidate for archiving instead of migrating",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_TARGET",
+      "instance": "",
+      "namespace": "",
+      "message": "no target instance defined; the central instance should run MongoDB >= 4.4",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_USER_DATABASES",
+      "instance": "mw",
+      "namespace": "",
+      "message": "the instance has no user databases (listed: admin, config, local): nothing to migrate",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_USER_DATABASES",
+      "instance": "tz",
+      "namespace": "",
+      "message": "the instance has no user databases (listed: admin, config, local): nothing to migrate",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "NO_USER_DATABASES",
+      "instance": "ug",
+      "namespace": "",
+      "message": "the instance has no user databases (listed: admin, config, local): nothing to migrate",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "ROLE_DUPLICATE",
+      "instance": "cd,gh,ke,mw,tz,ug",
+      "namespace": "bmnSchemaAuditor@admin",
+      "message": "same custom role defined in several sources",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "ROLE_DUPLICATE",
+      "instance": "cd,gh,ke,mw,tz,ug",
+      "namespace": "oplogReader@admin",
+      "message": "same custom role defined in several sources",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "SCHEMA_TRUNCATED",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.job.info",
+      "message": "field path limit reached while sampling (dynamic keys?); schema is partial",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.doc.extension",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-10-31T07:01:05Z (1073 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.doc.type",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-10-31T07:00:03Z (1073 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.field",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-10-31T07:03:41Z (1073 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.filter",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2025-09-09T09:10:52Z (394 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.job",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2025-09-09T09:59:59Z (394 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.provider",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2025-09-09T08:35:45Z (394 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.settlement",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2025-09-09T09:26:34Z (394 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.transaction.type",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-10-31T06:59:34Z (1073 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.config.transfer.expiry",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-10-30T14:38:25Z (1074 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.history",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2024-07-11T11:22:02Z (819 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.job",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-08-07T07:12:46Z (1158 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.notification",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-07-24T09:38:22Z (1172 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.progress",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-08-07T08:33:58Z (1158 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.provider",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-07-12T07:11:07Z (1184 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.provider.query",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-08-03T10:09:06Z (1162 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.stage",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-08-07T07:13:58Z (1158 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "cd",
+      "namespace": "betika_cd.recon.transfer",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-08-04T10:16:01Z (1161 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "gh",
+      "namespace": "betika_gh.user",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2024-10-14T14:49:25Z (724 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "betika_help_center.kb",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2021-08-12T20:48:48Z (1882 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "betika_help_center.users",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2018-11-14T09:34:56Z (2885 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "betika_help_center.votes",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2024-11-27T22:10:36Z (679 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.doc.extension",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-12-19T12:23:46Z (1024 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.doc.type",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-12-19T12:22:45Z (1024 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.field",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-12-19T12:30:36Z (1024 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.filter",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2026-03-05T10:36:49Z (217 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.job",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2026-05-07T07:29:25Z (154 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.provider",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2026-03-05T10:30:42Z (217 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.settlement",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2026-03-05T10:31:48Z (217 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.transaction.type",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-12-19T12:22:23Z (1024 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.config.transfer.expiry",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2023-12-19T12:16:50Z (1024 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "STALE_COLLECTION",
+      "instance": "ke",
+      "namespace": "recon-engine.recon.history",
+      "message": "no inserts (no *modified* date field: updates are not visible) since 2024-03-04T07:36:59Z (948 days before the collection date)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_DUPLICATE",
+      "instance": "cd,gh,ke,mw,tz",
+      "namespace": "mongodb_exporter@admin",
+      "message": "same user and roles defined in several sources",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_DUPLICATE",
+      "instance": "cd,gh,ke,mw,tz,ug",
+      "namespace": "admin@admin",
+      "message": "same user and roles defined in several sources",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_DUPLICATE",
+      "instance": "cd,gh,ke,mw,tz,ug",
+      "namespace": "pmm_monitor@admin",
+      "message": "same user and roles defined in several sources",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_DUPLICATE",
+      "instance": "cd,gh,ke,mw,tz,ug",
+      "namespace": "schema_auditor@admin",
+      "message": "same user and roles defined in several sources",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "cd",
+      "namespace": "admin@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "cd",
+      "namespace": "mongodb_exporter@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "cd",
+      "namespace": "pmm_monitor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "cd",
+      "namespace": "schema_auditor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "gh",
+      "namespace": "admin@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "gh",
+      "namespace": "mongodb_exporter@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "gh",
+      "namespace": "pmm_monitor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "gh",
+      "namespace": "recon_app@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "gh",
+      "namespace": "schema_auditor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "admin@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "mongodb_exporter@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "pmm_monitor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine_app@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "recon-engine_app@recon-engine",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "root@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "schema_auditor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "uxUser@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ke",
+      "namespace": "uxUser@betika_favorites",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "mw",
+      "namespace": "admin@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "mw",
+      "namespace": "mongodb_exporter@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "mw",
+      "namespace": "pbmuser@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "mw",
+      "namespace": "pmm_monitor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "mw",
+      "namespace": "schema_auditor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "tz",
+      "namespace": "admin@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "tz",
+      "namespace": "betikaknowlegebase_app@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "tz",
+      "namespace": "mongodb_exporter@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "tz",
+      "namespace": "pmm_monitor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "tz",
+      "namespace": "schema_auditor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ug",
+      "namespace": "admin@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ug",
+      "namespace": "pmm_monitor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    },
+    {
+      "severity": "INFO",
+      "code": "USER_NO_ACTIVITY",
+      "instance": "ug",
+      "namespace": "schema_auditor@admin",
+      "message": "user has access but no activity was observed (oplog/sampling)",
+      "details": []
+    }
+  ],
+  "normalization": [],
+  "activity": [
+    {
+      "instance": "cd",
+      "members": [
+        {
+          "host": "cd-mongodbcluster01-node01.betika.private:27017",
+          "state": "PRIMARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "cd-mongodbcluster01-node02.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "cd-mongodbcluster01-node03.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        }
+      ],
+      "oplog": {
+        "member": "cd-mongodbcluster01-node02.betika.private:27017",
+        "window_hours": 24,
+        "requested_from": "2026-10-07T18:12:17Z",
+        "oplog_first": "2026-09-15T20:44:58Z",
+        "oplog_last": "2026-10-08T18:12:08Z",
+        "from": "2026-10-07T18:12:17Z",
+        "error": null
+      },
+      "sampling": {
+        "samples": 30,
+        "interval_s": 10,
+        "members": 3,
+        "started_at": "2026-10-08T18:12:18Z",
+        "finished_at": "2026-10-08T18:17:15Z",
+        "error": null
+      },
+      "collections": [
+        {
+          "namespace": "betika_cd.recon.config.doc.extension",
+          "type": "collection",
+          "first_insert": "2023-10-31T07:00:29Z",
+          "last_insert": "2023-10-31T07:01:05Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.doc.type",
+          "type": "collection",
+          "first_insert": "2023-10-31T06:59:58Z",
+          "last_insert": "2023-10-31T07:00:03Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.field",
+          "type": "collection",
+          "first_insert": "2023-10-31T07:03:01Z",
+          "last_insert": "2023-10-31T07:03:41Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.filter",
+          "type": "collection",
+          "first_insert": "2023-12-05T10:27:43Z",
+          "last_insert": "2025-09-09T09:10:52Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.job",
+          "type": "collection",
+          "first_insert": "2023-12-05T10:24:49Z",
+          "last_insert": "2025-09-09T09:59:59Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [
+            {
+              "path": "modifiedby",
+              "method": "ignored",
+              "value": null
+            },
+            {
+              "path": "modifiedon",
+              "method": "ignored",
+              "value": null
+            }
+          ],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.provider",
+          "type": "collection",
+          "first_insert": "2023-10-31T06:27:48Z",
+          "last_insert": "2025-09-09T08:35:45Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.settlement",
+          "type": "collection",
+          "first_insert": "2023-11-29T09:26:58Z",
+          "last_insert": "2025-09-09T09:26:34Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.transaction.type",
+          "type": "collection",
+          "first_insert": "2023-10-31T06:59:15Z",
+          "last_insert": "2023-10-31T06:59:34Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.config.transfer.expiry",
+          "type": "collection",
+          "first_insert": "2023-10-30T14:38:25Z",
+          "last_insert": "2023-10-30T14:38:25Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.history",
+          "type": "collection",
+          "first_insert": "2023-07-18T11:09:22Z",
+          "last_insert": "2024-07-11T11:22:02Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.job",
+          "type": "collection",
+          "first_insert": "2023-07-18T11:09:22Z",
+          "last_insert": "2023-08-07T07:12:46Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.job.entries",
+          "type": "collection",
+          "first_insert": "2023-12-05T10:40:42Z",
+          "last_insert": "2026-10-08T17:14:25Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": "2026-10-08T17:15:57Z",
+          "oplog": {
+            "inserts": 22,
+            "updates": 22,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": [
+            {
+              "user": "reconciliation_app@betika_cd",
+              "oplog": 44,
+              "sampled": 0
+            }
+          ]
+        },
+        {
+          "namespace": "betika_cd.recon.job.info",
+          "type": "collection",
+          "first_insert": "2023-12-05T10:40:07Z",
+          "last_insert": "2026-10-08T17:12:45Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": "2026-10-08T17:16:00Z",
+          "oplog": {
+            "inserts": 12,
+            "updates": 11,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": [
+            {
+              "user": "reconciliation_app@betika_cd",
+              "oplog": 23,
+              "sampled": 0
+            }
+          ]
+        },
+        {
+          "namespace": "betika_cd.recon.notification",
+          "type": "collection",
+          "first_insert": "2023-07-19T08:01:13Z",
+          "last_insert": "2023-07-24T09:38:22Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.progress",
+          "type": "collection",
+          "first_insert": "2023-07-20T11:47:33Z",
+          "last_insert": "2023-08-07T08:33:58Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.provider",
+          "type": "collection",
+          "first_insert": "2023-07-11T12:25:56Z",
+          "last_insert": "2023-07-12T07:11:07Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.provider.query",
+          "type": "collection",
+          "first_insert": "2023-08-03T10:07:26Z",
+          "last_insert": "2023-08-03T10:09:06Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.stage",
+          "type": "collection",
+          "first_insert": "2023-07-19T08:00:49Z",
+          "last_insert": "2023-08-07T07:13:58Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_cd.recon.transfer",
+          "type": "collection",
+          "first_insert": "2023-07-19T08:01:13Z",
+          "last_insert": "2023-08-04T10:16:01Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        }
+      ]
+    },
+    {
+      "instance": "gh",
+      "members": [
+        {
+          "host": "gh-mongodbcluster01.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "gh-mongodbcluster02.betika.private:27017",
+          "state": "PRIMARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "gh-mongodbcluster03.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        }
+      ],
+      "oplog": {
+        "member": "gh-mongodbcluster01.betika.private:27017",
+        "window_hours": 24,
+        "requested_from": "2026-10-07T18:10:48Z",
+        "oplog_first": "2021-01-18T07:15:14Z",
+        "oplog_last": "2026-10-08T18:10:43Z",
+        "from": "2026-10-07T18:10:48Z",
+        "error": null
+      },
+      "sampling": {
+        "samples": 30,
+        "interval_s": 10,
+        "members": 3,
+        "started_at": "2026-10-08T18:10:48Z",
+        "finished_at": "2026-10-08T18:15:46Z",
+        "error": null
+      },
+      "collections": [
+        {
+          "namespace": "betika_gh.user",
+          "type": "collection",
+          "first_insert": "2024-10-14T14:49:25Z",
+          "last_insert": "2024-10-14T14:49:25Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        }
+      ]
+    },
+    {
+      "instance": "ke",
+      "members": [
+        {
+          "host": "ke-mongodbcluster01.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "ke-mongodbcluster03.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "ke-mongodbcluster02.betika.private:27017",
+          "state": "PRIMARY",
+          "started_at": null,
+          "error": null
+        }
+      ],
+      "oplog": {
+        "member": "ke-mongodbcluster01.betika.private:27017",
+        "window_hours": 24,
+        "requested_from": "2026-10-07T18:11:50Z",
+        "oplog_first": "2026-09-07T22:48:01Z",
+        "oplog_last": "2026-10-08T18:11:45Z",
+        "from": "2026-10-07T18:11:50Z",
+        "error": null
+      },
+      "sampling": {
+        "samples": 30,
+        "interval_s": 10,
+        "members": 3,
+        "started_at": "2026-10-08T18:11:50Z",
+        "finished_at": "2026-10-08T18:16:48Z",
+        "error": null
+      },
+      "collections": [
+        {
+          "namespace": "betika_favorites.favorites",
+          "type": "collection",
+          "first_insert": null,
+          "last_insert": null,
+          "id_type": "other",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_help_center.kb",
+          "type": "collection",
+          "first_insert": "2018-12-03T15:11:27Z",
+          "last_insert": "2021-08-12T20:48:48Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": "2026-10-08T17:35:04Z",
+          "oplog": {
+            "inserts": 0,
+            "updates": 32,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": [
+            {
+              "user": "help_admin@betika_help_center",
+              "oplog": 32,
+              "sampled": 0
+            }
+          ]
+        },
+        {
+          "namespace": "betika_help_center.users",
+          "type": "collection",
+          "first_insert": "2018-11-12T09:35:39Z",
+          "last_insert": "2018-11-14T09:34:56Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "betika_help_center.votes",
+          "type": "collection",
+          "first_insert": "2018-11-12T09:58:19Z",
+          "last_insert": "2024-11-27T22:10:36Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.doc.extension",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:23:19Z",
+          "last_insert": "2023-12-19T12:23:46Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.doc.type",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:22:40Z",
+          "last_insert": "2023-12-19T12:22:45Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.field",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:29:45Z",
+          "last_insert": "2023-12-19T12:30:36Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.filter",
+          "type": "collection",
+          "first_insert": "2023-12-20T13:51:34Z",
+          "last_insert": "2026-03-05T10:36:49Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.job",
+          "type": "collection",
+          "first_insert": "2023-12-20T13:21:51Z",
+          "last_insert": "2026-05-07T07:29:25Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [
+            {
+              "path": "modifiedby",
+              "method": "ignored",
+              "value": null
+            },
+            {
+              "path": "modifiedon",
+              "method": "ignored",
+              "value": null
+            }
+          ],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.provider",
+          "type": "collection",
+          "first_insert": "2023-12-20T13:19:08Z",
+          "last_insert": "2026-03-05T10:30:42Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.settlement",
+          "type": "collection",
+          "first_insert": "2023-12-20T13:19:47Z",
+          "last_insert": "2026-03-05T10:31:48Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.transaction.type",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:22:16Z",
+          "last_insert": "2023-12-19T12:22:23Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.config.transfer.expiry",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:16:50Z",
+          "last_insert": "2023-12-19T12:16:50Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.history",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:39:06Z",
+          "last_insert": "2024-03-04T07:36:59Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.job.entries",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:45:41Z",
+          "last_insert": "2026-10-07T12:05:54Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.recon.job.info",
+          "type": "collection",
+          "first_insert": "2023-12-19T12:45:11Z",
+          "last_insert": "2026-10-07T12:05:09Z",
+          "id_type": "objectId",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        },
+        {
+          "namespace": "recon-engine.test",
+          "type": "collection",
+          "first_insert": null,
+          "last_insert": null,
+          "id_type": "empty",
+          "last_modified": null,
+          "last_modified_field": null,
+          "last_modified_method": null,
+          "modified_fields": [],
+          "created_at": null,
+          "last_write": null,
+          "oplog": {
+            "inserts": 0,
+            "updates": 0,
+            "deletes": 0,
+            "commands": 0
+          },
+          "top": null,
+          "sampled_ops": 0,
+          "users": []
+        }
+      ]
+    },
+    {
+      "instance": "mw",
+      "members": [
+        {
+          "host": "mw-mongodbcluster01.betika.private:27017",
+          "state": "PRIMARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "mw-mongodbcluster02.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "mw-mongodbcluster03.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        }
+      ],
+      "oplog": {
+        "member": "mw-mongodbcluster02.betika.private:27017",
+        "window_hours": 24,
+        "requested_from": "2026-10-07T18:10:47Z",
+        "oplog_first": "2022-03-17T16:50:28Z",
+        "oplog_last": "2026-10-08T18:10:43Z",
+        "from": "2026-10-07T18:10:47Z",
+        "error": null
+      },
+      "sampling": {
+        "samples": 30,
+        "interval_s": 10,
+        "members": 3,
+        "started_at": "2026-10-08T18:10:48Z",
+        "finished_at": "2026-10-08T18:15:45Z",
+        "error": null
+      },
+      "collections": []
+    },
+    {
+      "instance": "tz",
+      "members": [
+        {
+          "host": "tz-mongodbcluster01-node01.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "tz-mongodbcluster01-node02.betika.private:27017",
+          "state": "PRIMARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "tz-mongodbcluster01-node03.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        }
+      ],
+      "oplog": {
+        "member": "tz-mongodbcluster01-node01.betika.private:27017",
+        "window_hours": 24,
+        "requested_from": "2026-10-07T18:10:47Z",
+        "oplog_first": "2023-06-08T11:31:56Z",
+        "oplog_last": "2026-10-08T18:10:39Z",
+        "from": "2026-10-07T18:10:47Z",
+        "error": null
+      },
+      "sampling": {
+        "samples": 30,
+        "interval_s": 10,
+        "members": 3,
+        "started_at": "2026-10-08T18:10:47Z",
+        "finished_at": "2026-10-08T18:15:45Z",
+        "error": null
+      },
+      "collections": []
+    },
+    {
+      "instance": "ug",
+      "members": [
+        {
+          "host": "ug-mongodbcluster01-node01.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "ug-mongodbcluster01-node02.betika.private:27017",
+          "state": "PRIMARY",
+          "started_at": null,
+          "error": null
+        },
+        {
+          "host": "ug-mongodbcluster01-node03.betika.private:27017",
+          "state": "SECONDARY",
+          "started_at": null,
+          "error": null
+        }
+      ],
+      "oplog": {
+        "member": "ug-mongodbcluster01-node01.betika.private:27017",
+        "window_hours": 24,
+        "requested_from": "2026-10-07T18:10:47Z",
+        "oplog_first": "2023-11-10T09:10:41Z",
+        "oplog_last": "2026-10-08T18:10:47Z",
+        "from": "2026-10-07T18:10:47Z",
+        "error": null
+      },
+      "sampling": {
+        "samples": 30,
+        "interval_s": 10,
+        "members": 3,
+        "started_at": "2026-10-08T18:10:47Z",
+        "finished_at": "2026-10-08T18:15:45Z",
+        "error": null
+      },
+      "collections": []
+    }
+  ],
+  "users": [
+    {
+      "instance": "cd",
+      "user": "admin",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "cd",
+      "user": "mongodb_exporter",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "cd",
+      "user": "pmm_monitor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "cd",
+      "user": "reconciliation_app",
+      "db": "betika_cd",
+      "defined": true,
+      "access": [
+        "betika_cd"
+      ],
+      "observed": true,
+      "sources": [
+        "oplog"
+      ],
+      "oplog_writes": 67,
+      "sampled_ops": 0,
+      "namespaces": [
+        "betika_cd.recon.job.entries",
+        "betika_cd.recon.job.info"
+      ],
+      "apps": {},
+      "clients": {},
+      "recommendation": "migrate"
+    },
+    {
+      "instance": "cd",
+      "user": "schema_auditor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "config",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "gh",
+      "user": "admin",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "gh",
+      "user": "mongodb_exporter",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "gh",
+      "user": "pmm_monitor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "gh",
+      "user": "recon_app",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "betika_gh"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "gh",
+      "user": "schema_auditor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "config",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "admin",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "help_admin",
+      "db": "betika_help_center",
+      "defined": true,
+      "access": [
+        "betika_help_center"
+      ],
+      "observed": true,
+      "sources": [
+        "oplog"
+      ],
+      "oplog_writes": 32,
+      "sampled_ops": 0,
+      "namespaces": [
+        "betika_help_center.kb"
+      ],
+      "apps": {},
+      "clients": {},
+      "recommendation": "migrate"
+    },
+    {
+      "instance": "ke",
+      "user": "mongodb_exporter",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "pmm_monitor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "recon-engine_app",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "recon-engine"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "recon-engine_app",
+      "db": "recon-engine",
+      "defined": true,
+      "access": [
+        "recon-engine"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "root",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "schema_auditor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "config",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "uxUser",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "betika_favorites"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ke",
+      "user": "uxUser",
+      "db": "betika_favorites",
+      "defined": true,
+      "access": [
+        "betika_favorites"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "mw",
+      "user": "admin",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "mw",
+      "user": "mongodb_exporter",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "mw",
+      "user": "pbmuser",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "admin"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "mw",
+      "user": "pmm_monitor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "mw",
+      "user": "schema_auditor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "config",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "tz",
+      "user": "admin",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "tz",
+      "user": "betikaknowlegebase_app",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "tz",
+      "user": "mongodb_exporter",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "tz",
+      "user": "pmm_monitor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "tz",
+      "user": "schema_auditor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "config",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ug",
+      "user": "admin",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ug",
+      "user": "pmm_monitor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    },
+    {
+      "instance": "ug",
+      "user": "schema_auditor",
+      "db": "admin",
+      "defined": true,
+      "access": [
+        "*",
+        "config",
+        "local"
+      ],
+      "observed": false,
+      "sources": [],
+      "oplog_writes": 0,
+      "sampled_ops": 0,
+      "namespaces": [],
+      "apps": {},
+      "clients": {},
+      "recommendation": "review"
+    }
+  ],
+  "security_plan": {
+    "users": [
+      {
+        "user": "admin",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "root",
+            "db": "admin"
+          }
+        ],
+        "sources": [
+          "cd",
+          "gh",
+          "ke",
+          "mw",
+          "tz",
+          "ug"
+        ]
+      },
+      {
+        "user": "betikaknowlegebase_app",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "root",
+            "db": "admin"
+          }
+        ],
+        "sources": [
+          "tz"
+        ]
+      },
+      {
+        "user": "mongodb_exporter",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "clusterMonitor",
+            "db": "admin"
+          },
+          {
+            "role": "read",
+            "db": "local"
+          }
+        ],
+        "sources": [
+          "cd",
+          "gh",
+          "ke",
+          "mw",
+          "tz"
+        ]
+      },
+      {
+        "user": "pbmuser",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "backup",
+            "db": "admin"
+          },
+          {
+            "role": "clusterMonitor",
+            "db": "admin"
+          },
+          {
+            "role": "pbmAnyAction",
+            "db": "admin"
+          },
+          {
+            "role": "readWrite",
+            "db": "admin"
+          },
+          {
+            "role": "restore",
+            "db": "admin"
+          }
+        ],
+        "sources": [
+          "mw"
+        ]
+      },
+      {
+        "user": "pmm_monitor",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "clusterMonitor",
+            "db": "admin"
+          },
+          {
+            "role": "explainRole",
+            "db": "admin"
+          },
+          {
+            "role": "read",
+            "db": "local"
+          }
+        ],
+        "sources": [
+          "cd",
+          "gh",
+          "ke",
+          "mw",
+          "tz",
+          "ug"
+        ]
+      },
+      {
+        "user": "recon-engine_app",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "readWrite",
+            "db": "recon-engine"
+          }
+        ],
+        "sources": [
+          "ke"
+        ]
+      },
+      {
+        "user": "recon_app",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "readWrite",
+            "db": "betika_gh"
+          }
+        ],
+        "sources": [
+          "gh"
+        ]
+      },
+      {
+        "user": "root",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "dbAdminAnyDatabase",
+            "db": "admin"
+          },
+          {
+            "role": "readWriteAnyDatabase",
+            "db": "admin"
+          },
+          {
+            "role": "userAdminAnyDatabase",
+            "db": "admin"
+          }
+        ],
+        "sources": [
+          "ke"
+        ]
+      },
+      {
+        "user": "schema_auditor",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "bmnSchemaAuditor",
+            "db": "admin"
+          },
+          {
+            "role": "oplogReader",
+            "db": "admin"
+          }
+        ],
+        "sources": [
+          "cd",
+          "gh",
+          "ke",
+          "mw",
+          "tz",
+          "ug"
+        ]
+      },
+      {
+        "user": "uxUser",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "readWrite",
+            "db": "betika_favorites"
+          }
+        ],
+        "sources": [
+          "ke"
+        ]
+      },
+      {
+        "user": "reconciliation_app",
+        "db": "betika_cd",
+        "roles": [
+          {
+            "role": "dbOwner",
+            "db": "betika_cd"
+          }
+        ],
+        "sources": [
+          "cd"
+        ]
+      },
+      {
+        "user": "uxUser",
+        "db": "betika_favorites",
+        "roles": [
+          {
+            "role": "dbAdmin",
+            "db": "betika_favorites"
+          },
+          {
+            "role": "readWrite",
+            "db": "betika_favorites"
+          }
+        ],
+        "sources": [
+          "ke"
+        ]
+      },
+      {
+        "user": "help_admin",
+        "db": "betika_help_center",
+        "roles": [
+          {
+            "role": "dbAdmin",
+            "db": "betika_help_center"
+          },
+          {
+            "role": "readWrite",
+            "db": "betika_help_center"
+          },
+          {
+            "role": "userAdmin",
+            "db": "betika_help_center"
+          }
+        ],
+        "sources": [
+          "ke"
+        ]
+      },
+      {
+        "user": "recon-engine_app",
+        "db": "recon-engine",
+        "roles": [
+          {
+            "role": "readWrite",
+            "db": "recon-engine"
+          }
+        ],
+        "sources": [
+          "ke"
+        ]
+      }
+    ],
+    "roles": [
+      {
+        "role": "bmnSchemaAuditor",
+        "db": "admin",
+        "privileges": [
+          {
+            "resource": {
+              "cluster": true
+            },
+            "actions": [
+              "getParameter",
+              "inprog",
+              "listDatabases",
+              "serverStatus"
+            ]
+          },
+          {
+            "resource": {
+              "db": "",
+              "collection": ""
+            },
+            "actions": [
+              "collStats",
+              "find",
+              "listCollections",
+              "listIndexes",
+              "viewRole",
+              "viewUser"
+            ]
+          },
+          {
+            "resource": {
+              "db": "config",
+              "collection": "collections"
+            },
+            "actions": [
+              "find"
+            ]
+          }
+        ],
+        "roles": [],
+        "sources": [
+          "cd",
+          "gh",
+          "ke",
+          "mw",
+          "tz",
+          "ug"
+        ]
+      },
+      {
+        "role": "explainRole",
+        "db": "admin",
+        "privileges": [
+          {
+            "resource": {
+              "db": "",
+              "collection": ""
+            },
+            "actions": [
+              "collStats",
+              "dbHash",
+              "dbStats",
+              "find",
+              "listCollections",
+              "listIndexes"
+            ]
+          },
+          {
+            "resource": {
+              "db": "",
+              "collection": "system.version"
+            },
+            "actions": [
+              "find"
+            ]
+          }
+        ],
+        "roles": [],
+        "sources": [
+          "cd",
+          "gh",
+          "ke",
+          "mw",
+          "tz",
+          "ug"
+        ]
+      },
+      {
+        "role": "oplogReader",
+        "db": "admin",
+        "privileges": [
+          {
+            "resource": {
+              "db": "local",
+              "collection": "oplog.rs"
+            },
+            "actions": [
+              "find"
+            ]
+          }
+        ],
+        "roles": [],
+        "sources": [
+          "cd",
+          "gh",
+          "ke",
+          "mw",
+          "tz",
+          "ug"
+        ]
+      },
+      {
+        "role": "pbmAnyAction",
+        "db": "admin",
+        "privileges": [
+          {
+            "resource": {
+              "anyResource": true
+            },
+            "actions": [
+              "anyAction"
+            ]
+          }
+        ],
+        "roles": [],
+        "sources": [
+          "mw"
+        ]
+      }
+    ]
+  },
+  "capacity": {
+    "per_instance": [
+      {
+        "instance": "cd",
+        "documents": 52611,
+        "data_size": 32567377407,
+        "storage_size": 5046738944,
+        "index_size": 1540096
+      },
+      {
+        "instance": "gh",
+        "documents": 1,
+        "data_size": 52,
+        "storage_size": 20480,
+        "index_size": 20480
+      },
+      {
+        "instance": "ke",
+        "documents": 130682,
+        "data_size": 3582430991,
+        "storage_size": 570294272,
+        "index_size": 3682304
+      },
+      {
+        "instance": "mw",
+        "documents": 0,
+        "data_size": 0,
+        "storage_size": 0,
+        "index_size": 0
+      },
+      {
+        "instance": "tz",
+        "documents": 0,
+        "data_size": 0,
+        "storage_size": 0,
+        "index_size": 0
+      },
+      {
+        "instance": "ug",
+        "documents": 0,
+        "data_size": 0,
+        "storage_size": 0,
+        "index_size": 0
+      }
+    ],
+    "total": {
+      "documents": 183294,
+      "data_size": 36149808450,
+      "storage_size": 5617053696,
+      "index_size": 5242880
+    },
+    "target_existing": null
+  },
+  "summary": {
+    "errors": 0,
+    "warnings": 1,
+    "info": 111,
+    "by_code": {
+      "ARRAY_TYPES_POLYMORPHIC": 4,
+      "NO_RECENT_ACTIVITY": 34,
+      "NO_TARGET": 1,
+      "NO_USER_DATABASES": 3,
+      "ROLE_CONFLICT": 1,
+      "ROLE_DUPLICATE": 2,
+      "SCHEMA_TRUNCATED": 1,
+      "STALE_COLLECTION": 31,
+      "USER_DUPLICATE": 4,
+      "USER_NO_ACTIVITY": 31
+    },
+    "sources": 6,
+    "source_databases": 5,
+    "source_collections": 37,
+    "source_views": 0,
+    "target_databases": 5
+  }
+}
