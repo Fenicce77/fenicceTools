@@ -1,0 +1,246 @@
+{
+  "tool": "betika_mongodb_normalized",
+  "tool_version": "1.0.0",
+  "snapshot_format": 1,
+  "collector": "bash",
+  "instance": {
+    "name": "tz",
+    "alias": "tz",
+    "role": "source",
+    "conf_file": "/Users/rmateos/betika/mongodb/mongo_schema_normalized/conf//tz.conf",
+    "uri": "mongodb://tz-mongodbcluster01-node01.betika.private:27017,tz-mongodbcluster01-node02.betika.private:27017,tz-mongodbcluster01-node03.betika.private:27017/?replicaSet=tz-mongodbcluster01&authSource=admin&readPreference=secondaryPreferred&appName=betika_mongodb_normalized&serverSelectionTimeoutMS=15000&connectTimeoutMS=15000"
+  },
+  "collected_at": "2026-10-08T18:25:47Z",
+  "status": "ok",
+  "error": null,
+  "params": {
+    "sample_size": 100,
+    "max_depth": 5,
+    "activity": true,
+    "member_stats": false,
+    "modified_pattern": "modif",
+    "modified_scan": false,
+    "oplog_window_hours": 7,
+    "activity_samples": 0,
+    "activity_interval_s": 10
+  },
+  "server": {
+    "version": "4.4.22",
+    "fcv": "4.4",
+    "set_name": "tz-mongodbcluster01",
+    "storage_engine": "wiredTiger",
+    "topology": "replicaset"
+  },
+  "databases": [],
+  "database_listing": {
+    "listed": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "system": [
+      "admin",
+      "config",
+      "local"
+    ],
+    "excluded_by_filter": [],
+    "can_list_all": true
+  },
+  "security": {
+    "users": [
+      {
+        "user": "admin",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "root",
+            "db": "admin"
+          }
+        ]
+      },
+      {
+        "user": "betikaknowlegebase_app",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "root",
+            "db": "admin"
+          }
+        ]
+      },
+      {
+        "user": "mongodb_exporter",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "clusterMonitor",
+            "db": "admin"
+          },
+          {
+            "role": "read",
+            "db": "local"
+          }
+        ]
+      },
+      {
+        "user": "pmm_monitor",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "explainRole",
+            "db": "admin"
+          },
+          {
+            "role": "read",
+            "db": "local"
+          },
+          {
+            "role": "clusterMonitor",
+            "db": "admin"
+          }
+        ]
+      },
+      {
+        "user": "schema_auditor",
+        "db": "admin",
+        "roles": [
+          {
+            "role": "oplogReader",
+            "db": "admin"
+          },
+          {
+            "role": "bmnSchemaAuditor",
+            "db": "admin"
+          }
+        ]
+      }
+    ],
+    "roles": [
+      {
+        "role": "bmnSchemaAuditor",
+        "db": "admin",
+        "privileges": [
+          {
+            "resource": {
+              "cluster": true
+            },
+            "actions": [
+              "getParameter",
+              "inprog",
+              "listDatabases",
+              "serverStatus"
+            ]
+          },
+          {
+            "resource": {
+              "db": "",
+              "collection": ""
+            },
+            "actions": [
+              "collStats",
+              "find",
+              "listCollections",
+              "listIndexes",
+              "viewRole",
+              "viewUser"
+            ]
+          },
+          {
+            "resource": {
+              "db": "config",
+              "collection": "collections"
+            },
+            "actions": [
+              "find"
+            ]
+          }
+        ],
+        "roles": []
+      },
+      {
+        "role": "explainRole",
+        "db": "admin",
+        "privileges": [
+          {
+            "resource": {
+              "db": "",
+              "collection": ""
+            },
+            "actions": [
+              "collStats",
+              "dbHash",
+              "dbStats",
+              "find",
+              "listCollections",
+              "listIndexes"
+            ]
+          },
+          {
+            "resource": {
+              "db": "",
+              "collection": "system.version"
+            },
+            "actions": [
+              "find"
+            ]
+          }
+        ],
+        "roles": []
+      },
+      {
+        "role": "oplogReader",
+        "db": "admin",
+        "privileges": [
+          {
+            "resource": {
+              "db": "local",
+              "collection": "oplog.rs"
+            },
+            "actions": [
+              "find"
+            ]
+          }
+        ],
+        "roles": []
+      }
+    ],
+    "errors": []
+  },
+  "activity": {
+    "members": [
+      {
+        "host": "tz-mongodbcluster01-node01.betika.private:27017",
+        "state": "SECONDARY",
+        "started_at": null,
+        "error": null
+      },
+      {
+        "host": "tz-mongodbcluster01-node02.betika.private:27017",
+        "state": "PRIMARY",
+        "started_at": null,
+        "error": null
+      },
+      {
+        "host": "tz-mongodbcluster01-node03.betika.private:27017",
+        "state": "SECONDARY",
+        "started_at": null,
+        "error": null
+      }
+    ],
+    "oplog": {
+      "member": "tz-mongodbcluster01-node01.betika.private:27017",
+      "window_hours": 7,
+      "requested_from": "2026-10-08T11:25:50Z",
+      "oplog_first": "2023-06-08T11:31:56Z",
+      "oplog_last": "2026-10-08T18:25:49Z",
+      "from": "2026-10-08T11:25:50Z",
+      "error": null
+    },
+    "sampling": null,
+    "uid_map": {
+      "resolved": 5,
+      "error": null
+    },
+    "users": {}
+  }
+}
