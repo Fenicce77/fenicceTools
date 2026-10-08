@@ -109,7 +109,8 @@ def cmd_check(args: argparse.Namespace) -> int:
             Log.info(f"user: {cfg.user or '(no auth)'} | password source: {src}")
             if args.connect:
                 from pymongo import MongoClient
-                client = MongoClient(uri, username=cfg.user or None, password=cfg.resolve_password())
+                client = MongoClient(uri, username=cfg.user or None, password=cfg.resolve_password(),
+                                     datetime_conversion="DATETIME_AUTO")
                 version = client.admin.command("buildInfo")["version"]
                 client.close()
                 Log.ok(f"connected, MongoDB {version}")

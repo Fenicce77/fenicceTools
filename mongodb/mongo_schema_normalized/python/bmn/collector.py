@@ -64,7 +64,7 @@ def bson_type(value: Any) -> str:
         return "array"
     if isinstance(value, bson.ObjectId):
         return "objectId"
-    if isinstance(value, dt.datetime):
+    if isinstance(value, dt.datetime) or _is_datetime_ms(value):
         return "date"
     if isinstance(value, bson.Decimal128):
         return "decimal"
@@ -83,17 +83,28 @@ def bson_type(value: Any) -> str:
     return type(value).__name__
 
 
+def _is_datetime_ms(value: Any) -> bool:
+    """bson.DatetimeMS: BSON date outside the Python datetime range (datetime_conversion=DATETIME_AUTO)."""
+    try:
+        from bson.datetime_ms import DatetimeMS
+    except ImportError:  # pragma: no cover - pymongo < 4.3
+        return False
+    return isinstance(value, DatetimeMS)
+
+
 def date_iso(value: Any) -> Optional[str]:
-    """BSON date/timestamp -> ISO-8601 UTC (seconds precision)."""
+    """BSON date/timestamp -> ISO-8601 UTC (seconds precision); None when not a valid date in years 1-9999."""
     from bson.timestamp import Timestamp
 
+    from .common import fmt_utc
+
     if isinstance(value, Timestamp):
-        value = dt.datetime.fromtimestamp(value.time, tz=dt.timezone.utc)
+        return fmt_utc(dt.datetime.fromtimestamp(value.time, tz=dt.timezone.utc))
+    if _is_datetime_ms(value):
+        return None  # outside the datetime range: same result as the bash collector
     if not isinstance(value, dt.datetime):
         return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=dt.timezone.utc)
-    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return fmt_utc(value)
 
 
 def _track_modified(path: str, vtype: str, value: Any, modified_re, track: Optional[Dict[str, str]]) -> None:
@@ -198,7 +209,7 @@ def collect_instance(cfg: InstanceConfig, opts: CollectOptions) -> dict:
         return snap
     try:
         password = cfg.resolve_password()
-        client = MongoClient(uri, username=cfg.user or None, password=password)
+        client = MongoClient(uri, username=cfg.user or None, password=password, datetime_conversion="DATETIME_AUTO")
         try:
             _collect(client, snap, opts, OperationFailure, uri, cfg.user, password)
             snap["status"] = "ok"

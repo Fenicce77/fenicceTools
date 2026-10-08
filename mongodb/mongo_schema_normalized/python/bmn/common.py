@@ -74,6 +74,16 @@ def human_bytes(num: Any) -> str:
     return f"{rounded:.2f} {units[idx]}"
 
 
+def fmt_utc(value) -> str:
+    """datetime -> 'YYYY-MM-DDTHH:MM:SSZ' (UTC, zero-padded year, identical to JS toISOString without ms)."""
+    import datetime as _dt
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=_dt.timezone.utc)
+    value = value.astimezone(_dt.timezone.utc)
+    return f"{value.year:04d}-{value.month:02d}-{value.day:02d}T{value.hour:02d}:{value.minute:02d}:{value.second:02d}Z"
+
+
 def md(text: Any) -> str:
     """Escape a value for a markdown table cell."""
     return str(text).replace("|", "\\|").replace("\n", " ")

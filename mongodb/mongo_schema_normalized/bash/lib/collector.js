@@ -36,6 +36,16 @@ const intEnv = (name, def) => {
   return Number.isFinite(n) ? n : def;
 };
 const errText = (e) => `${(e && e.name) || 'Error'}: ${(e && e.message) || String(e)}`.split('\n')[0].slice(0, 500);
+const isUnauthorized = (e) => {
+  const text = String((e && e.message) || e).toLowerCase();
+  return !!e && (e.code === 13 || e.codeName === 'Unauthorized' || text.includes('not authorized') || text.includes('unauthorized'));
+};
+// Short, actionable message for authorization failures (the raw one echoes the whole command).
+const authErr = (e, privilege) => (isUnauthorized(e) ? `Unauthorized: missing privilege ${privilege}` : errText(e));
+const PRIV_MEMBER = "'serverStatus' and 'top' actions on {cluster: true} (member stats)";
+const PRIV_OPLOG = "'find' on {db: 'local', collection: 'oplog.rs'} (oplog window)";
+const PRIV_SAMPLING = "'inprog' action on {cluster: true} ($currentOp with allUsers)";
+const PRIV_USERS = "'viewUser' action on every database (session user resolution)";
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 const strcmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -120,13 +130,15 @@ function bsonType(v) {
 }
 const isPlainObject = (v) => bsonType(v) === 'object' && !(v && v._bsontype);
 
+// BSON date/timestamp -> ISO-8601 UTC (seconds); null when invalid or outside years 1-9999 (same as Python).
 function dateIso(v) {
-  if (v instanceof Date) return v.toISOString().replace(/\.\d{3}Z$/, 'Z');
-  if (v && v._bsontype === 'Timestamp') {
-    const secs = typeof v.getHighBits === 'function' ? v.getHighBits() >>> 0 : v.t;
-    return new Date(secs * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
-  }
-  return null;
+  let d = null;
+  if (v instanceof Date) d = v;
+  else if (v && v._bsontype === 'Timestamp') d = new Date((typeof v.getHighBits === 'function' ? v.getHighBits() >>> 0 : v.t) * 1000);
+  if (!d || !Number.isFinite(d.getTime())) return null;
+  const year = d.getUTCFullYear();
+  if (year < 1 || year > 9999) return null;
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function trackModified(p, t, value, modifiedRe, track) {
@@ -341,6 +353,7 @@ const NO_AUTH = '(no auth)';
 const sleepMs = (ms) => (typeof sleep === 'function' ? sleep(ms) : Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
 const isoOf = (v) => {
   if (v === null || v === undefined) return null;
+  if (v._bsontype === 'Timestamp') v = tsSeconds(v);
   const d = typeof v === 'number' ? new Date(v * 1000) : v;
   return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 };
@@ -395,7 +408,6 @@ const oplogPipeline = (fromTs) => [
   { $unwind: '$entries' },
   { $project: { ts: 1, uid: 1, op: '$entries.op', ns: '$entries.ns', cmd: { $cond: [{ $eq: ['$entries.op', 'c'] }, { $arrayElemAt: [{ $objectToArray: '$entries.o' }, 0] }, null] } } },
   { $group: { _id: { ns: '$ns', op: '$op', uid: '$uid', cmd: '$cmd.k', target: '$cmd.v' }, n: { $sum: 1 }, first: { $min: '$ts' }, last: { $max: '$ts' } } },
-  { $project: { n: 1, first: { $toDate: '$first' }, last: { $toDate: '$last' } } },
 ];
 
 function resolveUid(uid, uidMap) {
@@ -496,7 +508,7 @@ function collectActivity(conn, uri, hello, dbNames, aopts, opTimeoutMs) {
       }
       members.push([host, mc, info.state]);
     } catch (e) {
-      info.error = errText(e);
+      info.error = authErr(e, PRIV_MEMBER);
     }
     activity.members.push(info);
   }
@@ -515,7 +527,7 @@ function collectActivity(conn, uri, hello, dbNames, aopts, opTimeoutMs) {
           resolved += 1;
         }
       } catch (e) {
-        uidErr = uidErr || errText(e);
+        uidErr = uidErr || authErr(e, PRIV_USERS);
       }
     }
     activity.uid_map = { resolved, error: uidErr };
@@ -539,7 +551,7 @@ function collectActivity(conn, uri, hello, dbNames, aopts, opTimeoutMs) {
       const rows = oplog.aggregate(oplogPipeline(makeTimestamp(fromSecs)), { allowDiskUse: true, maxTimeMS: aopts.oplogTimeoutMs }).toArray();
       oplogByNs = foldOplogRows(rows, uidMap);
     } catch (e) {
-      olog.error = errText(e);
+      olog.error = authErr(e, PRIV_OPLOG);
     }
     activity.oplog = olog;
   }
@@ -557,7 +569,7 @@ function collectActivity(conn, uri, hello, dbNames, aopts, opTimeoutMs) {
         try {
           sampleOps(mc.getDB('admin').aggregate(pipeline, { maxTimeMS: opTimeoutMs }).toArray(), sampled, activity.users);
         } catch (e) {
-          samp.error = samp.error || `${host}: ${errText(e)}`;
+          samp.error = samp.error || `${host}: ${authErr(e, PRIV_SAMPLING)}`;
         }
       }
       if (rnd < aopts.samples - 1) sleepMs(aopts.interval * 1000);
@@ -608,17 +620,22 @@ function modifiedDates(coll, schema, indexes, aopts, timeoutMs) {
       out.push(entry);
       continue;
     }
-    const query = { [p]: { $type: DATE_TYPES } };
+    // BSON order puts every Timestamp above every Date: take the max per type, then compare as instants.
+    const latest = (values) => values.filter((x) => x).sort(strcmp).pop() || null;
     try {
       if (p in indexed) {
         entry.method = 'index';
         entry.index = indexed[p];
-        const docs = coll.find(query, { [p]: 1, _id: 0 }).sort({ [p]: -1 }).hint(indexed[p]).limit(1).maxTimeMS(timeoutMs).toArray();
-        entry.value = docs.length ? dateIso(getPath(docs[0], p)) : null;
+        const values = [];
+        for (const btype of DATE_TYPES) {
+          const docs = coll.find({ [p]: { $type: btype } }, { [p]: 1, _id: 0 }).sort({ [p]: -1 }).hint(indexed[p]).limit(1).maxTimeMS(timeoutMs).toArray();
+          if (docs.length) values.push(dateIso(getPath(docs[0], p)));
+        }
+        entry.value = latest(values);
       } else if (aopts.modifiedScan) {
         entry.method = 'scan';
-        const rows = coll.aggregate([{ $match: query }, { $group: { _id: null, m: { $max: `$${p}` } } }], { maxTimeMS: timeoutMs }).toArray();
-        entry.value = rows.length ? dateIso(rows[0].m) : null;
+        const rows = coll.aggregate([{ $match: { [p]: { $type: DATE_TYPES } } }, { $group: { _id: { $type: `$${p}` }, m: { $max: `$${p}` } } }], { maxTimeMS: timeoutMs }).toArray();
+        entry.value = latest(rows.map((r) => dateIso(r.m)));
       } else if (p in sampleMax) {
         entry.method = 'sample';
         entry.value = sampleMax[p];

@@ -27,7 +27,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from .common import SYSTEM_DBS, TOOL_NAME
+from .common import SYSTEM_DBS, TOOL_NAME, fmt_utc
 
 NO_SESSION = "(no session)"
 NO_AUTH = "(no auth)"
@@ -36,15 +36,33 @@ NO_AUTH = "(no auth)"
 def iso(value: Any) -> Optional[str]:
     if value is None:
         return None
+    if hasattr(value, "time") and not isinstance(value, dt.datetime):  # bson.Timestamp
+        value = value.time
     if isinstance(value, (int, float)):
-        value = dt.datetime.fromtimestamp(value, tz=dt.timezone.utc)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=dt.timezone.utc)
-    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        value = dt.datetime.fromtimestamp(int(value), tz=dt.timezone.utc)
+    return fmt_utc(value)
 
 
 def _err(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}".splitlines()[0][:500]
+
+
+def is_unauthorized(exc: BaseException) -> bool:
+    code = getattr(exc, "code", None)
+    return code == 13 or "not authorized" in str(exc).lower() or "unauthorized" in str(exc).lower()
+
+
+def auth_err(exc: BaseException, privilege: str) -> str:
+    """Short, actionable message for authorization failures (the raw one echoes the whole command)."""
+    if is_unauthorized(exc):
+        return f"Unauthorized: missing privilege {privilege}"
+    return _err(exc)
+
+
+PRIV_MEMBER = "'serverStatus' and 'top' actions on {cluster: true} (member stats)"
+PRIV_OPLOG = "'find' on {db: 'local', collection: 'oplog.rs'} (oplog window)"
+PRIV_SAMPLING = "'inprog' action on {cluster: true} ($currentOp with allUsers)"
+PRIV_USERS = "'viewUser' action on every database (session user resolution)"
 
 
 def member_uri(uri: str, host: str) -> str:
@@ -91,7 +109,6 @@ def oplog_pipeline(from_ts) -> List[dict]:
             {"$eq": ["$entries.op", "c"]}, {"$arrayElemAt": [{"$objectToArray": "$entries.o"}, 0]}, None]}}},
         {"$group": {"_id": {"ns": "$ns", "op": "$op", "uid": "$uid", "cmd": "$cmd.k", "target": "$cmd.v"},
                     "n": {"$sum": 1}, "first": {"$min": "$ts"}, "last": {"$max": "$ts"}}},
-        {"$project": {"n": 1, "first": {"$toDate": "$first"}, "last": {"$toDate": "$last"}}},
     ]
 
 
@@ -248,18 +265,24 @@ def modified_dates(coll, schema: Optional[dict], indexes: List[dict], aopts: "Ac
             entry["method"] = "ignored"
             out.append(entry)
             continue
-        query = {path: {"$type": list(DATE_TYPES)}}
+        # BSON order puts every Timestamp above every Date: take the max per type, then compare as instants.
         try:
             if path in indexed:
                 entry["method"], entry["index"] = "index", indexed[path]
-                docs = list(coll.find(query, {path: 1, "_id": 0}).sort(path, -1).hint(indexed[path]).limit(1)
-                            .max_time_ms(timeout_ms))
-                entry["value"] = date_iso(_get_path(docs[0], path)) if docs else None
+                values = []
+                for btype in DATE_TYPES:
+                    docs = list(coll.find({path: {"$type": btype}}, {path: 1, "_id": 0}).sort(path, -1)
+                                .hint(indexed[path]).limit(1).max_time_ms(timeout_ms))
+                    if docs:
+                        values.append(date_iso(_get_path(docs[0], path)))
+                entry["value"] = max([v for v in values if v] or [None], key=lambda v: v or "")
             elif aopts.modified_scan:
                 entry["method"] = "scan"
-                rows = list(coll.aggregate([{"$match": query}, {"$group": {"_id": None, "m": {"$max": f"${path}"}}}],
+                rows = list(coll.aggregate([{"$match": {path: {"$type": list(DATE_TYPES)}}},
+                                            {"$group": {"_id": {"$type": f"${path}"}, "m": {"$max": f"${path}"}}}],
                                            maxTimeMS=timeout_ms))
-                entry["value"] = date_iso(rows[0]["m"]) if rows else None
+                values = [date_iso(r.get("m")) for r in rows]
+                entry["value"] = max([v for v in values if v] or [None], key=lambda v: v or "")
             elif path in sample_max:
                 entry["method"], entry["value"] = "sample", sample_max[path]
         except OperationFailure as exc:
@@ -282,13 +305,14 @@ def collect_activity(client, uri: str, user: Optional[str], password: Optional[s
     for host in (hosts or [hello.get("me") or "self"]) if aopts.needs_members else []:
         info: Dict[str, Any] = {"host": host, "state": None, "started_at": None, "error": None}
         try:
-            mc = MongoClient(member_uri(uri, host), username=user or None, password=password) if hosts else client
+            mc = (MongoClient(member_uri(uri, host), username=user or None, password=password,
+                              datetime_conversion="DATETIME_AUTO") if hosts else client)
             h = mc.admin.command("hello") if hosts else hello
             info["state"] = ("PRIMARY" if h.get("isWritablePrimary") or h.get("ismaster")
                              else "SECONDARY" if h.get("secondary") else "OTHER")
             if aopts.member_stats:
                 status = mc.admin.command({"serverStatus": 1, "repl": 0, "metrics": 0, "locks": 0})
-                info["started_at"] = iso(time.time() - float(status.get("uptime") or 0))
+                info["started_at"] = iso(int(time.time()) - int(float(status.get("uptime") or 0)))
                 starts.append(info["started_at"])
                 for ns, counters in (mc.admin.command("top").get("totals") or {}).items():
                     if ns == "note" or not isinstance(counters, dict):
@@ -301,7 +325,7 @@ def collect_activity(client, uri: str, user: Optional[str], password: Optional[s
                     agg[1] += writes
             members.append((host, mc, info["state"]))
         except Exception as exc:  # noqa: BLE001 - reported as ACTIVITY_ERROR
-            info["error"] = _err(exc)
+            info["error"] = auth_err(exc, PRIV_MEMBER)
         activity["members"].append(info)
     top_since = max(starts) if starts else None
 
@@ -316,7 +340,7 @@ def collect_activity(client, uri: str, user: Optional[str], password: Optional[s
                     uid_map[uid_hash(f"{u['user']}@{u['db']}")] = f"{u['user']}@{u['db']}"
                     resolved += 1
             except Exception as exc:  # noqa: BLE001
-                uid_err = uid_err or _err(exc)
+                uid_err = uid_err or auth_err(exc, PRIV_USERS)
         activity["uid_map"] = {"resolved": resolved, "error": uid_err}
         chosen = next((m for m in members if m[2] == "SECONDARY"), None) or (members[0] if members else None)
         now = time.time()
@@ -338,7 +362,7 @@ def collect_activity(client, uri: str, user: Optional[str], password: Optional[s
                                         maxTimeMS=aopts.oplog_timeout_ms))
             oplog_by_ns = fold_oplog_rows(rows, uid_map)
         except Exception as exc:  # noqa: BLE001
-            olog["error"] = _err(exc)
+            olog["error"] = auth_err(exc, PRIV_OPLOG)
         activity["oplog"] = olog
 
     sampled: Dict[str, dict] = {}
@@ -353,7 +377,7 @@ def collect_activity(client, uri: str, user: Optional[str], password: Optional[s
                 try:
                     sample_ops(list(mc.admin.aggregate(pipeline, maxTimeMS=op_timeout_ms)), sampled, activity["users"])
                 except Exception as exc:  # noqa: BLE001
-                    samp["error"] = samp["error"] or f"{host}: {_err(exc)}"
+                    samp["error"] = samp["error"] or f"{host}: {auth_err(exc, PRIV_SAMPLING)}"
             if rnd < aopts.samples - 1:
                 time.sleep(aopts.interval)
         samp["finished_at"] = iso(time.time())
