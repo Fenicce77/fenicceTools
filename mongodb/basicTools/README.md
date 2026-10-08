@@ -6,7 +6,7 @@ Percona Server for MongoDB) from macOS or Linux.
 | Path | Purpose |
 |------|---------|
 | `sh/mongo_exec.sh` | Wrapper: reads a config file, connects with a credential-less URI and authenticates through a 0600 preamble (password never in `ps`). Runs mongosh or the legacy `mongo` shell. |
-| `js/mongo_list_users.js` | User audit: auth DB, SCRAM mechanisms, direct/inherited roles, databases granted. Text or JSON. |
+| `js/mongo_list_users.js` | User audit: auth DB, SCRAM mechanisms, direct/inherited roles and an abbreviated access summary. Text (default), `--compact` (one line per user), `--table` (full report as a table) or JSON. |
 | `conf/mongodb_config.template.conf` | Config template (copy, fill in, `chmod 600`). |
 
 ## Quick start
@@ -21,6 +21,56 @@ sh/mongo_exec.sh -f js/mongo_list_users.js -a --help
 ```
 
 Script arguments go with `-a` (repeatable); client arguments (TLS, etc.) after `--`.
+
+## Access summary (`mongo_list_users.js`)
+
+Output modes: default (one block per user), `-a --compact` (one line per user) and
+`-a --table` (the default report as a bordered table, list values one per line;
+`INHERITED ROLES` / `AUTH RESTRICTIONS` columns only when there is data).
+
+```
+USER      AUTH_DB  SCRAM   ACCESS
+dba       admin    SHA256  CLU-ADMIN, *:RW+ADM_DB
+pbm       admin    SHA256  MON, BACKUP, RESTORE, admin:RW
+rmateos   admin    BOTH    ROOT
+owner     app      SHA256  app:ALL, reporting:RO
+reporter  app      SHA256  app(3 colls):RO, app.audit:RW, reporting:RO
+```
+
+```
++---+------+---------+---------+----------------------+-----------------+----------+
+| # | USER | AUTH_DB | SCRAM   | DIRECT ROLES         | INHERITED ROLES | ACCESS   |
++---+------+---------+---------+----------------------+-----------------+----------+
+| 1 | pbm  | admin   | SHA-256 | backup@admin         | None            | MON      |
+|   |      |         |         | clusterMonitor@admin |                 | BACKUP   |
+|   |      |         |         | readWrite@admin      |                 | RESTORE  |
+|   |      |         |         | restore@admin        |                 | admin:RW |
++---+------+---------+---------+----------------------+-----------------+----------+
+```
+
+- Format: `<scope>:<level>[+ADM_DB][+ADM_USR]`, scope = `db` | `db.coll` | `db(N colls)` | `*` (all databases).
+  Levels come from the actions of the effective privileges:
+
+  | Code | Meaning |
+  |------|---------|
+  | `RO` | read-only: `find` on documents |
+  | `RW` | read/write: RO + insert/update/remove (readWrite) |
+  | `ALL` | full control of the scope: RW + ADM_DB + ADM_USR (dbOwner) or `anyAction` |
+  | `+ADM_DB` | database administration: indexes, collMod, compact, validate, profiler, dropDatabase (dbAdmin) |
+  | `+ADM_USR` | user/role administration: create/drop users, grant/revoke roles, change passwords (userAdmin) |
+  | `INFO` | metadata/stats only, no document access |
+  | `?` | privileges not readable: custom/dropped role, `--no-resolve` or missing `viewRole` |
+
+- Built-in system roles become tags and their privileges are not expanded: `ROOT`, `SYSTEM`,
+  `CLU-ADMIN` (includes `CLU-MGR`, `MON`, `HOST`), `CLU-MGR`, `MON` (clusterMonitor), `HOST`,
+  `BACKUP`, `RESTORE`, `QBACKUP`, `SHARDING`, `SHARD-DIRECT`, `SEARCH`. Custom cluster grants:
+  `CLU-RO` (monitoring only) / `CLU-OPS`.
+- The legend after the report always lists every level and only the tags present
+  (`--no-legend` to hide it); `--help` lists all of them.
+- Scopes covered by a broader one are omitted (`app:RO` disappears under `*:RW`).
+- `role@db:?` = role whose privileges could not be read; built-in db roles are still mapped
+  by name in that case.
+- JSON adds `access`, `accessTags` and `accessScopes`.
 
 ## Client / server compatibility
 

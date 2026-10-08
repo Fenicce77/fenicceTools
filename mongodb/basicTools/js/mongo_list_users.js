@@ -2,7 +2,7 @@
  * Script: mongo_list_users.js
  * Description: Audits MongoDB users: authentication database, SCRAM mechanisms, direct
  *              and inherited roles, and an abbreviated access summary per database
- *              (RO / RW / ALL, +ADM / +USR) with short tags for system roles (ROOT, MON, ...).
+ *              (RO / RW / ALL, +ADM_DB / +ADM_USR) with short tags for system roles (ROOT, MON, ...).
  * Compatibility: mongosh 1.x/2.x and the legacy mongo shell 4.x, against MongoDB 4.0 - 8.x.
  *              Written in ES5 on purpose so the legacy shell's SpiderMonkey engine can
  *              parse it. Shell API calls are kept out of array callbacks (mongosh
@@ -16,7 +16,7 @@
  * Exit codes: 0 ok, 1 server/command error, 2 usage error.
  */
 (function () {
-  var SCRIPT_VERSION = "2.1.0";
+  var SCRIPT_VERSION = "2.2.0";
 
   // --- Runtime detection --------------------------------------------------------
   var CTX = (typeof MONGO_EXEC_CTX !== "undefined" && MONGO_EXEC_CTX) ? MONGO_EXEC_CTX : null;
@@ -79,7 +79,9 @@
       "  " + C.green + "--auth-db=<db>" + C.reset + "        Authentication database of --user (default: admin).",
       "  " + C.green + "--no-resolve" + C.reset + "          Cluster-wide mode: skip rolesInfo resolution and report",
       "                        direct roles only (needs viewUser only, no viewRole).",
-      "  " + C.green + "--compact" + C.reset + "             One line per user (user@db, SCRAM, access).",
+      "  " + C.green + "--compact" + C.reset + "             One line per user: user, auth db, SCRAM, access.",
+      "  " + C.green + "--table" + C.reset + "               Full report as a bordered table (roles/access one per line).",
+      "  " + C.green + "--no-legend" + C.reset + "           Do not print the legend after the report.",
       "  " + C.green + "--no-color" + C.reset + "            Disable ANSI colors.",
       "",
       C.bold + "REQUIRED PRIVILEGES:" + C.reset,
@@ -90,13 +92,10 @@
       C.bold + "NOTES:" + C.reset,
       "  - Sharded clusters: connect through mongos. A direct connection to a shard member",
       "    only shows that shard's local users.",
-      "  - Access is derived from the effective privileges' actions ('*' = every database):",
-      "      RO read-only (find) | RW read/write (insert/update/remove) | ALL write+ADM+USR or anyAction",
-      "      +ADM db admin (collMod/compact/dropDatabase/profiler) | +USR user/role admin",
-      "      INFO metadata only | db.coll:XX collection-scoped grant | role@db:? role not resolved",
-      "  - Built-in system roles are shown as tags and not expanded: ROOT, SYSTEM, CLU-ADMIN,",
-      "    CLU-MGR, MON (clusterMonitor), HOST, BACKUP, RESTORE, SHARDING, SEARCH.",
-      "    Custom cluster grants: CLU-RO (monitoring actions) or CLU-OPS (anything else).",
+      "  - Access is derived from the actions of the effective privileges. Scopes already",
+      "    covered by a broader one are omitted (app:RO is not shown next to *:RW).",
+      "",
+      legendLines(null).join("\n"),
       "",
       C.bold + "EXAMPLES:" + C.reset,
       "  " + C.gray + "# Cluster-wide audit:" + C.reset,
@@ -104,6 +103,9 @@
       "",
       "  " + C.gray + "# Compact, one line per user:" + C.reset,
       "  mongo_exec.sh -c ~/.mongo/prod.conf -f js/mongo_list_users.js -a --compact",
+      "",
+      "  " + C.gray + "# Full report as a table:" + C.reset,
+      "  mongo_exec.sh -c ~/.mongo/prod.conf -f js/mongo_list_users.js -a --table",
       "",
       "  " + C.gray + "# One user, JSON for jq:" + C.reset,
       "  mongo_exec.sh -q -c ~/.mongo/prod.conf -f js/mongo_list_users.js -a --json -a --user=rmateos | jq .",
@@ -126,7 +128,7 @@
   }
 
   function parseArgs(args) {
-    var o = { help: false, json: false, user: null, authDb: "admin", resolve: true, color: null, compact: false, errors: [] };
+    var o = { help: false, json: false, user: null, authDb: "admin", resolve: true, color: null, compact: false, table: false, legend: true, errors: [] };
     var i = 0;
 
     function valueOf(arg, name) {
@@ -143,10 +145,13 @@
       else if (a === "--no-resolve") { o.resolve = false; }
       else if (a === "--no-color") { o.color = false; }
       else if (a === "--compact") { o.compact = true; }
+      else if (a === "--table") { o.table = true; }
+      else if (a === "--no-legend") { o.legend = false; }
       else if (a === "--user" || a.indexOf("--user=") === 0) { o.user = valueOf(a, "--user"); }
       else if (a === "--auth-db" || a.indexOf("--auth-db=") === 0) { o.authDb = valueOf(a, "--auth-db"); }
       else { o.errors.push("Unknown option: " + a); }
     }
+    if (o.compact && o.table) { o.errors.push("--compact and --table are mutually exclusive."); }
     if (o.user === "") { o.errors.push("--user requires a non-empty value."); }
     if (!o.authDb) { o.errors.push("--auth-db requires a non-empty value."); }
     return o;
@@ -260,19 +265,41 @@
   // Data level per scope (database, '*' = every database, or db.collection):
   //   RO  read-only (find)          RW  read/write (insert/update/remove)
   //   ALL write + db admin + user admin on the scope (dbOwner level) or anyAction
-  //   +ADM db administration (collMod/compact/dropDatabase/profiler/...)
-  //   +USR user/role administration (createUser/grantRole/...)
+  //   +ADM_DB db administration (collMod/compact/dropDatabase/profiler/...)
+  //   +ADM_USR user/role administration (createUser/grantRole/...)
   //   INFO metadata only (dbStats/listCollections/...)   ?  unresolved role
+  // (User-facing descriptions: LEVEL_LEGEND / TAG_LEGEND below.)
   // Built-in system/monitoring roles (admin db) are shown as a short tag instead, and
   // their privileges are subtracted so they do not leak into the per-database list.
   var TAG_ORDER = ["SYSTEM", "ROOT", "ANY", "CLU-ADMIN", "CLU-MGR", "MON", "HOST", "BACKUP",
     "RESTORE", "QBACKUP", "SHARDING", "SHARD-DIRECT", "SEARCH", "CLU-OPS", "CLU-RO"];
+  // Legend texts: shared by --help and the legend printed after the report.
+  var LEVEL_LEGEND = [
+    ["RO", "read-only: find on documents"],
+    ["RW", "read/write: RO + insert/update/remove (readWrite)"],
+    ["ALL", "full control of the scope: RW + ADM_DB + ADM_USR (dbOwner) or anyAction"],
+    ["+ADM_DB", "database administration: indexes, collMod, compact, validate, profiler, dropDatabase (dbAdmin)"],
+    ["+ADM_USR", "user/role administration: create/drop users, grant/revoke roles, change passwords (userAdmin)"],
+    ["INFO", "metadata/stats only, no document access (dbStats, collStats, listCollections)"],
+    ["?", "privileges not readable: custom/dropped role, --no-resolve or missing viewRole"]
+  ];
+  var SCOPE_LEGEND = "<scope>:<level>[+ADM_DB][+ADM_USR]  scope = db | db.coll | db(N colls) | * (all databases)";
   var TAG_LEGEND = {
-    "SYSTEM": "__system (internal)", "ROOT": "root (everything)", "ANY": "anyResource grant",
-    "CLU-ADMIN": "clusterAdmin", "CLU-MGR": "clusterManager", "MON": "clusterMonitor",
-    "HOST": "hostManager", "BACKUP": "backup", "RESTORE": "restore", "QBACKUP": "__queryableBackup",
-    "SHARDING": "enableSharding", "SHARD-DIRECT": "directShardOperations", "SEARCH": "searchCoordinator",
-    "CLU-OPS": "custom cluster ops", "CLU-RO": "custom cluster read/monitoring"
+    "SYSTEM": "__system: internal cluster-member role, unrestricted",
+    "ROOT": "root: unrestricted (all data, users and cluster)",
+    "ANY": "custom grant on anyResource (unrestricted)",
+    "CLU-ADMIN": "clusterAdmin: full cluster management (includes CLU-MGR, MON, HOST)",
+    "CLU-MGR": "clusterManager: replica set / sharding configuration and management",
+    "MON": "clusterMonitor: read-only monitoring (serverStatus, replSetGetStatus, currentOp)",
+    "HOST": "hostManager: server ops (shutdown, logRotate, killOp, fsync, setParameter)",
+    "BACKUP": "backup: read every database for backups (mongodump / PBM)",
+    "RESTORE": "restore: write every database for restores (mongorestore / PBM)",
+    "QBACKUP": "__queryableBackup: internal queryable-backup role",
+    "SHARDING": "enableSharding: enable sharding on databases/collections",
+    "SHARD-DIRECT": "directShardOperations: direct operations on shard members (8.0+)",
+    "SEARCH": "searchCoordinator: search (mongot) coordination",
+    "CLU-OPS": "custom role with cluster-level operational actions",
+    "CLU-RO": "custom role with cluster-level monitoring actions only"
   };
   var KNOWN_ROLES = {          // only when defined in the admin database
     root: { tag: "ROOT", all: true },
@@ -354,8 +381,8 @@
     if (lvl === "ALL") { return lvl; }
     var parts = [];
     if (lvl) { parts.push(lvl); }
-    if (s.adm) { parts.push("ADM"); }
-    if (s.usr) { parts.push("USR"); }
+    if (s.adm) { parts.push("ADM_DB"); }
+    if (s.usr) { parts.push("ADM_USR"); }
     if (parts.length === 0) { return s.unknown ? "?" : "INFO"; }
     return parts.join("+") + (s.unknown ? "?" : "");
   }
@@ -609,21 +636,92 @@
 
   // --- Rendering -----------------------------------------------------------------------
   function colorLabel(label) {
-    var lvl = label.split("+")[0].replace("?", "");
+    var lvl = String(label).replace(/^\+/, "").split("+")[0].replace("?", "").replace(/ +$/, "");
     var col = lvl === "ALL" ? C.red : (lvl === "RW" ? C.yellow : (lvl === "RO" ? C.green : C.gray));
     return col + label + C.reset;
   }
 
-  function colorAccess(u) {
-    var parts = [], i;
+  // Access entries as { t: plain text (for width), s: styled text }.
+  function accessItems(u) {
+    var items = [], i;
     for (i = 0; i < u.accessTags.length; i += 1) {
       var t = u.accessTags[i];
-      parts.push((t === "ROOT" || t === "SYSTEM" || t === "ANY" ? C.red : C.magenta) + C.bold + t + C.reset);
+      items.push({ t: t, s: (t === "ROOT" || t === "SYSTEM" || t === "ANY" ? C.red : C.magenta) + C.bold + t + C.reset });
     }
     for (var name in u.accessScopes) {
-      if (u.accessScopes.hasOwnProperty(name)) { parts.push(name + ":" + colorLabel(u.accessScopes[name])); }
+      if (u.accessScopes.hasOwnProperty(name)) {
+        items.push({ t: name + ":" + u.accessScopes[name], s: name + ":" + colorLabel(u.accessScopes[name]) });
+      }
     }
-    return parts.length ? parts.join(", ") : C.gray + "NONE" + C.reset;
+    if (items.length === 0) { items.push({ t: "NONE", s: C.gray + "NONE" + C.reset }); }
+    return items;
+  }
+
+  function colorAccess(u) {
+    var items = accessItems(u), parts = [];
+    for (var i = 0; i < items.length; i += 1) { parts.push(items[i].s); }
+    return parts.join(", ");
+  }
+
+  // SCRAM mechanisms, abbreviated; SCRAM-SHA-1 only is highlighted.
+  function mechShort(u) {
+    var m = u.mechanisms;
+    if (m.length === 1 && m[0] === "SCRAM-SHA-1") { return { t: "SHA1", s: C.yellow + "SHA1" + C.reset }; }
+    if (m.length === 1 && m[0] === "SCRAM-SHA-256") { return { t: "SHA256", s: "SHA256" }; }
+    if (m.length === 2 && m.indexOf("SCRAM-SHA-1") !== -1 && m.indexOf("SCRAM-SHA-256") !== -1) {
+      return { t: "BOTH", s: "BOTH" };
+    }
+    var txt = m.length ? m.join("/") : "n/a";
+    return { t: txt, s: txt };
+  }
+
+  function plainCell(list, style, emptyText) {
+    var cell = [], i;
+    for (i = 0; i < list.length; i += 1) {
+      cell.push({ t: String(list[i]), s: (style || "") + list[i] + (style ? C.reset : "") });
+    }
+    if (cell.length === 0) { cell.push({ t: emptyText, s: C.gray + emptyText + C.reset }); }
+    return cell;
+  }
+
+  // Generic grid: cols = [header], rows = [[cell]], cell = [{t, s}] (one entry per line).
+  function renderGrid(cols, rows) {
+    var widths = [], i, c, k;
+    for (c = 0; c < cols.length; c += 1) { widths.push(cols[c].length); }
+    for (i = 0; i < rows.length; i += 1) {
+      for (c = 0; c < cols.length; c += 1) {
+        for (k = 0; k < rows[i][c].length; k += 1) { widths[c] = Math.max(widths[c], rows[i][c][k].t.length); }
+      }
+    }
+    var sepParts = [];
+    for (c = 0; c < cols.length; c += 1) { sepParts.push(repeatStr("-", widths[c] + 2)); }
+    var sep = C.gray + "+" + sepParts.join("+") + "+" + C.reset;
+    var bar = C.gray + "|" + C.reset;
+
+    var head = [];
+    for (c = 0; c < cols.length; c += 1) { head.push(" " + C.bold + pad(cols[c], widths[c]) + C.reset + " "); }
+    out(sep);
+    out(bar + head.join(bar) + bar);
+    out(sep);
+    for (i = 0; i < rows.length; i += 1) {
+      var height = 1;
+      for (c = 0; c < cols.length; c += 1) { height = Math.max(height, rows[i][c].length); }
+      for (k = 0; k < height; k += 1) {
+        var line = [];
+        for (c = 0; c < cols.length; c += 1) {
+          var e = rows[i][c][k];
+          line.push(" " + (e ? e.s + repeatStr(" ", widths[c] - e.t.length) : repeatStr(" ", widths[c])) + " ");
+        }
+        out(bar + line.join(bar) + bar);
+      }
+      out(sep);
+    }
+  }
+
+  function repeatStr(ch, n) {
+    var r = "";
+    while (r.length < n) { r += ch; }
+    return r;
   }
 
   function pad(str, len) {
@@ -645,45 +743,89 @@
   // One line per user: user@authdb, mechanisms, access summary.
   function renderCompact(info, users, mode) {
     renderHeader(info, users, mode);
-    var w = 4, i;
+    var wu = 4, wd = 7, wm = 5, i;
     for (i = 0; i < users.length; i += 1) {
-      w = Math.max(w, (users[i].user + "@" + users[i].authenticationDatabase).length);
+      wu = Math.max(wu, users[i].user.length);
+      wd = Math.max(wd, users[i].authenticationDatabase.length);
+      wm = Math.max(wm, mechShort(users[i]).t.length);
     }
-    out(C.bold + pad("USER", w) + "  " + pad("SCRAM", 7) + "  ACCESS" + C.reset);
+    out(C.bold + pad("USER", wu) + "  " + pad("AUTH_DB", wd) + "  " + pad("SCRAM", wm) + "  ACCESS" + C.reset);
     for (i = 0; i < users.length; i += 1) {
-      var u = users[i];
-      var m = u.mechanisms, mech;
-      if (m.length === 1 && m[0] === "SCRAM-SHA-1") { mech = C.yellow + pad("SHA1", 7) + C.reset; }
-      else if (m.length === 1 && m[0] === "SCRAM-SHA-256") { mech = pad("SHA256", 7); }
-      else if (m.length === 2) { mech = pad("BOTH", 7); }
-      else { mech = pad(m.length ? m.join("/") : "n/a", 7); }
-      out(C.green + pad(u.user + "@" + u.authenticationDatabase, w) + C.reset + "  " + mech + "  " + colorAccess(u));
+      var u = users[i], mech = mechShort(u);
+      out(C.green + pad(u.user, wu) + C.reset + "  " + C.yellow + pad(u.authenticationDatabase, wd) + C.reset + "  " +
+        mech.s + repeatStr(" ", wm - mech.t.length) + "  " + colorAccess(u));
     }
   }
 
-  // Legend limited to the codes that actually appear in the output.
+  // Full report as a grid; list values one per line inside the cell.
+  function renderTable(info, users, mode) {
+    renderHeader(info, users, mode);
+    var showInherited = false, showRestrictions = false, i;
+    for (i = 0; i < users.length; i += 1) {
+      if (users[i].resolution === "privileges") { showInherited = true; }
+      if (users[i].authenticationRestrictions) { showRestrictions = true; }
+    }
+    var cols = ["#", "USER", "AUTH_DB", "SCRAM", "DIRECT ROLES"];
+    if (showInherited) { cols.push("INHERITED ROLES"); }
+    cols.push("ACCESS");
+    if (showRestrictions) { cols.push("AUTH RESTRICTIONS"); }
+
+    var rows = [];
+    for (i = 0; i < users.length; i += 1) {
+      var u = users[i];
+      var mechs = [], k;
+      for (k = 0; k < u.mechanisms.length; k += 1) { mechs.push(u.mechanisms[k].replace(/^SCRAM-/, "")); }
+      var mechCell = plainCell(mechs, (mechs.length === 1 && mechs[0] === "SHA-1") ? C.yellow : "", "n/a");
+      var row = [
+        plainCell([String(i + 1)], "", ""),
+        plainCell([u.user], C.green, ""),
+        plainCell([u.authenticationDatabase], C.yellow, ""),
+        mechCell,
+        plainCell(u.directRoles, "", "None")
+      ];
+      if (showInherited) {
+        row.push(u.resolution === "privileges" ? plainCell(u.inheritedRoles, "", "None") : plainCell([], "", "n/a"));
+      }
+      row.push(accessItems(u));
+      if (showRestrictions) {
+        var restr = [];
+        var ar = u.authenticationRestrictions || [];
+        for (k = 0; k < ar.length; k += 1) { restr.push(JSON.stringify(ar[k])); }
+        row.push(plainCell(restr, "", "-"));
+      }
+      rows.push(row);
+    }
+    renderGrid(cols, rows);
+  }
+
+  function legendLines(tagsUsed) {
+    var lines = [], i, w = 12;
+    lines.push(C.bold + "Legend" + C.reset + C.gray + "  " + SCOPE_LEGEND + C.reset);
+    for (i = 0; i < LEVEL_LEGEND.length; i += 1) {
+      lines.push("  " + colorLabel(pad(LEVEL_LEGEND[i][0], w)) + " " + C.gray + LEVEL_LEGEND[i][1] + C.reset);
+    }
+    var tags = [];
+    for (i = 0; i < TAG_ORDER.length; i += 1) {
+      if (!tagsUsed || tagsUsed[TAG_ORDER[i]]) { tags.push(TAG_ORDER[i]); }
+    }
+    if (tags.length) {
+      lines.push(C.gray + "  Tags (built-in system roles, shown instead of their privileges):" + C.reset);
+      for (i = 0; i < tags.length; i += 1) {
+        lines.push("  " + C.magenta + C.bold + pad(tags[i], w) + C.reset + " " + C.gray + TAG_LEGEND[tags[i]] + C.reset);
+      }
+    }
+    return lines;
+  }
+
+  // Levels are always listed (a level can be implied, e.g. ALL = RW+ADM_DB+ADM_USR); tags only
+  // when they appear in the report.
   function renderLegend(users) {
     var used = {}, i, k;
     for (i = 0; i < users.length; i += 1) {
       for (k = 0; k < users[i].accessTags.length; k += 1) { used[users[i].accessTags[k]] = 1; }
-      for (var n in users[i].accessScopes) {
-        if (!users[i].accessScopes.hasOwnProperty(n)) { continue; }
-        var bits = users[i].accessScopes[n].replace("?", "+?").split("+");
-        for (k = 0; k < bits.length; k += 1) { used[bits[k]] = 1; }
-      }
     }
-    var scopeLegend = [["RO", "read-only"], ["RW", "read/write"], ["ALL", "dbOwner-level/anyAction"],
-      ["ADM", "db admin"], ["USR", "user admin"], ["INFO", "metadata only"], ["?", "role not resolved (custom/dropped or no viewRole)"]];
-    var parts = [];
-    for (i = 0; i < scopeLegend.length; i += 1) {
-      if (used[scopeLegend[i][0]]) { parts.push(scopeLegend[i][0] + "=" + scopeLegend[i][1]); }
-    }
-    for (i = 0; i < TAG_ORDER.length; i += 1) {
-      if (used[TAG_ORDER[i]]) { parts.push(TAG_ORDER[i] + "=" + TAG_LEGEND[TAG_ORDER[i]]); }
-    }
-    if (parts.length) {
-      out(C.gray + "Legend: " + parts.join(" | ") + "; '*' = every database" + C.reset);
-    }
+    out("");
+    out(legendLines(used).join("\n"));
   }
 
   function renderText(info, users, mode) {
@@ -792,8 +934,10 @@
       warn("No users found.");
       return;
     }
-    if (opts.compact) { renderCompact(info, users, mode); } else { renderText(info, users, mode); }
-    renderLegend(users);
+    if (opts.compact) { renderCompact(info, users, mode); }
+    else if (opts.table) { renderTable(info, users, mode); }
+    else { renderText(info, users, mode); }
+    if (opts.legend) { renderLegend(users); }
   }
 
   main();
