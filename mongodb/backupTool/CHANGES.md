@@ -290,6 +290,29 @@ skipped, probes returned nothing).
 - Tests use the real PBM 2.5.0 cluster format (8 new scenarios, 160 total);
   without the fix 7 scenarios fail.
 
+## PBM install and GCS credentials docs, full compatibility matrix (0.6.5)
+
+- INSTALL.md §1 reorganized:
+  - §1.1 (new): PBM package by MongoDB version, from the version gate in
+    the PBM source of every 2.x release. Covers a fresh install (EL and
+    Debian/Ubuntu, pinned) and replacing a non-matching version in place
+    (downgrade/upgrade, `.rpmsave` caveat, adjustments below 2.9/2.10).
+  - §1.2 (new): GCS bucket credentials by PBM version. HMAC key (PBM < 2.10
+    as `type: s3`, required; PBM >= 2.10 as `gcs` + `hmacAccessKey`/
+    `hmacSecret`, optional) vs service account JSON key (`clientEmail`/
+    `privateKey`, PBM >= 2.10 only). Service account, bucket IAM, prefix
+    per replica set, organization policies, apply and verify.
+  - §1.3: the PBM user (was §1.1). §13 now points to §1.1/§1.2.
+- Compatibility matrix completed from the PBM source: MongoDB 5.0/6.0 were
+  dropped in PBM 2.11.0 (2.10.0 is the last release for them), MongoDB 8.0
+  needs PBM >= 2.7.0 and 7.0 PBM >= 2.4.0. These combinations were accepted
+  before and PBM then refused the replica set. Pin advice for 5.0/6.0 too.
+- `tools/gcs-hmac-test.py` (shipped and installed in the doc directory):
+  tests a GCS HMAC key the way PBM < 2.10 uses it and prints the GCS error
+  code behind a 403.
+- `conf/pbm-conf.yaml`: S3 block region = bucket location.
+- Tests: 6 new matrix scenarios (166 total).
+
 ## Diffs of the replaced scripts
 
 <details>

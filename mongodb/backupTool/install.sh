@@ -72,7 +72,7 @@ ${C_BLD}EXIT CODES${C_OFF}
 ${C_BLD}INSTALLS${C_OFF}
     \${PREFIX}/bin/pbm-backup
     \${PREFIX}/lib/pbm-backup/*.sh
-    \${PREFIX}/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example,pbmuser.create.js}
+    \${PREFIX}/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,pbm-backup.conf.example,pbmuser.create.js,gcs-hmac-test.py}
     /etc/sysconfig/pbm-backup  (or /etc/default/...; created if missing, never overwritten)
     /etc/sysconfig/pbm-conf    (PBM_MONGODB_URI template, 0600; created if missing,
                                 never overwritten; must be filled in)
@@ -237,6 +237,9 @@ fi
 run install -m 0644 "${SRC}/etc/pbm-backup.conf.example" "${D}${DOCDIR}/pbm-backup.conf.example"
 if [[ -r ${SRC}/mongodb/pbmuser.create.js ]]; then
     run install -m 0644 "${SRC}/mongodb/pbmuser.create.js" "${D}${DOCDIR}/pbmuser.create.js"
+fi
+if [[ -r ${SRC}/tools/gcs-hmac-test.py ]]; then
+    run install -m 0755 "${SRC}/tools/gcs-hmac-test.py" "${D}${DOCDIR}/gcs-hmac-test.py"
 fi
 if [[ -e ${D}${SYSCONF}/pbm-backup ]]; then
     info "Keeping existing ${SYSCONF}/pbm-backup (example in ${DOCDIR})"

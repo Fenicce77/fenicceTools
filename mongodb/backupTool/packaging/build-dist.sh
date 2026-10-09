@@ -79,6 +79,7 @@ FILES=(
     systemd/legacy/timers/pbm-physical-incremental.timer
     systemd/legacy/timers/pbm-deletion.timer
     mongodb/pbmuser.create.js
+    tools/gcs-hmac-test.py
     install.sh README.md INSTALL.md CHANGES.md
 )
 for f in "${FILES[@]}"; do
