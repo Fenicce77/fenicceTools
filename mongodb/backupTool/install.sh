@@ -19,6 +19,7 @@ PREFIX=/usr/local
 SCHEME='' INCR_MIN='' METRICS='' LEGACY_WRAPPERS=''
 ENABLE=0 DISABLE_LEGACY=0 DRY_RUN=0 UNINSTALL=0 UPGRADE=0
 ALLOW_DOWNGRADE=0 FRESH_CONFIG=0 KEEP_CONFIG=0
+ASSUME_YES=0 AGENT_ENV=0 AGENT_YML=0 STORAGE='' LOGROTATE=''
 DESTDIR='' SYSCONF_OPT=''
 UNIT_DIR=/etc/systemd/system
 TS=$(date -u '+%Y%m%dT%H%M%SZ')
@@ -53,6 +54,27 @@ ${C_BLD}INSTALL / UPGRADE${C_OFF}
     and kept in place, so backups keep working (--fresh-config renames them
     and installs the new templates instead).
 
+${C_BLD}CONFIGURATION FILES${C_OFF}
+    Edit the package copies BEFORE running ${PROG} (INSTALL.md, section 4):
+        sysconfig/pbm-conf      -> /etc/sysconfig/pbm-conf     0600  always
+        etc/pbm-backup.conf     -> /etc/sysconfig/pbm-backup   0640  always
+        sysconfig/pbm-agent     -> /etc/sysconfig/pbm-agent    0640  --pbm-agent-env
+        conf/pbm-agent.yml      -> /etc/pbm-agent.yml          0600  --pbm-agent-yml (PBM >= 2.9)
+        conf/pbm-agent-config.conf -> ${UNIT_DIR}/pbm-agent.service.d/config.conf
+        conf/pbm-conf-gcp-hmac.yml | conf/pbm-conf-gcs.yml
+                                -> /etc/pbm-storage.conf       0600  --pbm-storage hmac|gcs
+    A file is copied when the member has none, and replaces the member's file
+    only when the package copy was edited (the current file is saved first).
+    The copies are listed in the plan and need a confirmation; copies of
+    templates still holding <placeholders> (not edited) need a second one.
+    --yes answers both; without a terminal and without --yes it stops (exit 2).
+
+${C_BLD}LOGS${C_OFF}
+    Creates PBM_LOCAL_ROOT and LOG_DIR (from the pbm-backup configuration;
+    default /data/backup/pbm/logs) and the pbm-agent log directory (log.path
+    of /etc/pbm-agent.yml) when missing, mode 0750, and writes
+    /etc/logrotate.d/pbm-backup (and pbm-agent when the agent logs to a file).
+
 ${C_BLD}OPTIONS${C_OFF}
     --scheme physical|logical  Incremental schedule (default physical, or the installed one)
                                  physical: hourly at :15 (01:15..23:15)
@@ -68,7 +90,15 @@ ${C_BLD}OPTIONS${C_OFF}
     --upgrade                  Require an installed version (fail if there is none)
     --allow-downgrade          Allow installing an older version than the installed one
     --fresh-config             On upgrade: rename the configuration files (instead of
-                               copying them) and install the new templates
+                               copying them) and install the package copies
+    --pbm-agent-env            Also copy sysconfig/pbm-agent (agent environment, any PBM 2.x)
+    --pbm-agent-yml            Also copy conf/pbm-agent.yml and its systemd drop-in (PBM >= 2.9)
+    --pbm-storage hmac|gcs     Also copy the PBM storage template to /etc/pbm-storage.conf
+                                 hmac: GCS through S3 + HMAC key (any PBM 2.x)
+                                 gcs:  native gcs + service account key (PBM >= 2.10)
+    --no-logrotate             Do not write /etc/logrotate.d/pbm-backup (kept on upgrades;
+                               --logrotate writes it again)
+    -y, --yes                  Answer yes to the configuration confirmations
     --uninstall                Stop and remove timers, units, binary, libraries and docs.
                                Configuration files are RENAMED to
                                <file>.uninstall.<version>.<UTC time>; logs are kept
@@ -83,20 +113,31 @@ ${C_BLD}OPTIONS${C_OFF}
 
 ${C_BLD}EXIT CODES${C_OFF}
     0 done, 1 an install step failed, 2 usage or environment error
-    (not root, no systemd, invalid option, nothing to upgrade, refused downgrade).
+    (not root, no systemd, invalid option, nothing to upgrade, refused downgrade,
+    confirmation needed without a terminal), 3 cancelled at a confirmation
+    (nothing changed).
 
 ${C_BLD}INSTALLS${C_OFF}
     \${PREFIX}/bin/pbm-backup
     \${PREFIX}/lib/pbm-backup/*.sh
     \${PREFIX}/share/doc/pbm-backup/{README.md,INSTALL.md,CHANGES.md,VERSION,install.state,
                                     pbm-backup.conf.example,pbmuser.create.js,gcs-hmac-test.py}
-    /etc/sysconfig/pbm-backup  (or /etc/default/...; created if missing)
-    /etc/sysconfig/pbm-conf    (PBM_MONGODB_URI template, 0600; created if missing; must be filled in)
+    /etc/sysconfig/pbm-backup, /etc/sysconfig/pbm-conf  (or /etc/default/...; see above)
     ${UNIT_DIR}/pbm-backup-{full,incr,cleanup,metrics}.{service,timer}
+    /etc/logrotate.d/pbm-backup, LOG_DIR, PBM_LOCAL_ROOT
 
 ${C_BLD}EXAMPLES${C_OFF}
-    # PSMDB member, migrate from the old units
+    # Edit the package copies first, then install (asks before copying them)
+    vi sysconfig/pbm-conf etc/pbm-backup.conf
     sudo ./${PROG} --enable --disable-legacy
+
+    # Community member on PBM 2.5 (MongoDB 4.4): agent environment + HMAC storage
+    vi sysconfig/pbm-conf sysconfig/pbm-agent conf/pbm-conf-gcp-hmac.yml
+    sudo ./${PROG} --scheme logical --pbm-agent-env --pbm-storage hmac
+
+    # Unattended (automation): no questions
+    sudo ./${PROG} --yes --enable
+
 
     # Community member, oplog check every 6h, with metrics
     sudo ./${PROG} --scheme logical --incr-every-min 360 --metrics --enable
@@ -164,6 +205,12 @@ while (( $# > 0 )); do
         --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
         --fresh-config)    FRESH_CONFIG=1 ;;
         --keep-config)     KEEP_CONFIG=1 ;;
+        --pbm-agent-env)   AGENT_ENV=1 ;;
+        --pbm-agent-yml)   AGENT_YML=1 ;;
+        --pbm-storage)     [[ $# -ge 2 ]] || die "--pbm-storage needs a value" 2; STORAGE=$2; shift ;;
+        --no-logrotate)    LOGROTATE=0 ;;
+        --logrotate)       LOGROTATE=1 ;;
+        -y|--yes)          ASSUME_YES=1 ;;
         --prefix)          [[ $# -ge 2 ]] || die "--prefix needs a value" 2; PREFIX=${2%/}; shift ;;
         --uninstall)       UNINSTALL=1 ;;
         --destdir)         [[ $# -ge 2 ]] || die "--destdir needs a value" 2; DESTDIR=${2%/}; shift ;;
@@ -176,6 +223,7 @@ while (( $# > 0 )); do
 done
 
 [[ -z $SCHEME || $SCHEME == physical || $SCHEME == logical ]] || die "--scheme must be physical or logical" 2
+[[ -z $STORAGE || $STORAGE == hmac || $STORAGE == gcs ]] || die "--pbm-storage must be hmac or gcs" 2
 [[ $KEEP_CONFIG == 0 || $UNINSTALL == 1 ]] || die "--keep-config only applies to --uninstall" 2
 [[ $UNINSTALL == 0 || $UPGRADE == 0 ]] || die "--uninstall and --upgrade cannot be combined" 2
 
@@ -228,11 +276,12 @@ fi
 
 # Previous install options: install.state, or inferred from the files of
 # installs older than 0.6.6 (no state file).
-PREV_SCHEME='' PREV_INCR='' PREV_METRICS='' PREV_WRAPPERS=''
+PREV_SCHEME='' PREV_INCR='' PREV_METRICS='' PREV_WRAPPERS='' PREV_LOGROTATE=''
 if [[ -n $INSTALLED ]]; then
     if [[ -r ${D}${STATE} ]]; then
         PREV_SCHEME=$(state_get SCHEME) PREV_INCR=$(state_get INCR_MIN)
         PREV_METRICS=$(state_get METRICS) PREV_WRAPPERS=$(state_get LEGACY_WRAPPERS)
+        PREV_LOGROTATE=$(state_get LOGROTATE)
     else
         if [[ -r ${D}${DROPIN}/schedule.conf ]]; then
             PREV_SCHEME=logical
@@ -265,6 +314,16 @@ config_files() {
     return 0
 }
 
+# Log rotation files written by install.sh carry this marker; files without
+# it belong to the administrator and are never touched.
+LR_DIR=/etc/logrotate.d
+LR_MARK='# Managed by pbm-backup install.sh'
+
+# lr_managed FILE - true if FILE does not exist or was written by install.sh.
+lr_managed() {
+    [[ ! -e ${D}$1 ]] || grep -qsF "$LR_MARK" "${D}$1"
+}
+
 # ---------------------------------------------------------------------------
 # Uninstall
 # ---------------------------------------------------------------------------
@@ -281,6 +340,9 @@ if [[ $UNINSTALL == 1 ]]; then
     done
     run rm -rf "${D}${DROPIN}" "${D}${LIBDIR}" "${D}${DOCDIR}"
     run rm -f "${D}${BIN}"
+    if [[ -e ${D}${LR_DIR}/pbm-backup ]] && lr_managed "${LR_DIR}/pbm-backup"; then
+        run rm -f "${D}${LR_DIR}/pbm-backup"
+    fi
     sc daemon-reload
 
     renamed=''
@@ -306,7 +368,7 @@ EOF
     if [[ $DRY_RUN == 1 ]]; then
         info "[DRY-RUN] Nothing was changed"
     else
-        ok "Uninstalled. Kept: logs, PBM itself and every backup in the bucket"
+        ok "Uninstalled. Kept: logs, PBM itself and its files (pbm-agent, /etc/pbm-agent.yml, /etc/pbm-storage.conf) and every backup in the bucket"
     fi
     exit 0
 fi
@@ -335,6 +397,7 @@ fi
 # Resolve the options: given now > installed before > defaults.
 SCHEME=${SCHEME:-${PREV_SCHEME:-physical}}
 METRICS=${METRICS:-${PREV_METRICS:-0}}
+LOGROTATE=${LOGROTATE:-${PREV_LOGROTATE:-1}}
 LEGACY_WRAPPERS=${LEGACY_WRAPPERS:-${PREV_WRAPPERS:-0}}
 INCR_CAL=''
 if [[ $SCHEME == logical ]]; then
@@ -354,6 +417,170 @@ fi
 # ---------------------------------------------------------------------------
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pbm-backup-install.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
+CFG_LIST=$(config_files)
+
+# ---------------------------------------------------------------------------
+# Configuration files: package copy -> member
+# ---------------------------------------------------------------------------
+# The administrator edits the package copies before running install.sh. A
+# copy is installed when the member has no such file, and replaces the
+# member's file only when it was edited (the current file is saved first):
+# an unedited template never overwrites a working configuration.
+#
+# pbm-agent runs as the User= of its unit (mongod in the Percona packages).
+AGENT_USER=mongod
+if [[ -z $D ]] && command -v systemctl >/dev/null 2>&1; then
+    u=$(systemctl show -p User --value pbm-agent 2>/dev/null || true)
+    [[ -n $u ]] && AGENT_USER=$u
+fi
+
+# cfg_specs - one line per file: destination|package source|mode|owner|kind
+#   kind  example:  edited when it differs from etc/pbm-backup.conf.example
+#         template: edited when no <placeholder> is left (comments ignored)
+#         fixed:    nothing to edit
+cfg_specs() {
+    printf '%s\n' "${SYSCONF}/pbm-conf|sysconfig/pbm-conf|0600|root|template"
+    printf '%s\n' "${SYSCONF}/pbm-backup|etc/pbm-backup.conf|0640|root|example"
+    if [[ $AGENT_ENV == 1 ]]; then
+        printf '%s\n' "${SYSCONF}/pbm-agent|sysconfig/pbm-agent|0640|root|template"
+    fi
+    if [[ $AGENT_YML == 1 ]]; then
+        printf '%s\n' "/etc/pbm-agent.yml|conf/pbm-agent.yml|0600|${AGENT_USER}|template"
+        printf '%s\n' "${UNIT_DIR}/pbm-agent.service.d/config.conf|conf/pbm-agent-config.conf|0644|root|fixed"
+    fi
+    case $STORAGE in
+        hmac) printf '%s\n' "/etc/pbm-storage.conf|conf/pbm-conf-gcp-hmac.yml|0600|root|template" ;;
+        gcs)  printf '%s\n' "/etc/pbm-storage.conf|conf/pbm-conf-gcs.yml|0600|root|template" ;;
+    esac
+    return 0
+}
+
+# is_edited FILE KIND - true if FILE holds real values (see cfg_specs).
+is_edited() {
+    case $2 in
+        fixed)   return 0 ;;
+        example) ! cmp -s "$1" "${SRC}/etc/pbm-backup.conf.example" ;;
+        *)       ! grep -vE '^[[:space:]]*#' "$1" | grep -E '<[A-Za-z_][^<>]*>|:pbmPassword@' >/dev/null ;;
+    esac
+}
+
+# cfg_hint DESTINATION - what to set in a file, and what to do after.
+cfg_hint() {
+    case $1 in
+        */pbm-conf)    printf 'PBM_MONGODB_URI: PBM user and password (mongodb/pbmuser.create.js), members, replicaSet' ;;
+        */pbm-backup)  printf 'optional tunables (RETENTION_DAYS, LOG_DIR, METRICS_DIR...); package defaults otherwise' ;;
+        */pbm-agent)   printf 'PBM_MONGODB_URI of THIS member; then: systemctl restart pbm-agent' ;;
+        */pbm-agent.yml) printf 'mongodb-uri of THIS member, log.path; then: systemctl daemon-reload && systemctl restart pbm-agent' ;;
+        */pbm-storage.conf) printf 'bucket, prefix, credentials; then, once per replica set: pbm config --file /etc/pbm-storage.conf' ;;
+        *)             printf 'systemd drop-in: systemctl daemon-reload && systemctl restart pbm-agent' ;;
+    esac
+}
+
+# cfg_saved_as DESTINATION - where a replaced file is saved: the upgrade
+# backup when there is one (pbm-backup, pbm-conf), else <file>.replaced.<ts>.
+cfg_saved_as() {
+    if [[ $MODE != install && $FRESH_CONFIG == 0 ]] && printf '%s\n' "$CFG_LIST" | grep -qxF "$1"; then
+        printf '%s\n' "${1}.${MODE}.${INSTALLED}.${TS}"
+    else
+        printf '%s\n' "${1}.replaced.${TS}"
+    fi
+}
+
+if [[ $AGENT_YML == 1 ]] && command -v pbm >/dev/null 2>&1; then
+    pbmver=$(pbm version 2>/dev/null | sed -n 's/^Version:[[:space:]]*//p' | head -n 1)
+    if [[ -n $pbmver && $(vercmp "$pbmver" 2.9.0) == -1 ]]; then
+        die "--pbm-agent-yml: installed PBM ${pbmver} has no agent config file (PBM >= 2.9). Use --pbm-agent-env" 2
+    fi
+fi
+
+# CFG_ACTS: one line per file: action|destination|source|mode|owner|kind|edited
+#   copy (member has none), replace (package copy edited and different),
+#   keep (package copy not edited), same (identical)
+CFG_ACTS=''
+while IFS='|' read -r dst src mode owner kind; do
+    [[ -n $dst ]] || continue
+    [[ -r ${SRC}/${src} ]] || die "Package file missing: ${src}" 1
+    edited=1
+    is_edited "${SRC}/${src}" "$kind" || edited=0
+    exists=0
+    if [[ -e ${D}${dst} ]]; then
+        exists=1
+        # --fresh-config renames pbm-backup / pbm-conf before they are copied
+        if [[ $FRESH_CONFIG == 1 && $MODE != install ]] && printf '%s\n' "$CFG_LIST" | grep -qxF "$dst"; then
+            exists=0
+        fi
+    fi
+    if [[ $exists == 0 ]]; then
+        act=copy
+    elif cmp -s "${SRC}/${src}" "${D}${dst}"; then
+        act=same
+    elif [[ $edited == 1 ]]; then
+        act=replace
+    else
+        act=keep
+    fi
+    CFG_ACTS="${CFG_ACTS}${act}|${dst}|${src}|${mode}|${owner}|${kind}|${edited}"$'\n'
+done <<EOF
+$(cfg_specs)
+EOF
+
+# cfg_act DESTINATION - action planned for one file (empty if not managed).
+cfg_act() {
+    printf '%s' "$CFG_ACTS" | awk -F'|' -v d="$1" '$2 == d { print $1 }'
+}
+
+# ---------------------------------------------------------------------------
+# Log and working directories, log rotation
+# ---------------------------------------------------------------------------
+# The configuration in effect after this run: the package copy when it is
+# installed now, else the member's file.
+case $(cfg_act "${SYSCONF}/pbm-backup") in
+    copy|replace) EFF_CONF=${SRC}/etc/pbm-backup.conf ;;
+    *)            EFF_CONF=${D}${SYSCONF}/pbm-backup ;;
+esac
+[[ -r $EFF_CONF ]] || EFF_CONF=${SRC}/etc/pbm-backup.conf.example
+# Same defaults as lib/common.sh (load_config).
+LOG_PATHS=$(
+    set +eu
+    unset PBM_LOCAL_ROOT LOG_DIR
+    . "$EFF_CONF" >/dev/null 2>&1
+    : "${PBM_LOCAL_ROOT:=/data/backup/pbm}"
+    : "${LOG_DIR:=${PBM_LOCAL_ROOT}/logs}"
+    printf '%s\n%s\n' "$PBM_LOCAL_ROOT" "$LOG_DIR"
+)
+R_LOCAL_ROOT=$(printf '%s\n' "$LOG_PATHS" | sed -n 1p)
+R_LOG_DIR=$(printf '%s\n' "$LOG_PATHS" | sed -n 2p)
+for v in R_LOCAL_ROOT R_LOG_DIR; do
+    case ${!v} in
+        /*) ;;
+        *)  warn "${v#R_} '${!v}' in ${EFF_CONF#"$D"} is not an absolute path: not created"
+            printf -v "$v" '%s' '' ;;
+    esac
+done
+
+# pbm-agent log file (PBM >= 2.9, log.path of /etc/pbm-agent.yml).
+AGENT_LOG=''
+case $(cfg_act /etc/pbm-agent.yml) in
+    copy|replace) agent_yml=${SRC}/conf/pbm-agent.yml ;;
+    *)            agent_yml=${D}/etc/pbm-agent.yml ;;
+esac
+if [[ -r $agent_yml ]]; then
+    AGENT_LOG=$(awk '/^log:/ { l = 1; next } l && /^[^[:space:]#]/ { l = 0 }
+        l && $1 == "path:" { v = $2; gsub(/"/, "", v); print v; exit }' "$agent_yml")
+    case $AGENT_LOG in
+        /dev/*|'') AGENT_LOG='' ;;
+        /*) ;;
+        *)  AGENT_LOG='' ;;
+    esac
+fi
+
+# DIRS: one line per directory: path|owner|purpose (created 0750 when missing)
+DIRS=''
+[[ -n $R_LOCAL_ROOT ]] && DIRS="${DIRS}${R_LOCAL_ROOT}|root|PBM_LOCAL_ROOT: working directory"$'\n'
+if [[ -n $R_LOG_DIR && $R_LOG_DIR != "$R_LOCAL_ROOT" ]]; then
+    DIRS="${DIRS}${R_LOG_DIR}|root|LOG_DIR: pbm-backup logs"$'\n'
+fi
+[[ -n $AGENT_LOG ]] && DIRS="${DIRS}$(dirname "$AGENT_LOG")|${AGENT_USER}|pbm-agent log, log.path in /etc/pbm-agent.yml"$'\n'
 
 # Render everything that will be installed into $WORK/stage (same relative
 # paths as on the member), then compare it with what is there now.
@@ -382,6 +609,50 @@ if [[ $LEGACY_WRAPPERS == 1 ]]; then
         cp "${SRC}/sysconfig/$f" "${STAGE}${SYSCONF}/$f"
     done
 fi
+if [[ $LOGROTATE == 1 ]]; then
+    mkdir -p "${STAGE}${LR_DIR}"
+    if [[ -z $R_LOG_DIR ]]; then
+        :
+    elif lr_managed "${LR_DIR}/pbm-backup"; then
+        cat >"${STAGE}${LR_DIR}/pbm-backup" <<EOF
+${LR_MARK}: rewritten on upgrade, removed on uninstall.
+# pbm-backup logs (LOG_DIR in ${SYSCONF}/pbm-backup). Each line is appended
+# with ">>", so files are rotated by renaming them (no copytruncate).
+${R_LOG_DIR}/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}
+EOF
+    else
+        warn "${LR_DIR}/pbm-backup was not written by ${PROG}: left as it is"
+    fi
+    if [[ -z $AGENT_LOG ]]; then
+        :
+    elif lr_managed "${LR_DIR}/pbm-agent"; then
+        cat >"${STAGE}${LR_DIR}/pbm-agent" <<EOF
+${LR_MARK}: rewritten by install.sh, kept on uninstall.
+# pbm-agent log (log.path in /etc/pbm-agent.yml, PBM >= 2.9). The agent
+# keeps the file open: copytruncate. The directory belongs to ${AGENT_USER}.
+${AGENT_LOG} {
+    su ${AGENT_USER} ${AGENT_USER}
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+    else
+        warn "${LR_DIR}/pbm-agent was not written by ${PROG}: left as it is"
+    fi
+fi
 
 N_NEW=0 N_CHANGED=0 N_SAME=0 N_REMOVED=0
 PLAN_FILES=''
@@ -408,6 +679,12 @@ for f in "${D}${LIBDIR}"/*.sh "${D}${UNIT_DIR}"/pbm-backup-*.service "${D}${UNIT
         PLAN_FILES="${PLAN_FILES}    removed   ${rel}"$'\n'; N_REMOVED=$((N_REMOVED + 1))
     fi
 done
+for rel in "${LR_DIR}/pbm-backup" "${LR_DIR}/pbm-agent"; do
+    if [[ -e ${D}${rel} && ! -e ${STAGE}${rel} ]] && grep -qsF "$LR_MARK" "${D}${rel}"; then
+        STALE="${STALE}${rel}"$'\n'
+        PLAN_FILES="${PLAN_FILES}    removed   ${rel}"$'\n'; N_REMOVED=$((N_REMOVED + 1))
+    fi
+done
 
 case $MODE in
     install)   info "Installing pbm-backup ${PKG_VERSION} (nothing installed under ${D}${PREFIX})" ;;
@@ -429,7 +706,6 @@ fi
 printf '  Files: %d new, %d changed, %d removed, %d unchanged\n' "$N_NEW" "$N_CHANGED" "$N_REMOVED" "$N_SAME"
 printf '%s' "$PLAN_FILES"
 
-CFG_LIST=$(config_files)
 if [[ $MODE != install && -n $CFG_LIST ]]; then
     if [[ $FRESH_CONFIG == 1 ]]; then
         printf '  Configuration: RENAMED to <file>.%s.%s.%s and replaced by the new templates (--fresh-config):\n' "$MODE" "$INSTALLED" "$TS"
@@ -463,6 +739,78 @@ $(grep '^## ' "${SRC}/CHANGES.md")
 EOF
     if [[ -n $whatsnew ]]; then
         printf '  Changes since %s (CHANGES.md):\n%s' "$INSTALLED" "$whatsnew"
+    fi
+fi
+
+printf '  Configuration files (package copy -> member, edit the package copy before installing):\n'
+N_CFG=0 UNEDITED=''
+while IFS='|' read -r act dst src mode owner kind edited; do
+    [[ -n $act ]] || continue
+    case $act in
+        copy)
+            N_CFG=$((N_CFG + 1))
+            note=''
+            if [[ $edited == 0 ]]; then
+                note="  ${C_YEL}NOT EDITED${C_OFF}"
+                UNEDITED="${UNEDITED}    ${dst}: $(cfg_hint "$dst")"$'\n'
+            fi
+            printf '    copy      %s -> %s (%s)%s\n' "$src" "$dst" "$mode" "$note" ;;
+        replace)
+            N_CFG=$((N_CFG + 1))
+            printf '    replace   %s -> %s (%s); current file saved as %s\n' "$src" "$dst" "$mode" "$(cfg_saved_as "$dst")" ;;
+        keep)
+            printf '    keep      %s (package copy %s not edited)\n' "$dst" "$src" ;;
+        same)
+            printf '    same      %s\n' "$dst" ;;
+    esac
+done <<EOF
+$CFG_ACTS
+EOF
+if [[ -n $DIRS ]]; then
+    printf '  Directories (created 0750 when missing; existing ones are not changed):\n'
+    while IFS='|' read -r dir owner what; do
+        [[ -n $dir ]] || continue
+        if [[ -d ${D}${dir} ]]; then
+            printf '    exists    %s  - %s\n' "$dir" "$what"
+        else
+            printf '    create    %s  - %s, owner %s\n' "$dir" "$what" "$owner"
+        fi
+    done <<EOF
+$DIRS
+EOF
+fi
+
+# confirm QUESTION - true on "y"/"yes". --yes answers it; without a terminal
+# it stops (PBM_INSTALL_ASSUME_TTY=1 reads stdin anyway: tests).
+confirm() {
+    local ans=''
+    if [[ $ASSUME_YES == 1 ]]; then
+        printf '%s [y/N] y (--yes)\n' "$1"
+        return 0
+    fi
+    if [[ ! -t 0 && -z ${PBM_INSTALL_ASSUME_TTY:-} ]]; then
+        die "Confirmation needed (\"$1\") but stdin is not a terminal. Re-run with --yes, or with --dry-run to see the plan" 2
+    fi
+    printf '%s%s [y/N]%s ' "$C_BLD" "$1" "$C_OFF"
+    read -r ans || ans=''
+    case $ans in
+        y|Y|yes|YES|Yes) return 0 ;;
+    esac
+    return 1
+}
+cancelled() {
+    die "Cancelled: nothing was changed. Edit the package copies under ${SRC} and run ${PROG} again" 3
+}
+
+if [[ -n $UNEDITED ]]; then
+    warn "WARNING: these files would be copied WITHOUT being edited (package templates with <placeholders> or defaults):"
+    printf '%s' "$UNEDITED" >&2
+    warn "pbm-backup and the pbm CLI do not work until pbm-conf is filled in; edit the files on the member after installing"
+fi
+if [[ $DRY_RUN == 0 && $N_CFG -gt 0 ]]; then
+    confirm "Copy the ${N_CFG} configuration file(s) listed above to this member?" || cancelled
+    if [[ -n $UNEDITED ]]; then
+        confirm "Some of them are NOT edited. Install them anyway and edit them on the member afterwards?" || cancelled
     fi
 fi
 
@@ -519,20 +867,43 @@ for f in README.md INSTALL.md CHANGES.md VERSION pbm-backup.conf.example pbmuser
 done
 [[ -r ${STAGE}${DOCDIR}/gcs-hmac-test.py ]] && run install -m 0755 "${STAGE}${DOCDIR}/gcs-hmac-test.py" "${D}${DOCDIR}/gcs-hmac-test.py"
 
-# 4. Configuration: created from the templates when missing, never
-#    overwritten. pbm-conf (0600) will hold the PBM password; pbm-backup
-#    refuses to run while its template placeholders are still there.
-if [[ -e ${D}${SYSCONF}/pbm-backup ]]; then
-    info "Keeping ${SYSCONF}/pbm-backup"
-else
-    run install -m 0640 "${SRC}/etc/pbm-backup.conf.example" "${D}${SYSCONF}/pbm-backup"
-fi
-if [[ -e ${D}${SYSCONF}/pbm-conf ]]; then
-    info "Keeping ${SYSCONF}/pbm-conf"
-else
-    run install -m 0600 "${SRC}/sysconfig/pbm-conf" "${D}${SYSCONF}/pbm-conf"
-    warn "${SYSCONF}/pbm-conf created from the template: set PBM_MONGODB_URI (user, password, replica set) before using pbm-backup"
-fi
+# set_owner USER FILE - chown to USER:USER when it is not root and exists
+# (skipped in a staging root).
+set_owner() {
+    [[ $1 != root ]] || return 0
+    if [[ -n $D ]]; then
+        printf '  [DESTDIR] skipped: chown %s:%s %s\n' "$1" "$1" "${2#"$D"}"
+    elif id "$1" >/dev/null 2>&1; then
+        run chown "$1:$1" "$2"
+    else
+        warn "User $1 not found: ${2} left owned by root"
+    fi
+}
+
+# 4. Configuration files (as confirmed in the plan). pbm-conf holds the PBM
+#    password; pbm-backup refuses to run while placeholders are left.
+COPIED=''
+while IFS='|' read -r act dst src mode owner kind edited; do
+    case $act in
+        copy|replace)
+            if [[ $act == replace ]]; then
+                saved=$(cfg_saved_as "$dst")
+                if [[ $saved == *.replaced.* ]]; then
+                    run cp -p "${D}${dst}" "${D}${saved}"
+                    BACKUPS="${BACKUPS}    ${saved}"$'\n'
+                fi
+            fi
+            [[ -d $(dirname "${D}${dst}") ]] || run install -d -m 0755 "$(dirname "${D}${dst}")"
+            run install -m "$mode" "${SRC}/${src}" "${D}${dst}"
+            set_owner "$owner" "${D}${dst}"
+            [[ $edited == 1 ]] && COPIED="${COPIED}    ${dst}: $(cfg_hint "$dst")"$'\n'
+            ;;
+        keep)
+            info "Keeping ${dst} (package copy ${src} not edited)" ;;
+    esac
+done <<EOF
+$CFG_ACTS
+EOF
 if [[ $LEGACY_WRAPPERS == 1 ]]; then
     for f in $LEGACY_NAMES; do
         run install -m 0700 "${STAGE}${SYSCONF}/$f" "${D}${SYSCONF}/$f"
@@ -548,14 +919,28 @@ if [[ $SCHEME == logical ]]; then
     run install -m 0644 "${STAGE}${DROPIN}/schedule.conf" "${D}${DROPIN}/schedule.conf"
 fi
 
-# 6. Version and install options (read back by the next upgrade)
+# 6. Log and working directories (only when missing), log rotation
+while IFS='|' read -r dir owner what; do
+    [[ -n $dir && ! -d ${D}${dir} ]] || continue
+    run install -d -m 0750 "${D}${dir}"
+    set_owner "$owner" "${D}${dir}"
+done <<EOF
+$DIRS
+EOF
+for f in "${STAGE}${LR_DIR}"/*; do
+    [[ -e $f ]] || continue
+    [[ -d ${D}${LR_DIR} ]] || run install -d -m 0755 "${D}${LR_DIR}"
+    run install -m 0644 "$f" "${D}${LR_DIR}/$(basename "$f")"
+done
+
+# 7. Version and install options (read back by the next upgrade)
 if [[ $DRY_RUN == 1 ]]; then
     printf '  [DRY-RUN] write %s and %s\n' "${DOCDIR}/VERSION" "$STATE"
 else
     {
         printf '# Written by install.sh. Read back by the next install/upgrade.\n'
-        printf 'VERSION=%s\nSCHEME=%s\nINCR_MIN=%s\nMETRICS=%s\nLEGACY_WRAPPERS=%s\nINSTALLED_AT=%s\nPREVIOUS_VERSION=%s\n' \
-            "$PKG_VERSION" "$SCHEME" "${INCR_MIN:-}" "$METRICS" "$LEGACY_WRAPPERS" "$TS" "${INSTALLED:-}"
+        printf 'VERSION=%s\nSCHEME=%s\nINCR_MIN=%s\nMETRICS=%s\nLEGACY_WRAPPERS=%s\nLOGROTATE=%s\nINSTALLED_AT=%s\nPREVIOUS_VERSION=%s\n' \
+            "$PKG_VERSION" "$SCHEME" "${INCR_MIN:-}" "$METRICS" "$LEGACY_WRAPPERS" "$LOGROTATE" "$TS" "${INSTALLED:-}"
     } >"${D}${STATE}"
     chmod 0644 "${D}${STATE}"
 fi
@@ -593,6 +978,27 @@ if [[ -n $BACKUPS ]]; then
         info "Configuration backups:"
     fi
     printf '%s' "$BACKUPS"
+fi
+if [[ -n $COPIED ]]; then
+    info "Configuration files installed from edited package copies (next steps):"
+    printf '%s' "$COPIED"
+fi
+# Every managed file that still needs editing, installed now or before.
+TODO=''
+while IFS='|' read -r act dst src mode owner kind edited; do
+    [[ -n $act && -e ${D}${dst} ]] || continue
+    is_edited "${D}${dst}" "$kind" && continue
+    if [[ $kind == example ]]; then
+        info "${dst} has the package defaults: review it later ($(cfg_hint "$dst"))"
+    else
+        TODO="${TODO}    ${dst}: $(cfg_hint "$dst")"$'\n'
+    fi
+done <<EOF
+$CFG_ACTS
+EOF
+if [[ -n $TODO ]]; then
+    warn "EDIT these files on this member: they still hold template <placeholders>"
+    printf '%s' "$TODO" >&2
 fi
 case $MODE in
     install)   ok "pbm-backup ${PKG_VERSION} installed. Next: '${BIN} check' on this member (read-only), then on the others" ;;

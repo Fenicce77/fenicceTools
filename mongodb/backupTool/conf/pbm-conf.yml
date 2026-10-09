@@ -32,7 +32,7 @@ storage:
 
 ## GCS access credentials. You can use either HMAC or Service Account keys.
 ## HMAC Example (gcs type: PBM 2.10 - 2.15 only, removed in 2.16; on any
-## version use the S3 block below / conf/pbm-conf-gcp-hmac.yaml):
+## version use the S3 block below / conf/pbm-conf-gcp-hmac.yml):
 #     credentials:
 #       hmacAccessKey: GOOG1E7GHK2...
 #       hmacSecret: U7PCRkLy...
@@ -164,7 +164,7 @@ backup:
 #    "node-name:port":"path"
 
 #=========================Logging Configuration==============================
-## 2025/12/11 RMATEOS : This section must be added into pbm-agent.yaml configuration file
+## 2025/12/11 RMATEOS : This section must be added into pbm-agent.yml configuration file
 ## Options to adjust logging configuration for starting pbm-agents
 ## The log level. Supported values: debug, info, warn, error, fatal.
 #log:

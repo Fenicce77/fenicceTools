@@ -1,11 +1,13 @@
-# /etc/pbm-agent.yaml - pbm-agent configuration file. PBM >= 2.9 ONLY.
+# /etc/pbm-agent.yml - pbm-agent configuration file. PBM >= 2.9 ONLY.
 #
 # PBM 2.0 - 2.8 (e.g. 2.5.0 for MongoDB 4.4) cannot read it: their pbm-agent
 # has no --config option and fails to start with it. Use sysconfig/pbm-agent
 # (environment file) for those versions.
 #
-# The agent reads this file only when started with "--config": install
-# conf/pbm-agent-config.conf as a systemd drop-in, then
+# "install.sh --pbm-agent-yml" copies it (0600, agent user) with its drop-in
+# and creates the log.path directory. The agent reads this file only when
+# started with "--config": install conf/pbm-agent-config.conf as a systemd
+# drop-in, then
 #   systemctl daemon-reload && systemctl restart pbm-agent
 # Keep it readable by the pbm-agent user only (it holds the password).
 # Keys verified against PBM 2.12.0 (cmd/pbm-agent/main.go).
@@ -14,7 +16,7 @@
 mongodb-uri: "mongodb://<pbm_user>:<pbm_password>@<this_member_host>:27017/?authSource=admin"
 
 # PITR and backup priorities are cluster settings: they belong in
-# pbm-conf.yaml ("pbm config --file"), not here.
+# pbm-conf.yml ("pbm config --file"), not here.
 backup:
   # Collections dumped in parallel by logical backups (default: CPUs / 2).
   dump-parallel-collections: 4

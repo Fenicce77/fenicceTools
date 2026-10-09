@@ -1,10 +1,11 @@
-# pbm-conf-gcs.yaml - PBM configuration: GCP bucket with the native "gcs"
+# pbm-conf-gcs.yml - PBM configuration: GCP bucket with the native "gcs"
 # storage type. PBM >= 2.10 ONLY (MongoDB 5.0/6.0 with PBM 2.10.0, 7.0/8.0).
-# For PBM < 2.10 (MongoDB 4.2/4.4) use pbm-conf-gcp-hmac.yaml.
+# For PBM < 2.10 (MongoDB 4.2/4.4) use pbm-conf-gcp-hmac.yml.
 #
 # Apply once per replica set (it REPLACES the whole PBM configuration, which
 # is stored in MongoDB and read by every pbm-agent):
-#   chmod 600 pbm-conf-gcs.yaml && pbm config --file pbm-conf-gcs.yaml
+#   install.sh --pbm-storage gcs      (copies it to /etc/pbm-storage.conf, 0600)
+#   pbm config --file /etc/pbm-storage.conf
 #
 # Credentials: service account JSON key (INSTALL.md 1.2 B):
 #   clientEmail <- jq -r .client_email key.json
@@ -13,7 +14,7 @@
 #   - Workload Identity, PBM >= 2.13: workloadIdentity: true
 #   - HMAC key in the gcs type, PBM 2.10 - 2.15 ONLY (removed in PBM 2.16):
 #     hmacAccessKey / hmacSecret. On any version, an HMAC key can be used
-#     with pbm-conf-gcp-hmac.yaml ("type: s3") instead.
+#     with pbm-conf-gcp-hmac.yml ("type: s3") instead.
 # Keys checked in the PBM 2.10.0 - 2.16.0 source (pbm/storage/gcs, pbm/config).
 # The file holds the private key: keep it 0600 and delete it after applying.
 

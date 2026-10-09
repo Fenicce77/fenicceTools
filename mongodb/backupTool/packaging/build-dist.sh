@@ -64,9 +64,9 @@ NAME="pbm-backup-${VERSION}"
 FILES=(
     bin/pbm-backup
     lib/common.sh lib/compat.sh lib/metrics.sh lib/mongo.sh lib/pbm.sh lib/topology.sh
-    etc/pbm-backup.conf.example
-    conf/pbm-agent.yaml conf/pbm-agent-config.conf conf/pbm-conf.yaml
-    conf/pbm-conf-gcp-hmac.yaml conf/pbm-conf-gcs.yaml
+    etc/pbm-backup.conf etc/pbm-backup.conf.example
+    conf/pbm-agent.yml conf/pbm-agent-config.conf conf/pbm-conf.yml
+    conf/pbm-conf-gcp-hmac.yml conf/pbm-conf-gcs.yml
     sysconfig/pbm-agent sysconfig/pbm-conf
     sysconfig/pbm-physical-full-base sysconfig/pbm-physical-incremental sysconfig/pbm-deletion
     systemd/services/pbm-backup-full.service systemd/services/pbm-backup-incr.service
@@ -86,6 +86,11 @@ FILES=(
 for f in "${FILES[@]}"; do
     [[ -f ${ROOT}/$f ]] || die "Missing file: $f"
 done
+# The package ships the editable copies unedited: install.sh tells edited
+# from unedited copies (placeholders, or etc/pbm-backup.conf vs the example).
+cmp -s "${ROOT}/etc/pbm-backup.conf" "${ROOT}/etc/pbm-backup.conf.example" \
+    || die "etc/pbm-backup.conf differs from etc/pbm-backup.conf.example: the package must ship it unedited"
+grep -q '<pbm_password>' "${ROOT}/sysconfig/pbm-conf" || die "sysconfig/pbm-conf has no placeholders: the package must ship the template"
 
 if [[ $RUN_TESTS == 1 ]]; then
     info "Running tests/smoke.sh"
