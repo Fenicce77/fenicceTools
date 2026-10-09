@@ -120,7 +120,7 @@ pbm version
 #    - target < 2.9 : no agent config file. Remove the drop-in, keep /etc/sysconfig/pbm-agent (§4.3)
 sudo rm -f /etc/systemd/system/pbm-agent.service.d/config.conf && sudo systemctl daemon-reload
 #    - target < 2.10: no "gcs" storage. Apply the S3 + HMAC configuration (§1.2), agents still stopped
-pbm config --file /root/pbm-config-s3.yaml
+pbm config --file /root/pbm-conf-gcp-hmac.yaml     # conf/pbm-conf-gcp-hmac.yaml, filled in
 
 # 4. Start and verify (all members, then once)
 sudo systemctl start pbm-agent
@@ -145,17 +145,31 @@ key you can use depends on the PBM version (checked in the PBM source:
 | PBM version | `storage.type` | HMAC key (access id + secret) | Service account JSON key (`client_email` + `private_key`) |
 |---|---|---|---|
 | < 2.10 (e.g. **2.5.0** for MongoDB 4.4, 2.3.1 for 4.2) | `s3` with `endpointUrl: https://storage.googleapis.com` | **required**: `access-key-id` / `secret-access-key` | ❌ not supported |
-| >= 2.10 | `gcs` (native) | optional: `hmacAccessKey` / `hmacSecret` | yes: `clientEmail` / `privateKey` |
+| 2.10 - 2.15 | `gcs` (native) | yes: `hmacAccessKey` / `hmacSecret` | yes: `clientEmail` / `privateKey` |
+| >= 2.16 | `gcs` (native) | ❌ removed from `gcs`: use `type: s3` as for PBM < 2.10 | yes: `clientEmail` / `privateKey` (or `workloadIdentity: true`, >= 2.13) |
+
+Ready-to-use templates (package `conf/`, apply with `pbm config --file`):
+
+| Template | Storage | Credentials | PBM versions |
+|---|---|---|---|
+| `conf/pbm-conf-gcp-hmac.yaml` | `type: s3` + `endpointUrl: https://storage.googleapis.com` | HMAC key | every 2.x; the only option below 2.10, and for HMAC from 2.16 |
+| `conf/pbm-conf-gcs.yaml` | `type: gcs` (native) | service account JSON key (Workload Identity >= 2.13 and HMAC 2.10 - 2.15 commented) | >= 2.10 |
+
+`conf/pbm-conf.yaml` remains the full reference with every option.
 
 - An HMAC key and a JSON key are **different credentials**: one cannot be
   derived from the other. The HMAC pair goes in `access-key-id` /
-  `secret-access-key` (PBM < 2.10) or `hmacAccessKey` / `hmacSecret`
-  (PBM >= 2.10): same values, different field names.
+  `secret-access-key` (`type: s3`, any PBM 2.x) or `hmacAccessKey` /
+  `hmacSecret` (`type: gcs`, PBM 2.10 - 2.15 only): same values, different
+  field names. PBM 2.16 removed HMAC from the `gcs` type (checked in its
+  source: `gcs` credentials are only `clientEmail`/`privateKey` or
+  `workloadIdentity`).
 - Both kinds of keys can belong to the **same service account** and coexist:
   creating, disabling or deleting one does not affect the other. Permissions
   belong to the service account, not to the key.
-- Using HMAC everywhere (S3 on PBM < 2.10, `gcs` + HMAC on >= 2.10) leaves a
-  single kind of credential to rotate.
+- Using HMAC everywhere means `type: s3` on every version
+  (`conf/pbm-conf-gcp-hmac.yaml`): a single kind of credential to rotate and
+  a single template for all replica sets.
 - `pbm status` shows PBM < 2.10 storage as
   `S3 s3://https://storage.googleapis.com/<bucket>/<prefix>`; pbm-backup
   accepts it as GCS (`REQUIRED_STORAGE_TYPES=GCS`, the default).
@@ -180,7 +194,7 @@ gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
   (JSON keys) and `storage.restrictAuthTypes` (HMAC). Up to 10 HMAC keys per
   service account.
 
-#### A. HMAC key: PBM < 2.10 (required) or PBM >= 2.10 (optional)
+#### A. HMAC key: template `conf/pbm-conf-gcp-hmac.yaml` (any PBM 2.x; required below 2.10)
 
 ```bash
 gcloud storage hmac create "$SA" --project="$PROJECT" --format=json   # prints accessId and secret
@@ -190,7 +204,7 @@ gcloud storage hmac list --project="$PROJECT" --format="table(accessId,serviceAc
 The **secret is shown only once**: store it in your secret manager right away.
 The key must be `ACTIVE`.
 
-PBM < 2.10 (`/root/pbm-config-s3.yaml`, `chmod 600`; block in `conf/pbm-conf.yaml`):
+Any PBM 2.x (`conf/pbm-conf-gcp-hmac.yaml`; copy it, fill it in, `chmod 600`):
 
 ```yaml
 storage:
@@ -208,7 +222,8 @@ backup:
   compressionLevel: 5
 ```
 
-PBM >= 2.10, same HMAC key with the native type:
+PBM 2.10 - 2.15 only, same HMAC key with the native type (removed in 2.16;
+commented in `conf/pbm-conf-gcs.yaml`):
 
 ```yaml
 storage:
@@ -229,7 +244,7 @@ details; this tool prints the GCS error code (`AccessDenied`,
 python3 /usr/local/share/doc/pbm-backup/gcs-hmac-test.py <bucket> mongocluster/rs44 europe-west3
 ```
 
-#### B. Service account JSON key: PBM >= 2.10 only
+#### B. Service account JSON key: template `conf/pbm-conf-gcs.yaml` (PBM >= 2.10 only)
 
 ```bash
 gcloud iam service-accounts keys create /root/pbm-sa.json --iam-account="$SA"
@@ -262,7 +277,9 @@ pbm config --force-resync                   # needed when the storage type, buck
 ```
 
 Moving a replica set from `s3` (PBM < 2.10) to `gcs` after an upgrade to
-PBM >= 2.10: keep the same bucket and prefix and run `--force-resync`; the
+PBM >= 2.10 needs a service account JSON key from 2.16 on (or HMAC on 2.10 -
+2.15); staying on `type: s3` with the HMAC key is also fine on any version.
+Keep the same bucket and prefix and run `--force-resync`; the
 existing backups stay listed.
 
 ### 1.3 Create or fix the PBM user (once per replica set)
@@ -336,7 +353,9 @@ Package contents:
 | `sysconfig/pbm-conf` | template for `/etc/sysconfig/pbm-conf` (pbm CLI and pbm-backup) |
 | `sysconfig/pbm-agent` | pbm-agent environment file, every PBM 2.x (the only agent config on PBM 2.0 - 2.8), §4.3 |
 | `sysconfig/pbm-physical-*`, `sysconfig/pbm-deletion` | wrappers for the old units |
-| `conf/pbm-conf.yaml` | PBM cluster configuration template (`pbm config --file`), GCS native or through S3 |
+| `conf/pbm-conf-gcp-hmac.yaml` | PBM configuration: GCP bucket through S3 with an HMAC key (any PBM 2.x), §1.2 A |
+| `conf/pbm-conf-gcs.yaml` | PBM configuration: native `gcs` with a service account key (PBM >= 2.10), §1.2 B |
+| `conf/pbm-conf.yaml` | PBM configuration reference with every option (`pbm config --file`) |
 | `conf/pbm-agent.yaml`, `conf/pbm-agent-config.conf` | pbm-agent config file + systemd drop-in, PBM >= 2.9 only, §4.3 |
 | `mongodb/pbmuser.create.js` | creates/fixes the PBM user and role (section 1.3) |
 | `tools/gcs-hmac-test.py` | checks a GCS HMAC key the way PBM < 2.10 uses it (section 1.2) |
