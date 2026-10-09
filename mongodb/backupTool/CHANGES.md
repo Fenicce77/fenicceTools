@@ -313,6 +313,29 @@ skipped, probes returned nothing).
 - `conf/pbm-conf.yaml`: S3 block region = bucket location.
 - Tests: 6 new matrix scenarios (166 total).
 
+## Installer: upgrade detection, plan, configuration backups (0.6.6)
+
+- `install.sh` detects the installed version and runs as install, upgrade,
+  reinstall or downgrade (downgrade refused without `--allow-downgrade`;
+  `--upgrade` requires an installed version).
+- Before changing anything it prints a plan: install options, files new /
+  changed / removed / unchanged, configuration backups, new settings in the
+  example config and the CHANGES.md sections newer than the installed
+  version. `--dry-run` stops there.
+- Install options (`--scheme`, `--incr-every-min`, `--metrics`,
+  `--legacy-wrappers`) are kept from the previous install unless given
+  again (`share/doc/pbm-backup/install.state`, inferred for older installs).
+  Before, re-running without `--scheme logical` removed the logical drop-in.
+- Upgrade/reinstall/downgrade copy the configuration files to
+  `<file>.<mode>.<installed version>.<UTC time>` and keep them in place;
+  `--fresh-config` renames them and installs the templates.
+- `--uninstall` renames the configuration files (`<file>.uninstall.<version>.
+  <UTC time>`), pbm-backup legacy wrappers included; `--keep-config` keeps
+  the previous behaviour.
+- Files no longer shipped are removed on upgrade.
+- `tests/install.test.sh`: 71 lifecycle checks in a `--destdir` root (run by
+  `build-dist.sh`).
+
 ## Diffs of the replaced scripts
 
 <details>
