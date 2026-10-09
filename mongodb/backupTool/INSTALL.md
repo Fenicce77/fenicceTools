@@ -485,15 +485,35 @@ installed.
 
 | Package file (edit it) | Destination on the member | Owner, mode | Copied by `install.sh` | What to edit | PBM |
 |---|---|---|---|---|---|
-| `sysconfig/pbm-conf` | `/etc/sysconfig/pbm-conf` | root, 0600 | always | **required**: `PBM_MONGODB_URI` (user, password, members, `replicaSet`), §4.1 | all |
+| `sysconfig/pbm-conf` | `/etc/sysconfig/pbm-conf` | root, 0600 | always | **required**: `PBM_MONGODB_URI` (user, password, members, `replicaSet`), §4.1. Value: `.env` of `pbmuser.create.js` (¹) | all |
 | `etc/pbm-backup.conf` | `/etc/sysconfig/pbm-backup` | root, 0640 | always | optional tunables, §4.2 (defaults if not edited) | all |
-| `sysconfig/pbm-agent` | `/etc/sysconfig/pbm-agent` | root, 0640 | `--pbm-agent-env` | **required**: URI of **this** member, §4.3 | all 2.x; the only option on 2.0 - 2.8 |
-| `conf/pbm-agent.yml` | `/etc/pbm-agent.yml` | agent user (mongod), 0600 | `--pbm-agent-yml` | **required**: `mongodb-uri` of this member, `log.path`, §4.3 | >= 2.9 |
+| `sysconfig/pbm-agent` | `/etc/sysconfig/pbm-agent` | root, 0640 | `--pbm-agent-env` | **required**: URI of **this** member, §4.3. Value: `.env` (¹), line of this member | all 2.x; the only option on 2.0 - 2.8 |
+| `conf/pbm-agent.yml` | `/etc/pbm-agent.yml` | agent user (mongod), 0600 | `--pbm-agent-yml` | **required**: `mongodb-uri` of this member (`.env` (¹), line of this member), `log.path`, §4.3 | >= 2.9 |
 | `conf/pbm-agent-config.conf` | `/etc/systemd/system/pbm-agent.service.d/config.conf` | root, 0644 | `--pbm-agent-yml` | nothing | >= 2.9 |
 | `conf/pbm-conf-gcp-hmac.yml` | `/etc/pbm-storage.conf` | root, 0600 | `--pbm-storage hmac` | **required**: bucket, prefix, region, HMAC key, §1.2 A | all 2.x |
 | `conf/pbm-conf-gcs.yml` | `/etc/pbm-storage.conf` | root, 0600 | `--pbm-storage gcs` | **required**: bucket, prefix, service account key, §1.2 B | >= 2.10 |
 | `conf/pbm-conf.yml` | (none) | | no | reference of every PBM option | all |
 | `etc/pbm-backup.conf.example` | `/usr/local/share/doc/pbm-backup/` | root, 0644 | always | do not edit: reference with the defaults | all |
+
+(¹) **Where the URIs come from: the `.env` file of `pbmuser.create.js`
+(§1.3), only when the PBM user is created.** Running it for a user that does
+not exist yet writes, on the machine where mongosh runs (usually your
+laptop), `~/.pbm-backup/<user>.<replset>.<UTC timestamp>.env` (0600) with
+the `PBM_MONGODB_URI` line for `pbm-conf` and one commented URI per member
+for the agent files, password already URI-encoded. Copy those values into
+the package copies above before running `install.sh`, then store the
+password in your secret manager and delete the `.env` file. If the user
+already exists, the script only fixes its roles and keeps its password: **no
+`.env` file is written**, so take the URIs from the existing
+`/etc/sysconfig/pbm-conf` and `/etc/sysconfig/pbm-agent` of the replica set
+(or your secret manager). Typical flow from a laptop:
+
+```bash
+mongosh "mongodb://rmateos@mongodbcluster-node01:27017/admin?replicaSet=rsName" --file mongodb/pbmuser.create.js
+cat ~/.pbm-backup/pbmuser.rsName.*.env                  # PBM_MONGODB_URI + one URI per member
+vi pbm-backup-${VERSION}/sysconfig/pbm-conf             # paste PBM_MONGODB_URI
+vi pbm-backup-${VERSION}/sysconfig/pbm-agent            # per member: that member's URI (--pbm-agent-env)
+```
 
 Notes:
 
