@@ -51,6 +51,8 @@ backupTool/
 │   └── legacy/{services,timers}/           original pbm-physical-* / pbm-deletion units (reference, rollback)
 ├── mongodb/
 │   └── pbmuser.create.js             [pkg] creates/fixes the PBM user and role (run by hand, once per replica set)
+├── tools/
+│   └── gcs-hmac-test.py              [pkg] checks a GCS HMAC key the way PBM < 2.10 uses it (INSTALL.md 1.2)
 ├── packaging/
 │   └── build-dist.sh                 [dev] runs the tests, builds dist/pbm-backup-<version>.tar.gz + .sha256
 ├── tests/                            [dev]
@@ -93,14 +95,15 @@ pbm-backup checks afterwards and warns if it differs. Keep the primary lowest.
 - Linux with systemd on every member; bash >= 3.2.
 - `pbm` (PBM 2.x, same version as the pbm-agents), `jq`, `mongosh` (or the
   legacy `mongo` shell).
-- MongoDB >= 4.2. 4.4 needs PBM 2.5.0 (last release for 4.4), 4.2 needs
-  PBM < 2.4.0; pin the package
+- MongoDB >= 4.2 with a PBM release that supports it (INSTALL.md 1.1): 4.2 ->
+  2.3.1, 4.4 -> 2.5.0, 5.0/6.0 -> 2.10.0, 7.0/8.0 -> current (8.0 needs >= 2.7.0);
+  pin the package
   (`dnf versionlock add percona-backup-mongodb` / `apt-mark hold percona-backup-mongodb`).
 - PBM storage: GCS bucket (filesystem storage needs NFS and is refused).
   PBM < 2.10 has no native GCS: use the S3-compatible endpoint
   (`storage.googleapis.com`), accepted as GCS (see INSTALL.md §13).
 - The PBM user must have exactly the roles PBM documents; create or fix
-  it with `mongodb/pbmuser.create.js` (see [INSTALL.md](INSTALL.md) 1.1).
+  it with `mongodb/pbmuser.create.js` (see [INSTALL.md](INSTALL.md) 1.3).
   They cover the health probes (`clusterMonitor`) and the oplog window
   (read on `local.oplog.rs`).
 

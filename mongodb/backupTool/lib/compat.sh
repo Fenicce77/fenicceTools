@@ -15,6 +15,10 @@
 #     (v2.4.0/v2.5.0: "PBM works with v4.4, v5.0, v6.0, v7.0").
 #   - PBM 2.6.0 dropped MongoDB 4.4 ("PBM works with v5.0, v6.0, v7.0"):
 #     PBM 2.5.0 is the last release for MongoDB 4.4.
+#   - PBM 2.7.0 added MongoDB 8.0 ("v5.0, v6.0, v7.0, v8.0").
+#   - PBM 2.11.0 dropped MongoDB 5.0 and 6.0 (supportedMajors {7, 8}):
+#     PBM 2.10.0 is the last release for 5.0 / 6.0.
+#   - The first release whose version gate lists MongoDB 7.0 is 2.4.0.
 #   - Physical incremental backups need PSMDB >= the versions below.
 # Items marked "verify" come from the PBM docs and were not tested here.
 COMPAT_PBM_MIN=2.0.0
@@ -22,6 +26,9 @@ COMPAT_MONGO_MIN=4.2
 COMPAT_PBM_DEPRECATES_42=2.3.0
 COMPAT_PBM_DROPS_42=2.4.0
 COMPAT_PBM_DROPS_44=2.6.0
+COMPAT_PBM_DROPS_50_60=2.11.0
+COMPAT_PBM_MIN_70=2.4.0
+COMPAT_PBM_MIN_80=2.7.0
 # PSMDB minimum versions for physical incremental backups (verify).
 COMPAT_PSMDB_INCR_MIN_42=4.2.24-24
 COMPAT_PSMDB_INCR_MIN_44=4.4.18-18
@@ -163,6 +170,23 @@ compat_report() {
                 printf 'WARN\tMongoDB 4.2 is deprecated since PBM %s\n' "$COMPAT_PBM_DEPRECATES_42"
             fi
             printf 'WARN\tPin the PBM package on MongoDB %s nodes: "dnf versionlock add percona-backup-mongodb" or "apt-mark hold percona-backup-mongodb"\n' "$mm"
+            ;;
+        5.0|6.0)
+            if version_ge "$pv" "$COMPAT_PBM_DROPS_50_60"; then
+                printf 'ERROR\tPBM %s does not support MongoDB %s (dropped in PBM %s). Install PBM < %s\n' \
+                    "$pv" "$mm" "$COMPAT_PBM_DROPS_50_60" "$COMPAT_PBM_DROPS_50_60"
+            fi
+            printf 'WARN\tPin the PBM package on MongoDB %s nodes: "dnf versionlock add percona-backup-mongodb" or "apt-mark hold percona-backup-mongodb"\n' "$mm"
+            ;;
+        7.*)
+            if ! version_ge "$pv" "$COMPAT_PBM_MIN_70"; then
+                printf 'ERROR\tMongoDB %s needs PBM >= %s (found %s)\n' "$mm" "$COMPAT_PBM_MIN_70" "$pv"
+            fi
+            ;;
+        8.*)
+            if ! version_ge "$pv" "$COMPAT_PBM_MIN_80"; then
+                printf 'ERROR\tMongoDB %s needs PBM >= %s (found %s)\n' "$mm" "$COMPAT_PBM_MIN_80" "$pv"
+            fi
             ;;
     esac
 

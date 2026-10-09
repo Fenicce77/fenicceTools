@@ -530,6 +530,18 @@ MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.js
     LOCAL_NODE_NAMES=$N2 EXPECT_OUT="No logical full yet and PITR is disabled: expected" \
     check "check before the first logical full -> warning, rc 0"              0 "" "backup --type" -- check
 
+printf '\n[compatibility matrix 5.0 - 8.0]\n'
+for case in "6.0.19 2.12.0 1 dropped in PBM 2.11.0" "5.0.30 2.11.0 1 dropped in PBM 2.11.0" \
+            "6.0.19 2.10.0 0 Pin the PBM package on MongoDB 6.0" "8.0.4 2.6.0 1 needs PBM >= 2.7.0" \
+            "8.0.4 2.7.0 0 strategy logical" "7.0.14 2.3.1 1 needs PBM >= 2.4.0"; do
+    set -- $case
+    mv=$1 pv=$2 want=$3
+    shift 3
+    MOCK_BUILDINFO="{\"version\":\"$mv\",\"modules\":[]}" MOCK_PBM_VERSION=$pv MOCK_BACKUPS=$WORK/backups-none.json \
+        LOCAL_NODE_NAMES=$N2 EXPECT_OUT="$*" \
+        check "MongoDB $mv + PBM $pv -> rc $want ($*)"                    "$want" "" "" -- check
+done
+
 printf '\n[pbm-conf template]\n'
 cp "${ROOT}/sysconfig/pbm-conf" "$WORK/env-template"
 PBM_ENV_FILE=$WORK/env-template EXPECT_OUT="still has template placeholders" \

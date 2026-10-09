@@ -58,7 +58,7 @@ storage:
 ## which pbm-backup accepts as GCS.
 #  type: s3
 #  s3:
-#     region: us-east-1
+#     region: europe-west3          # the bucket location
 #     endpointUrl: https://storage.googleapis.com
 #     bucket: BackupBucket
 #     prefix: mongocluster/betBuilder
