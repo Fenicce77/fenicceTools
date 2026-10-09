@@ -56,7 +56,8 @@ Extend the system to support MongoDB >= 4.x, both PSMDB and MongoDB Community:
 
 ## Testing and release
 - `tests/smoke.sh` (bash from PATH) and `tests/smoke.sh /bin/bash` (macOS bash 3.2);
-  `tests/pbmuser.test.sh` (real mongosh, fake admin DB). Mocks must reproduce real PBM
+  `tests/pbmuser.test.sh` (real mongosh, fake admin DB), `tests/install.test.sh` (installer
+  lifecycle in a --destdir root). Mocks must reproduce real PBM
   output exactly (fixtures come from real `pbm` output; check the PBM source when unsure).
 - Release: bump `VERSION=` in `bin/pbm-backup`, update CHANGES.md, run
   `packaging/build-dist.sh` (runs both suites, writes `dist/pbm-backup-<version>.tar.gz`

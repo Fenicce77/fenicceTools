@@ -372,8 +372,12 @@ sudo pbm-backup-${VERSION}/install.sh                 # install, timers NOT enab
 | `--prefix DIR` | default `/usr/local` |
 | `--sysconfdir DIR` | default `/etc/sysconfig` (or `/etc/default` when missing) |
 | `--destdir DIR` | install under a staging root (image builds); no systemctl, no root |
-| `--uninstall` | remove timers, units, binary, libraries, docs (config and logs kept) |
-| `--dry-run` | print every action, change nothing |
+| `--upgrade` | require an installed version (an install over an existing one is an upgrade anyway, §8) |
+| `--allow-downgrade` | allow a package older than the installed version |
+| `--fresh-config` | on upgrade: rename the configuration files and install the new templates |
+| `--uninstall` | remove timers, units, binary, libraries, docs; configuration files renamed (§10) |
+| `--keep-config` | with `--uninstall`: leave the configuration files as they are |
+| `--dry-run` | print the plan and every action, change nothing |
 
 What a member looks like after `install.sh` (✎ = file you configure;
 ⚙ = created/managed by `install.sh`; ◆ = owned by the Percona package):
@@ -385,6 +389,7 @@ What a member looks like after `install.sh` (✎ = file you configure;
 │   ├── lib/pbm-backup/                         ⚙ common.sh compat.sh metrics.sh mongo.sh pbm.sh topology.sh
 │   └── share/doc/pbm-backup/                   ⚙ README.md INSTALL.md CHANGES.md VERSION
 │                                                  pbm-backup.conf.example pbmuser.create.js gcs-hmac-test.py
+│                                                  install.state (install options, read back on upgrade)
 ├── etc/
 │   ├── sysconfig/                              (/etc/default on Debian-like systems)
 │   │   ├── pbm-conf                         ✎ ⚙ 0600 PBM_MONGODB_URI for pbm CLI + pbm-backup (§4.1);
@@ -575,6 +580,10 @@ sudo pbm-backup full
 
 The package is designed for unattended use:
 
+- **Upgrades:** the same `install.sh` call upgrades a member (installed
+  version detected, options kept, configuration backed up), so the job does
+  not need to know what is installed. Add `--upgrade` to make it fail on a
+  member where pbm-backup is missing.
 - **Idempotent:** running `install.sh` again with the same options gives the
   same result. Binaries, libraries and units are replaced; configuration is
   never touched.
@@ -609,17 +618,52 @@ To build images or OS packages, install into a staging root:
 
 ## 8. Upgrade
 
-Same as an install with the new package (sections 3 and 5). Timers that are
-enabled stay enabled. A backup already running keeps its old code until it
-finishes.
+Run `install.sh` from the new package. It detects the installed version
+(`/usr/local/share/doc/pbm-backup/VERSION`) and turns the run into an
+**upgrade** (newer package), a **reinstall** (same version) or a
+**downgrade** (older package: refused unless `--allow-downgrade`).
+`--upgrade` makes it explicit and fails if nothing is installed.
 
 ```bash
 VERSION=<new version>
-sudo pbm-backup-${VERSION}/install.sh --scheme physical   # same options as the first install
-pbm-backup --version
+sudo pbm-backup-${VERSION}/install.sh --upgrade --dry-run    # plan only, nothing changes
+sudo pbm-backup-${VERSION}/install.sh --upgrade
+pbm-backup --version && sudo pbm-backup check
 ```
 
-Read `CHANGES.md` for new tunables (they all have safe defaults).
+Before changing anything it prints the plan:
+
+```
+[INFO] Installed version 0.6.4 detected: UPGRADE 0.6.4 -> 0.6.6
+Plan
+  Options (given now > installed before):
+    scheme logical (incr every 360 min: *-*-* 00/6:30:00), metrics timer off, legacy wrappers off
+  Files: 0 new, 2 changed, 0 removed, 21 unchanged
+    changed   /usr/local/lib/pbm-backup/compat.sh
+    changed   /usr/local/share/doc/pbm-backup/VERSION
+  Configuration: kept in place; a copy is saved as <file>.upgrade.0.6.4.20261009T110152Z:
+    /etc/sysconfig/pbm-backup
+    /etc/sysconfig/pbm-conf
+  New settings available (see .../pbm-backup.conf.example): ...
+  Changes since 0.6.4 (CHANGES.md):
+    PBM install and GCS credentials docs, full compatibility matrix (0.6.5)
+```
+
+- **Install options are kept.** `--scheme`, `--incr-every-min`, `--metrics`
+  and `--legacy-wrappers` keep their previous values unless given again.
+  They are stored in `/usr/local/share/doc/pbm-backup/install.state`; for
+  installs older than 0.6.6 they are inferred from the files (logical
+  drop-in, metrics timer, wrappers). Before 0.6.6, re-running `install.sh`
+  without `--scheme logical` removed the logical drop-in.
+- **Configuration files** (`pbm-backup`, `pbm-conf`, pbm-backup legacy
+  wrappers) are **copied** to `<file>.<upgrade|reinstall|downgrade>.<installed
+  version>.<UTC time>` and stay in place, so backups keep working. With
+  `--fresh-config` they are **renamed** instead and the new templates are
+  installed: fill in `pbm-conf` again before the next backup.
+- Files the new version no longer ships (libraries, units, the drop-in when
+  the scheme changes to physical) are removed.
+- Timers that are enabled stay enabled. A backup already running keeps its
+  old code until it finishes.
 
 ## 9. Rollback
 
@@ -636,14 +680,26 @@ Read `CHANGES.md` for new tunables (they all have safe defaults).
 ## 10. Uninstall
 
 ```bash
+sudo pbm-backup-${VERSION}/install.sh --uninstall --dry-run   # see what it does
 sudo pbm-backup-${VERSION}/install.sh --uninstall
 ```
 
 It stops and removes the timers and units, the binary, the libraries and the
-docs. It keeps `/etc/sysconfig/pbm-backup`, `/etc/sysconfig/pbm-conf`, the
-logs, PBM itself and every backup in the bucket. If the old scripts in `/etc/sysconfig` were
-replaced by wrappers (`--legacy-wrappers`), it warns: they point to the
-removed binary, so restore the originals before re-enabling the old timers.
+docs, and **renames** the configuration files so that a later install starts
+from the templates:
+
+```
+/etc/sysconfig/pbm-backup -> /etc/sysconfig/pbm-backup.uninstall.<version>.<UTC time>
+/etc/sysconfig/pbm-conf   -> /etc/sysconfig/pbm-conf.uninstall.<version>.<UTC time>
+```
+
+The pbm-backup legacy wrappers (`--legacy-wrappers`) are renamed too; an
+original `pbm-physical-*` / `pbm-deletion` script is never touched. The
+renamed `pbm-conf` keeps its mode and still holds the PBM password: delete
+it when it is no longer needed, or restore it with `mv`.
+`--keep-config` leaves the configuration files as they are. The logs, PBM
+itself (`/etc/sysconfig/pbm-agent` included) and every backup in the bucket
+are always kept.
 
 ## 11. Operations
 

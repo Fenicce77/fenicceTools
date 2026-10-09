@@ -32,7 +32,7 @@ backupTool/
 │   ├── compat.sh                           version/edition detection, PBM compatibility matrix
 │   ├── topology.sh                         member health probes and node election
 │   └── metrics.sh                          Prometheus textfile metrics
-├── install.sh                        [pkg] install / upgrade / uninstall on a member
+├── install.sh                        [pkg] install / upgrade (plan, config backups) / uninstall on a member
 ├── etc/
 │   └── pbm-backup.conf.example       [pkg] tunables  -> /etc/sysconfig/pbm-backup
 ├── sysconfig/                        [pkg] environment files (templates) for /etc/sysconfig
@@ -58,6 +58,7 @@ backupTool/
 ├── tests/                            [dev]
 │   ├── smoke.sh                            scenario tests (mocked pbm/mongosh)
 │   ├── pbmuser.test.sh                     pbmuser.create.js in mongosh, fake admin DB
+│   ├── install.test.sh                     install.sh lifecycle in a staging root (--destdir)
 │   ├── mock/{pbm,mongosh}                  mocks reproducing real PBM output
 │   └── fixtures/pbm-2.12.0-psmdb-8.0/      real (anonymized) pbm JSON output
 ├── README.md  INSTALL.md  CHANGES.md [pkg] docs (the package also adds VERSION)
@@ -222,6 +223,7 @@ min by (rs, command) (pbm_backup_run_success) == 0
 tests/smoke.sh            # bash from PATH
 tests/smoke.sh /bin/bash  # macOS bash 3.2
 tests/pbmuser.test.sh     # pbmuser.create.js in mongosh, fake admin DB
+tests/install.test.sh     # install.sh lifecycle (install, upgrade, downgrade, uninstall) in a staging root
 ```
 
 Scenario tests with mocked `pbm` and `mongosh` and real PBM 2.12.0 JSON

@@ -93,6 +93,12 @@ if [[ $RUN_TESTS == 1 ]]; then
         die "Tests failed (full log: ${TMPDIR:-/tmp}/pbm-backup-build-tests.log). Not packaging"
     fi
     ok "$(tail -n 1 "${TMPDIR:-/tmp}/pbm-backup-build-tests.log" | sed 's/\x1b\[[0-9;]*m//g')"
+    info "Running tests/install.test.sh"
+    if ! "${ROOT}/tests/install.test.sh" >"${TMPDIR:-/tmp}/pbm-backup-build-tests-install.log" 2>&1; then
+        tail -n 20 "${TMPDIR:-/tmp}/pbm-backup-build-tests-install.log" >&2
+        die "install.sh tests failed. Not packaging"
+    fi
+    ok "$(tail -n 1 "${TMPDIR:-/tmp}/pbm-backup-build-tests-install.log" | sed 's/\x1b\[[0-9;]*m//g')"
     info "Running tests/pbmuser.test.sh"
     if ! "${ROOT}/tests/pbmuser.test.sh" >"${TMPDIR:-/tmp}/pbm-backup-build-tests-js.log" 2>&1; then
         tail -n 20 "${TMPDIR:-/tmp}/pbm-backup-build-tests-js.log" >&2
