@@ -1,11 +1,12 @@
 # /etc/sysconfig/pbm-agent - environment file of the pbm-agent service
-# (EnvironmentFile of the unit shipped in the Percona package; the package
-# owns this path, install.sh does not install it).
+# (EnvironmentFile of the unit shipped in the Percona package, which owns
+# this path; "install.sh --pbm-agent-env" copies this template over it,
+# saving the previous file, once edited).
 #
 # Valid for EVERY PBM 2.x, and the ONLY way to configure the agent on
 # PBM 2.0 - 2.8 (e.g. PBM 2.5.0, the last release for MongoDB 4.4): those
 # agents read no config file and log to journald (journalctl -u pbm-agent).
-# From PBM 2.9 you may use conf/pbm-agent.yaml + conf/pbm-agent-config.conf
+# From PBM 2.9 you may use conf/pbm-agent.yml + conf/pbm-agent-config.conf
 # instead (log file, log level); this file then only needs to exist.
 #
 # Each member's agent connects to its OWN mongod: use that member's host.

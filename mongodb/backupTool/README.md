@@ -32,20 +32,23 @@ backupTool/
 │   ├── compat.sh                           version/edition detection, PBM compatibility matrix
 │   ├── topology.sh                         member health probes and node election
 │   └── metrics.sh                          Prometheus textfile metrics
-├── install.sh                        [pkg] install / upgrade (plan, config backups) / uninstall on a member
+├── install.sh                        [pkg] install / upgrade (plan, config copies with confirmation,
+│                                           log dirs, logrotate) / uninstall on a member
 ├── etc/
-│   └── pbm-backup.conf.example       [pkg] tunables  -> /etc/sysconfig/pbm-backup
-├── sysconfig/                        [pkg] environment files (templates) for /etc/sysconfig
+│   ├── pbm-backup.conf               [pkg] tunables: edit, install.sh copies it -> /etc/sysconfig/pbm-backup
+│   └── pbm-backup.conf.example       [pkg] the same with the defaults (reference, never edited)
+├── sysconfig/                        [pkg] environment files (templates: edit, install.sh copies them)
 │   ├── pbm-conf                            PBM_MONGODB_URI for pbm CLI + pbm-backup -> /etc/sysconfig/pbm-conf
-│   ├── pbm-agent                           pbm-agent environment, every PBM 2.x     -> /etc/sysconfig/pbm-agent
+│   ├── pbm-agent                           pbm-agent environment, every PBM 2.x     -> /etc/sysconfig/pbm-agent (--pbm-agent-env)
 │   └── pbm-physical-full-base              wrappers for the legacy units (install.sh --legacy-wrappers)
 │       pbm-physical-incremental
 │       pbm-deletion
 ├── conf/                             [pkg] PBM templates
-│   ├── pbm-conf-gcp-hmac.yaml              PBM config: GCP bucket via S3 + HMAC key, any PBM 2.x -> pbm config --file
-│   ├── pbm-conf-gcs.yaml                   PBM config: native gcs + service account key, PBM >= 2.10 -> pbm config --file
-│   ├── pbm-conf.yaml                       PBM config reference with every option (storage, backup, PITR)
-│   ├── pbm-agent.yaml                      pbm-agent config file, PBM >= 2.9         -> /etc/pbm-agent.yaml
+│   ├── pbm-conf-gcp-hmac.yml              PBM config: GCP bucket via S3 + HMAC key, any PBM 2.x -> /etc/pbm-storage.conf
+│   ├── pbm-conf-gcs.yml                   PBM config: native gcs + service account key, PBM >= 2.10 -> /etc/pbm-storage.conf
+│   │                                       (install.sh --pbm-storage hmac|gcs; then pbm config --file)
+│   ├── pbm-conf.yml                       PBM config reference with every option (storage, backup, PITR)
+│   ├── pbm-agent.yml                      pbm-agent config file, PBM >= 2.9         -> /etc/pbm-agent.yml (--pbm-agent-yml)
 │   └── pbm-agent-config.conf               systemd drop-in loading it, PBM >= 2.9   -> pbm-agent.service.d/
 ├── systemd/                          [pkg]
 │   ├── services/pbm-backup-{full,incr,cleanup,metrics}.service
@@ -119,16 +122,20 @@ Build the deployable package with `packaging/build-dist.sh`.
 Quick version, on **every** member:
 
 ```bash
+vi sysconfig/pbm-conf etc/pbm-backup.conf      # edit the package copies (INSTALL.md section 4)
 sudo ./install.sh --dry-run                    # see what it does
 sudo ./install.sh --enable --disable-legacy    # PSMDB, replacing the old units
 sudo ./install.sh --scheme logical --incr-every-min 360 --metrics --enable   # Community
 ```
 
-Then put the connection string in `/etc/sysconfig/pbm-conf` (template:
-[sysconfig/pbm-conf](sysconfig/pbm-conf)) and review
-`/etc/sysconfig/pbm-backup` (all tunables, see
-[etc/pbm-backup.conf.example](etc/pbm-backup.conf.example)). Debian-like
-systems use `/etc/default` instead of `/etc/sysconfig`.
+`install.sh` lists the configuration files it will copy (connection string
+[sysconfig/pbm-conf](sysconfig/pbm-conf) -> `/etc/sysconfig/pbm-conf`,
+tunables [etc/pbm-backup.conf](etc/pbm-backup.conf) ->
+`/etc/sysconfig/pbm-backup`) and asks for confirmation, with a warning and a
+second question for templates that were not edited (`--yes` for unattended
+runs). It also creates the log directory and `/etc/logrotate.d/pbm-backup`.
+Which file goes where: [INSTALL.md section 4](INSTALL.md#4-configure).
+Debian-like systems use `/etc/default` instead of `/etc/sysconfig`.
 
 Validate before enabling the timers:
 

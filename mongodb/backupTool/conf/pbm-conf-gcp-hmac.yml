@@ -1,15 +1,16 @@
-# pbm-conf-gcp-hmac.yaml - PBM configuration: GCP bucket through the
+# pbm-conf-gcp-hmac.yml - PBM configuration: GCP bucket through the
 # S3-compatible API with an HMAC key ("type: s3").
 #
 # Apply once per replica set (it REPLACES the whole PBM configuration, which
 # is stored in MongoDB and read by every pbm-agent):
-#   chmod 600 pbm-conf-gcp-hmac.yaml && pbm config --file pbm-conf-gcp-hmac.yaml
+#   install.sh --pbm-storage hmac     (copies it to /etc/pbm-storage.conf, 0600)
+#   pbm config --file /etc/pbm-storage.conf
 #
 # Works with every PBM 2.x, and it is the template to use for:
 #   - PBM < 2.10 (2.5.0 for MongoDB 4.4, 2.3.1 for MongoDB 4.2): no native
 #     "gcs" type, an HMAC key is the only option;
 #   - PBM >= 2.16 with an HMAC key: the native "gcs" type only accepts a
-#     service account key or Workload Identity (see pbm-conf-gcs.yaml).
+#     service account key or Workload Identity (see pbm-conf-gcs.yml).
 # "pbm status" shows "S3 s3://https://storage.googleapis.com/<bucket>/<prefix>";
 # pbm-backup accepts it as GCS (REQUIRED_STORAGE_TYPES=GCS, the default).
 #

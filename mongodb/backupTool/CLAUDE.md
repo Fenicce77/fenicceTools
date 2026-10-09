@@ -49,7 +49,8 @@ Extend the system to support MongoDB >= 4.x, both PSMDB and MongoDB Community:
 ## Layout
 - `bin/pbm-backup`, `lib/*.sh` (common, mongo, pbm, compat, topology, metrics).
 - `systemd/` (new units; `legacy/` = original ones), `sysconfig/` (env templates and wrappers
-  for the legacy units), `conf/` (PBM templates), `etc/pbm-backup.conf.example` (tunables).
+  for the legacy units), `conf/` (PBM templates, `.yml`), `etc/pbm-backup.conf` (tunables, the
+  editable copy install.sh installs; must stay identical to `etc/pbm-backup.conf.example` in git).
 - `install.sh`, `packaging/build-dist.sh`, `mongodb/pbmuser.create.js`,
   `tools/gcs-hmac-test.py` (GCS HMAC key check, Python stdlib).
 - `tests/` (smoke.sh, pbmuser.test.sh, mocks, PBM 2.12.0 fixtures).

@@ -100,7 +100,7 @@ install (`apt-get remove` keeps it; `purge` deletes it).
 rpm -q percona-backup-mongodb
 sudo dnf --showduplicates list percona-backup-mongodb | grep 2.5.0     # else: sudo percona-release enable pbm release
 systemctl cat pbm-agent                                                # note any --config drop-in
-pbm config > /root/pbm-config-before.yaml && chmod 600 /root/pbm-config-before.yaml
+pbm config > /root/pbm-config-before.yml && chmod 600 /root/pbm-config-before.yml
 
 # 1. Stop backups and agents (all members)
 sudo systemctl disable --now pbm-backup-full.timer pbm-backup-incr.timer pbm-backup-cleanup.timer pbm-backup-metrics.timer
@@ -120,7 +120,7 @@ pbm version
 #    - target < 2.9 : no agent config file. Remove the drop-in, keep /etc/sysconfig/pbm-agent (§4.3)
 sudo rm -f /etc/systemd/system/pbm-agent.service.d/config.conf && sudo systemctl daemon-reload
 #    - target < 2.10: no "gcs" storage. Apply the S3 + HMAC configuration (§1.2), agents still stopped
-pbm config --file /root/pbm-conf-gcp-hmac.yaml     # conf/pbm-conf-gcp-hmac.yaml, filled in
+pbm config --file /etc/pbm-storage.conf           # conf/pbm-conf-gcp-hmac.yml, filled in (install.sh --pbm-storage hmac, §4)
 
 # 4. Start and verify (all members, then once)
 sudo systemctl start pbm-agent
@@ -152,10 +152,10 @@ Ready-to-use templates (package `conf/`, apply with `pbm config --file`):
 
 | Template | Storage | Credentials | PBM versions |
 |---|---|---|---|
-| `conf/pbm-conf-gcp-hmac.yaml` | `type: s3` + `endpointUrl: https://storage.googleapis.com` | HMAC key | every 2.x; the only option below 2.10, and for HMAC from 2.16 |
-| `conf/pbm-conf-gcs.yaml` | `type: gcs` (native) | service account JSON key (Workload Identity >= 2.13 and HMAC 2.10 - 2.15 commented) | >= 2.10 |
+| `conf/pbm-conf-gcp-hmac.yml` | `type: s3` + `endpointUrl: https://storage.googleapis.com` | HMAC key | every 2.x; the only option below 2.10, and for HMAC from 2.16 |
+| `conf/pbm-conf-gcs.yml` | `type: gcs` (native) | service account JSON key (Workload Identity >= 2.13 and HMAC 2.10 - 2.15 commented) | >= 2.10 |
 
-`conf/pbm-conf.yaml` remains the full reference with every option.
+`conf/pbm-conf.yml` remains the full reference with every option.
 
 - An HMAC key and a JSON key are **different credentials**: one cannot be
   derived from the other. The HMAC pair goes in `access-key-id` /
@@ -168,7 +168,7 @@ Ready-to-use templates (package `conf/`, apply with `pbm config --file`):
   creating, disabling or deleting one does not affect the other. Permissions
   belong to the service account, not to the key.
 - Using HMAC everywhere means `type: s3` on every version
-  (`conf/pbm-conf-gcp-hmac.yaml`): a single kind of credential to rotate and
+  (`conf/pbm-conf-gcp-hmac.yml`): a single kind of credential to rotate and
   a single template for all replica sets.
 - `pbm status` shows PBM < 2.10 storage as
   `S3 s3://https://storage.googleapis.com/<bucket>/<prefix>`; pbm-backup
@@ -194,7 +194,7 @@ gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
   (JSON keys) and `storage.restrictAuthTypes` (HMAC). Up to 10 HMAC keys per
   service account.
 
-#### A. HMAC key: template `conf/pbm-conf-gcp-hmac.yaml` (any PBM 2.x; required below 2.10)
+#### A. HMAC key: template `conf/pbm-conf-gcp-hmac.yml` (any PBM 2.x; required below 2.10)
 
 ```bash
 gcloud storage hmac create "$SA" --project="$PROJECT" --format=json   # prints accessId and secret
@@ -204,7 +204,8 @@ gcloud storage hmac list --project="$PROJECT" --format="table(accessId,serviceAc
 The **secret is shown only once**: store it in your secret manager right away.
 The key must be `ACTIVE`.
 
-Any PBM 2.x (`conf/pbm-conf-gcp-hmac.yaml`; copy it, fill it in, `chmod 600`):
+Any PBM 2.x (`conf/pbm-conf-gcp-hmac.yml`; fill it in and copy it to
+`/etc/pbm-storage.conf` with `install.sh --pbm-storage hmac`, §4):
 
 ```yaml
 storage:
@@ -223,7 +224,7 @@ backup:
 ```
 
 PBM 2.10 - 2.15 only, same HMAC key with the native type (removed in 2.16;
-commented in `conf/pbm-conf-gcs.yaml`):
+commented in `conf/pbm-conf-gcs.yml`):
 
 ```yaml
 storage:
@@ -244,7 +245,7 @@ details; this tool prints the GCS error code (`AccessDenied`,
 python3 /usr/local/share/doc/pbm-backup/gcs-hmac-test.py <bucket> mongocluster/rs44 europe-west3
 ```
 
-#### B. Service account JSON key: template `conf/pbm-conf-gcs.yaml` (PBM >= 2.10 only)
+#### B. Service account JSON key: template `conf/pbm-conf-gcs.yml` (PBM >= 2.10 only)
 
 ```bash
 gcloud iam service-accounts keys create /root/pbm-sa.json --iam-account="$SA"
@@ -270,7 +271,7 @@ manager). This key **cannot** be used with PBM < 2.10.
 #### Apply and verify (once per replica set)
 
 ```bash
-pbm config --file /root/pbm-config.yaml     # replaces the whole PBM config: keep backup/pitr sections in it
+pbm config --file /etc/pbm-storage.conf    # replaces the whole PBM config: keep backup/pitr sections in it
 sudo systemctl restart pbm-agent            # all members (agents re-check the storage)
 pbm status                                  # every agent "OK"; storage line shows the bucket and prefix
 pbm config --force-resync                   # needed when the storage type, bucket or prefix changed
@@ -353,10 +354,10 @@ Package contents:
 | `sysconfig/pbm-conf` | template for `/etc/sysconfig/pbm-conf` (pbm CLI and pbm-backup) |
 | `sysconfig/pbm-agent` | pbm-agent environment file, every PBM 2.x (the only agent config on PBM 2.0 - 2.8), §4.3 |
 | `sysconfig/pbm-physical-*`, `sysconfig/pbm-deletion` | wrappers for the old units |
-| `conf/pbm-conf-gcp-hmac.yaml` | PBM configuration: GCP bucket through S3 with an HMAC key (any PBM 2.x), §1.2 A |
-| `conf/pbm-conf-gcs.yaml` | PBM configuration: native `gcs` with a service account key (PBM >= 2.10), §1.2 B |
-| `conf/pbm-conf.yaml` | PBM configuration reference with every option (`pbm config --file`) |
-| `conf/pbm-agent.yaml`, `conf/pbm-agent-config.conf` | pbm-agent config file + systemd drop-in, PBM >= 2.9 only, §4.3 |
+| `conf/pbm-conf-gcp-hmac.yml` | PBM configuration: GCP bucket through S3 with an HMAC key (any PBM 2.x), §1.2 A |
+| `conf/pbm-conf-gcs.yml` | PBM configuration: native `gcs` with a service account key (PBM >= 2.10), §1.2 B |
+| `conf/pbm-conf.yml` | PBM configuration reference with every option (`pbm config --file`) |
+| `conf/pbm-agent.yml`, `conf/pbm-agent-config.conf` | pbm-agent config file + systemd drop-in, PBM >= 2.9 only, §4.3 |
 | `mongodb/pbmuser.create.js` | creates/fixes the PBM user and role (section 1.3) |
 | `tools/gcs-hmac-test.py` | checks a GCS HMAC key the way PBM < 2.10 uses it (section 1.2) |
 | `README.md`, `INSTALL.md`, `CHANGES.md`, `VERSION` | documentation |
@@ -367,15 +368,18 @@ The examples use `VERSION`: set it to the version of the package you
 deploy (the `VERSION=` line in `bin/pbm-backup`, also in the package name).
 
 ```bash
-VERSION=0.6.2
+VERSION=0.6.8
 scp dist/pbm-backup-${VERSION}.tar.gz* rmateos@mongodbcluster-node01:/tmp/
 ssh rmateos@mongodbcluster-node01
-VERSION=0.6.2
+VERSION=0.6.8
 cd /tmp
 sha256sum -c pbm-backup-${VERSION}.tar.gz.sha256
 tar -xzf pbm-backup-${VERSION}.tar.gz
-sudo pbm-backup-${VERSION}/install.sh --dry-run      # review
-sudo pbm-backup-${VERSION}/install.sh                 # install, timers NOT enabled yet
+cd pbm-backup-${VERSION}
+vi sysconfig/pbm-conf etc/pbm-backup.conf    # edit the package copies first (section 4)
+sudo ./install.sh --dry-run                  # review the plan
+sudo ./install.sh                            # asks before copying the configuration files; timers NOT enabled yet
+cd .. && rm -rf pbm-backup-${VERSION}        # the edited pbm-conf holds the PBM password
 ```
 
 `install.sh` options:
@@ -393,7 +397,12 @@ sudo pbm-backup-${VERSION}/install.sh                 # install, timers NOT enab
 | `--destdir DIR` | install under a staging root (image builds); no systemctl, no root |
 | `--upgrade` | require an installed version (an install over an existing one is an upgrade anyway, §8) |
 | `--allow-downgrade` | allow a package older than the installed version |
-| `--fresh-config` | on upgrade: rename the configuration files and install the new templates |
+| `--fresh-config` | on upgrade: rename the configuration files and install the package copies |
+| `--pbm-agent-env` | also copy `sysconfig/pbm-agent` to `/etc/sysconfig/pbm-agent` (§4) |
+| `--pbm-agent-yml` | also copy `conf/pbm-agent.yml` and its systemd drop-in, PBM >= 2.9 (§4) |
+| `--pbm-storage hmac\|gcs` | also copy the storage template to `/etc/pbm-storage.conf` (§4, §1.2) |
+| `--no-logrotate` / `--logrotate` | do not write / write again `/etc/logrotate.d/pbm-backup` (§4.4; kept on upgrades) |
+| `-y`, `--yes` | answer yes to the configuration confirmations (unattended runs, §7) |
 | `--uninstall` | remove timers, units, binary, libraries, docs; configuration files renamed (§10) |
 | `--keep-config` | with `--uninstall`: leave the configuration files as they are |
 | `--dry-run` | print the plan and every action, change nothing |
@@ -412,14 +421,21 @@ What a member looks like after `install.sh` (✎ = file you configure;
 ├── etc/
 │   ├── sysconfig/                              (/etc/default on Debian-like systems)
 │   │   ├── pbm-conf                         ✎ ⚙ 0600 PBM_MONGODB_URI for pbm CLI + pbm-backup (§4.1);
-│   │   │                                         created from the template if missing, never overwritten
-│   │   ├── pbm-backup                       ✎ ⚙ 0640 pbm-backup tunables (§4.2); created if missing
+│   │   │                                         from sysconfig/pbm-conf (§4)
+│   │   ├── pbm-backup                       ✎ ⚙ 0640 pbm-backup tunables (§4.2); from etc/pbm-backup.conf
 │   │   ├── pbm-agent                        ✎ ◆ 0640 pbm-agent environment, every PBM 2.x (§4.3);
-│   │   │                                         template: sysconfig/pbm-agent
+│   │   │                                         from sysconfig/pbm-agent with --pbm-agent-env
 │   │   └── pbm-physical-full-base              ⚙ only with --legacy-wrappers (old units -> pbm-backup)
 │   │       pbm-physical-incremental
 │   │       pbm-deletion
-│   ├── pbm-agent.yaml                       ✎   0600 PBM >= 2.9 only, optional (§4.3); template: conf/pbm-agent.yaml
+│   ├── pbm-agent.yml                       ✎   0600 PBM >= 2.9 only, optional (§4.3); from conf/pbm-agent.yml
+│   │                                             with --pbm-agent-yml
+│   ├── pbm-storage.conf                    ✎ ◆ 0600 PBM storage (bucket, credentials) for "pbm config --file" (§1.2);
+│   │                                             from conf/pbm-conf-{gcp-hmac,gcs}.yml with --pbm-storage
+│   ├── pbm-conf-reference.yml                ◆ Percona's reference of every PBM option (not used)
+│   ├── logrotate.d/
+│   │   ├── pbm-backup                          ⚙ rotation of LOG_DIR/*.log (§4.4)
+│   │   └── pbm-agent                           ⚙ only when /etc/pbm-agent.yml logs to a file (§4.4)
 │   └── systemd/system/
 │       ├── pbm-backup-full.service / .timer    ⚙ daily full, 00:00
 │       ├── pbm-backup-incr.service / .timer    ⚙ physical: hourly 01:15..23:15
@@ -430,9 +446,11 @@ What a member looks like after `install.sh` (✎ = file you configure;
 │       └── pbm-agent.service.d/
 │           └── config.conf                  ✎   PBM >= 2.9 only, optional (§4.3); template: conf/pbm-agent-config.conf
 ├── usr/lib/systemd/system/pbm-agent.service    ◆ not modified (/lib/systemd/system on Debian-like)
-├── data/backup/pbm/                            PBM_LOCAL_ROOT
-│   ├── logs/                                   incrbase.log incr.log logical-full.log oplog.log deletion.log restore.log
+├── data/backup/pbm/                         ⚙ PBM_LOCAL_ROOT, 0750 (created by install.sh, §4.4)
+│   ├── logs/                                ⚙ LOG_DIR, 0750: incrbase.log incr.log logical-full.log oplog.log
+│   │                                             deletion.log restore.log
 │   └── <replset>.lastbackup.index              physical scheme: last base (JSON)
+├── data/log/pbm/                            ⚙ pbm-agent log dir (log.path of /etc/pbm-agent.yml, PBM >= 2.9), owner mongod
 ├── run/lock/pbm-backup-<command>.lock          one run per command and member
 └── <METRICS_DIR>/                              only if METRICS_DIR is set:
                                                 pbm_backup_state.prom pbm_backup_run_{full,incr,cleanup}.prom
@@ -442,26 +460,106 @@ Not files on the members:
 
 - **PBM cluster configuration** (storage, backup compression, PITR): stored in
   MongoDB and applied once with `pbm config --file` (template
-  `conf/pbm-conf.yaml`). pbm-backup sets the `pitr.*` keys itself in the
+  `conf/pbm-conf.yml`). pbm-backup sets the `pitr.*` keys itself in the
   logical scheme.
 - **PBM user password file**: `~/.pbm-backup/<user>.<replset>.<timestamp>.env`
   on the machine where `pbmuser.create.js` ran (§1.3). Delete it after use.
 
-It creates `/etc/sysconfig/pbm-backup` and `/etc/sysconfig/pbm-conf` from
-their templates only when they do not exist, and never overwrites them
-(install, upgrade or uninstall). A freshly created `pbm-conf` holds
-placeholders: `pbm-backup` refuses to run (exit code 2) until they are
+The configuration files are copied from the package copies you edited
+(section 4): a file the member does not have is copied, and an existing one is
+replaced only when the package copy was edited (the current file is saved
+first). The copies are listed in the plan and need a confirmation; copies of
+templates that were not edited need a second one. A `pbm-conf` with
+placeholders makes `pbm-backup` refuse to run (exit code 2) until they are
 replaced (section 4.1).
 
 ## 4. Configure
 
+### Configuration files: what to edit and where it goes
+
+Edit the files in the extracted package **before** running `install.sh`;
+it copies them to their place, as listed in its plan. Files marked
+"optional flag" are copied only with that flag; without it, copy them by
+hand (commands in §4.3 and §1.2) or leave the ones the Percona package
+installed.
+
+| Package file (edit it) | Destination on the member | Owner, mode | Copied by `install.sh` | What to edit | PBM |
+|---|---|---|---|---|---|
+| `sysconfig/pbm-conf` | `/etc/sysconfig/pbm-conf` | root, 0600 | always | **required**: `PBM_MONGODB_URI` (user, password, members, `replicaSet`), §4.1 | all |
+| `etc/pbm-backup.conf` | `/etc/sysconfig/pbm-backup` | root, 0640 | always | optional tunables, §4.2 (defaults if not edited) | all |
+| `sysconfig/pbm-agent` | `/etc/sysconfig/pbm-agent` | root, 0640 | `--pbm-agent-env` | **required**: URI of **this** member, §4.3 | all 2.x; the only option on 2.0 - 2.8 |
+| `conf/pbm-agent.yml` | `/etc/pbm-agent.yml` | agent user (mongod), 0600 | `--pbm-agent-yml` | **required**: `mongodb-uri` of this member, `log.path`, §4.3 | >= 2.9 |
+| `conf/pbm-agent-config.conf` | `/etc/systemd/system/pbm-agent.service.d/config.conf` | root, 0644 | `--pbm-agent-yml` | nothing | >= 2.9 |
+| `conf/pbm-conf-gcp-hmac.yml` | `/etc/pbm-storage.conf` | root, 0600 | `--pbm-storage hmac` | **required**: bucket, prefix, region, HMAC key, §1.2 A | all 2.x |
+| `conf/pbm-conf-gcs.yml` | `/etc/pbm-storage.conf` | root, 0600 | `--pbm-storage gcs` | **required**: bucket, prefix, service account key, §1.2 B | >= 2.10 |
+| `conf/pbm-conf.yml` | (none) | | no | reference of every PBM option | all |
+| `etc/pbm-backup.conf.example` | `/usr/local/share/doc/pbm-backup/` | root, 0644 | always | do not edit: reference with the defaults | all |
+
+Notes:
+
+- **`.yml` extension.** The PBM templates use `.yml`, as the Percona
+  packages do (PBM 2.5 included: `/etc/pbm-conf-reference.yml`). `pbm config
+  --file` and `pbm-agent --config` do not depend on the extension.
+- **`/etc/pbm-storage.conf`** is installed by the Percona package (0640
+  mongod, `%config(noreplace)`) as the file to apply with `pbm config --file`.
+  `--pbm-storage` puts the filled-in template there, 0600 root (it holds the
+  bucket credentials), saving the previous file. Applying it is still your
+  step, once per replica set: `pbm config --file /etc/pbm-storage.conf`
+  (it replaces the whole PBM configuration, §1.2).
+- **`/etc/sysconfig/pbm-agent`** is also a Percona file (`%config(noreplace)`):
+  with `--pbm-agent-env` the edited template replaces it (previous one saved).
+- After copying agent files, restart the agent yourself:
+  `systemctl daemon-reload && systemctl restart pbm-agent`.
+
+How `install.sh` decides, per file:
+
+| Member file | Package copy | Action |
+|---|---|---|
+| missing | edited or not | **copy** (not edited: warning + second confirmation) |
+| identical | | **same**, nothing to do |
+| different | edited (no `<placeholder>` left; `etc/pbm-backup.conf`: differs from the example) | **replace**; the current file is saved as `<file>.replaced.<UTC time>` (on upgrade/reinstall, the `<file>.<mode>.<version>.<UTC time>` copy of §8) |
+| different | not edited | **keep** the member file: a template never overwrites a working configuration |
+
+```
+Plan
+  ...
+  Configuration files (package copy -> member, edit the package copy before installing):
+    copy      sysconfig/pbm-conf -> /etc/sysconfig/pbm-conf (0600)  NOT EDITED
+    copy      etc/pbm-backup.conf -> /etc/sysconfig/pbm-backup (0640)  NOT EDITED
+  Directories (created 0750 when missing; existing ones are not changed):
+    create    /data/backup/pbm  - PBM_LOCAL_ROOT: working directory, owner root
+    create    /data/backup/pbm/logs  - LOG_DIR: pbm-backup logs, owner root
+[WARN] WARNING: these files would be copied WITHOUT being edited (package templates with <placeholders> or defaults):
+    /etc/sysconfig/pbm-conf: PBM_MONGODB_URI: PBM user and password (mongodb/pbmuser.create.js), members, replicaSet
+    /etc/sysconfig/pbm-backup: optional tunables (RETENTION_DAYS, LOG_DIR, METRICS_DIR...); package defaults otherwise
+[WARN] pbm-backup and the pbm CLI do not work until pbm-conf is filled in; edit the files on the member after installing
+Copy the 2 configuration file(s) listed above to this member? [y/N] y
+Some of them are NOT edited. Install them anyway and edit them on the member afterwards? [y/N] y
+...
+[WARN] EDIT these files on this member: they still hold template <placeholders>
+    /etc/sysconfig/pbm-conf: PBM_MONGODB_URI: PBM user and password (mongodb/pbmuser.create.js), members, replicaSet
+```
+
+- Answering no to either question stops with exit code 3: **nothing is
+  changed**. Edit the package copies and run it again.
+- `--yes` answers both questions (unattended runs, §7). Without a terminal
+  and without `--yes`, a run that has to copy files stops with exit code 2;
+  one with nothing to copy (e.g. an upgrade with unedited templates) needs
+  no answer.
+- `--dry-run` prints the plan and the warning, asks nothing, changes nothing.
+- The warning about files still holding placeholders is printed at the end
+  of every run, also for files installed earlier, until they are edited.
+- The edited `sysconfig/pbm-conf` (and the agent and storage files) hold
+  secrets: delete the extracted package after installing, or install the
+  templates and edit the files on the member instead.
+
 ### 4.1 Connection string: `/etc/sysconfig/pbm-conf`
 
-`install.sh` creates it from the template (`sysconfig/pbm-conf` in the
-package) when it does not exist. Replace the placeholders; the
-`PBM_MONGODB_URI` line printed by `pbmuser.create.js` (section 1.3) can be
-pasted as is. Members that already have the file from the old scripts keep
-it untouched.
+`install.sh` copies it from `sysconfig/pbm-conf` in the package (see above).
+Replace the placeholders, in the package copy before installing or on the
+member afterwards; the `PBM_MONGODB_URI` line printed by `pbmuser.create.js`
+(section 1.3) can be pasted as is. Members that already have the file from
+the old scripts keep it untouched unless the package copy was edited.
 
 ```bash
 PBM_MONGODB_URI="mongodb://<pbm_user>:<pbm_password>@mongodbcluster-node01:27017,mongodbcluster-node02:27017,mongodbcluster-node03:27017/?authSource=admin&replicaSet=<replica_set>"
@@ -481,8 +579,9 @@ sudo chmod 0600 /etc/sysconfig/pbm-conf
 
 ### 4.2 Tunables: `/etc/sysconfig/pbm-backup`
 
-Created from `etc/pbm-backup.conf.example`, all values commented (defaults).
-The ones usually set:
+Copied from `etc/pbm-backup.conf` (edit it in the package; identical to
+`etc/pbm-backup.conf.example` until you do), all values commented
+(defaults). The ones usually set:
 
 | Variable | Default | When to change |
 |---|---|---|
@@ -492,7 +591,7 @@ The ones usually set:
 | `OPLOG_INCR_MIN` | `360` | Community: minutes between oplog slices (keep in line with `--incr-every-min`) |
 | `METRICS_DIR` | empty | textfile-collector directory (node_exporter, PMM2, PMM3) |
 | `MAX_REPL_LAG_SEC` / `MAX_QUEUE` / `MAX_WT_DIRTY_PCT` | `60` / `50` / `20` | overload thresholds of the election |
-| `PBM_LOCAL_ROOT` / `LOG_DIR` | `/data/backup/pbm` / `.../logs` | log location |
+| `PBM_LOCAL_ROOT` / `LOG_DIR` | `/data/backup/pbm` / `.../logs` | log location (created by `install.sh`, §4.4) |
 | `BACKUP_COMPRESSION` / `BACKUP_COMPRESSION_LEVEL` | `gzip` / `5` | compression (`none` is rejected) |
 
 Keep this file identical on every member of a replica set: they must all
@@ -500,30 +599,35 @@ compute the same election.
 
 ### 4.3 pbm-agent configuration (per member, by PBM version)
 
-pbm-backup does not install the agent configuration (the Percona package
-owns it), but the package ships templates for both agent generations:
+The Percona package owns the agent configuration; pbm-backup ships templates
+for both agent generations and copies them only when asked
+(`--pbm-agent-env`, `--pbm-agent-yml`; refused on PBM < 2.9):
 
 Files of the agent, by PBM version:
 
 ```
 PBM 2.0 - 2.8 (e.g. 2.5.0 for MongoDB 4.4)     PBM >= 2.9
 /etc/sysconfig/pbm-agent   ✎ (required)        /etc/sysconfig/pbm-agent                          ✎ (required, or…)
-                                               /etc/pbm-agent.yaml                               ✎ (optional, with…)
+                                               /etc/pbm-agent.yml                               ✎ (optional, with…)
                                                /etc/systemd/system/pbm-agent.service.d/config.conf  (…this drop-in)
 ```
 
 | PBM version | Agent configuration | Templates |
 |---|---|---|
 | 2.0 - 2.8 (e.g. **2.5.0 for MongoDB 4.4**) | environment only: `/etc/sysconfig/pbm-agent` (`PBM_MONGODB_URI`, `PBM_DUMP_PARALLEL_COLLECTIONS`); logs in journald | `sysconfig/pbm-agent` |
-| >= 2.9 | the same environment file, or `/etc/pbm-agent.yaml` loaded with `--config` (adds log file, level, JSON) | `conf/pbm-agent.yaml` + `conf/pbm-agent-config.conf` |
+| >= 2.9 | the same environment file, or `/etc/pbm-agent.yml` loaded with `--config` (adds log file, level, JSON) | `conf/pbm-agent.yml` + `conf/pbm-agent-config.conf` |
 
 ```bash
-# PBM 2.0 - 2.8 (and any version): environment file
+# With install.sh (edit the package copies first)
+sudo ./install.sh --pbm-agent-env            # any PBM 2.x
+sudo ./install.sh --pbm-agent-yml            # PBM >= 2.9 (also creates the agent log dir, §4.4)
+
+# By hand. PBM 2.0 - 2.8 (and any version): environment file
 sudo install -m 0640 sysconfig/pbm-agent /etc/sysconfig/pbm-agent     # then edit
 sudo systemctl restart pbm-agent
 
 # PBM >= 2.9, optional: YAML file + drop-in
-sudo install -m 0600 -o mongod -g mongod conf/pbm-agent.yaml /etc/pbm-agent.yaml   # then edit
+sudo install -m 0600 -o mongod -g mongod conf/pbm-agent.yml /etc/pbm-agent.yml   # then edit
 sudo install -D -m 0644 conf/pbm-agent-config.conf /etc/systemd/system/pbm-agent.service.d/config.conf
 sudo systemctl daemon-reload && sudo systemctl restart pbm-agent
 ```
@@ -532,6 +636,65 @@ Each agent uses the URI of **its own** member (`pbmuser.create.js` prints one
 line per member). The `--config` drop-in must not exist on PBM 2.0 - 2.8:
 those agents do not know the option and do not start (remove it before a
 downgrade).
+
+### 4.4 Log directories and rotation
+
+**pbm-backup.** Every command writes its own file in `LOG_DIR` (default
+`${PBM_LOCAL_ROOT}/logs` = `/data/backup/pbm/logs`) and to the journal of
+its unit (`journalctl -u pbm-backup-full`):
+
+| Command | Log file |
+|---|---|
+| `full` (physical / logical) | `incrbase.log` / `logical-full.log` |
+| `incr` (physical / logical) | `incr.log` / `oplog.log` |
+| `cleanup` | `deletion.log` |
+| `restore` | `restore.log` |
+
+`install.sh` creates `PBM_LOCAL_ROOT` and `LOG_DIR` (0750 root) when they do
+not exist, with the values of the configuration in effect after the run
+(the edited package copy, or the member's `/etc/sysconfig/pbm-backup`), and
+writes `/etc/logrotate.d/pbm-backup`:
+
+```
+# Managed by pbm-backup install.sh: rewritten on upgrade, removed on uninstall.
+/data/backup/pbm/logs/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}
+```
+
+- Changing `LOG_DIR` later: edit `/etc/sysconfig/pbm-backup` and run
+  `install.sh` again (it creates the new directory and rewrites the rule), or
+  by hand: `sudo install -d -m 0750 /var/log/pbm-backup`. Old logs are not
+  moved. With `PBM_LOCAL_ROOT="/var/log/pbm"`, `LOG_DIR` is `/var/log/pbm/logs`.
+- A `/etc/logrotate.d/pbm-backup` without the "Managed by" line is yours:
+  never overwritten nor removed. `--no-logrotate` removes the managed one and
+  is remembered on upgrades (`--logrotate` brings it back).
+- Check the rule: `sudo logrotate -d /etc/logrotate.d/pbm-backup`.
+- If `LOG_DIR` cannot be written, pbm-backup logs to the journal only (warning).
+
+**pbm-agent.**
+
+| PBM version | Agent log | Directory and rotation |
+|---|---|---|
+| 2.0 - 2.8 (e.g. 2.5.0) | journald only: `journalctl -u pbm-agent` | nothing to create (journald retention) |
+| >= 2.9 with `/etc/pbm-agent.yml` | `log.path` (template: `/data/log/pbm/pbm.log`) | directory owned by the agent user, created by `install.sh` when `/etc/pbm-agent.yml` is installed or present; `/etc/logrotate.d/pbm-agent` with `copytruncate` (the agent keeps the file open) |
+| >= 2.9 without it | journald | nothing to create |
+
+By hand (PBM >= 2.9, agent running as `mongod`):
+
+```bash
+sudo install -d -m 0750 -o mongod -g mongod /data/log/pbm
+sudo systemctl restart pbm-agent && sudo ls -l /data/log/pbm
+```
+
+`--uninstall` removes `/etc/logrotate.d/pbm-backup` and keeps the logs,
+the log directories and `/etc/logrotate.d/pbm-agent`.
 
 ## 5. Validate (every member, before enabling)
 
@@ -604,10 +767,13 @@ The package is designed for unattended use:
   not need to know what is installed. Add `--upgrade` to make it fail on a
   member where pbm-backup is missing.
 - **Idempotent:** running `install.sh` again with the same options gives the
-  same result. Binaries, libraries and units are replaced; configuration is
-  never touched.
+  same result. Binaries, libraries and units are replaced; a configuration
+  file is replaced only by an edited package copy that differs from it
+  (§4).
+- **No questions:** pass `--yes`. Without it and without a terminal, a run
+  that has to copy configuration files stops with exit code 2.
 - **Exit codes:** `install.sh`: `0` ok, `1` a step failed, `2` usage or
-  environment error. `pbm-backup check`: `0` ok, `1` a backup would fail,
+  environment error, `3` cancelled at a confirmation (nothing changed). `pbm-backup check`: `0` ok, `1` a backup would fail,
   `2` configuration error.
 - **Installed version:** `/usr/local/share/doc/pbm-backup/VERSION` and
   `pbm-backup --version`.
@@ -619,9 +785,11 @@ set -e
 cd /tmp
 sha256sum -c pbm-backup-${VERSION}.tar.gz.sha256
 tar -xzf pbm-backup-${VERSION}.tar.gz
-# /etc/sysconfig/pbm-conf (secret) and /etc/sysconfig/pbm-backup are
-# templated by the deployment tool BEFORE this step.
-pbm-backup-${VERSION}/install.sh --scheme physical          # or: --scheme logical --incr-every-min 360
+# Either template /etc/sysconfig/pbm-conf (secret) and pbm-backup with the
+# deployment tool BEFORE this step (the unedited package copies then never
+# replace them), or write the package copies (pbm-backup-${VERSION}/sysconfig/
+# pbm-conf, .../etc/pbm-backup.conf) before running install.sh.
+pbm-backup-${VERSION}/install.sh --yes --scheme physical    # or: --scheme logical --incr-every-min 360
 /usr/local/bin/pbm-backup --no-color check
 rm -rf pbm-backup-${VERSION} pbm-backup-${VERSION}.tar.gz*
 ```
@@ -632,7 +800,7 @@ Enable the timers (`--disable-legacy --enable`) as a separate step, once
 To build images or OS packages, install into a staging root:
 
 ```bash
-./install.sh --destdir /tmp/stage --scheme physical
+./install.sh --destdir /tmp/stage --scheme physical --yes
 ```
 
 ## 8. Upgrade
@@ -677,8 +845,13 @@ Plan
 - **Configuration files** (`pbm-backup`, `pbm-conf`, pbm-backup legacy
   wrappers) are **copied** to `<file>.<upgrade|reinstall|downgrade>.<installed
   version>.<UTC time>` and stay in place, so backups keep working. With
-  `--fresh-config` they are **renamed** instead and the new templates are
-  installed: fill in `pbm-conf` again before the next backup.
+  `--fresh-config` they are **renamed** instead and the package copies are
+  installed: fill in `pbm-conf` again before the next backup. An upgrade
+  from a freshly extracted package (unedited templates) keeps every member
+  file and asks nothing; edited package copies replace them after a
+  confirmation (§4).
+- The log directories and `/etc/logrotate.d/pbm-backup` follow `LOG_DIR`
+  (§4.4).
 - Files the new version no longer ships (libraries, units, the drop-in when
   the scheme changes to physical) are removed.
 - Timers that are enabled stay enabled. A backup already running keeps its
@@ -716,9 +889,11 @@ The pbm-backup legacy wrappers (`--legacy-wrappers`) are renamed too; an
 original `pbm-physical-*` / `pbm-deletion` script is never touched. The
 renamed `pbm-conf` keeps its mode and still holds the PBM password: delete
 it when it is no longer needed, or restore it with `mv`.
-`--keep-config` leaves the configuration files as they are. The logs, PBM
-itself (`/etc/sysconfig/pbm-agent` included) and every backup in the bucket
-are always kept.
+`--keep-config` leaves the configuration files as they are.
+`/etc/logrotate.d/pbm-backup` is removed when `install.sh` wrote it. The logs,
+PBM itself and its files (`/etc/sysconfig/pbm-agent`, `/etc/pbm-agent.yml`,
+`/etc/pbm-storage.conf`, `/etc/logrotate.d/pbm-agent`) and every backup in
+the bucket are always kept.
 
 ## 11. Operations
 
@@ -744,7 +919,7 @@ are always kept.
 | `PITR is enabled, but the physical scheme runs without PITR` | PSMDB: `pbm config --set pitr.enabled=false` |
 | `Oplog window ... < 2 x expected dump` | Community: enlarge the oplog (`replSetResizeOplog`) or set `EXPECTED_DUMP_SEC` / `OPLOG_WINDOW_ENFORCE=false` |
 | `Last full ... started N min ago (< FULL_MIN_INTERVAL_SEC)` | normal: a full already ran today. Use `pbm-backup full --force` to take another one |
-| `PBM executed the backup on X, not on this node` | PBM picked another member by `backup.priority`; keep the primary lowest in `conf/pbm-conf.yaml` |
+| `PBM executed the backup on X, not on this node` | PBM picked another member by `backup.priority`; keep the primary lowest in `conf/pbm-conf.yml` |
 | `Cannot read buildInfo` | `mongosh` missing or the URI is wrong; or set `MONGODB_VERSION` + `MONGODB_EDITION` |
 
 ## 13. MongoDB 4.4: PBM 2.5.0
@@ -757,10 +932,10 @@ matter:
 
 - **No native GCS before PBM 2.10:** the bucket is configured as S3 with
   `endpointUrl: https://storage.googleapis.com` and a GCS HMAC key (§1.2 A,
-  block in `conf/pbm-conf.yaml`); a service account JSON key cannot be used. `pbm status` reports `S3
+  block in `conf/pbm-conf.yml`); a service account JSON key cannot be used. `pbm status` reports `S3
   s3://https://storage.googleapis.com/...`; pbm-backup accepts it as GCS,
   so `REQUIRED_STORAGE_TYPES=GCS` (default) still applies.
-- **Agent configuration by environment only** (§4.3): no `/etc/pbm-agent.yaml`,
+- **Agent configuration by environment only** (§4.3): no `/etc/pbm-agent.yml`,
   no `--config` drop-in.
 
 ### Install or downgrade

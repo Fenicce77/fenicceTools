@@ -1,7 +1,8 @@
 # /etc/sysconfig/pbm-conf - connection string for the pbm CLI and pbm-backup.
-# Created by install.sh from this template when missing (mode 0600) and never
-# overwritten. Replace every <placeholder>: pbm-backup refuses to run while
-# any is left. Same content on every member of the replica set.
+# Copied by install.sh (mode 0600) when missing, or over an existing file
+# when this package copy was edited (the previous one is saved). Replace
+# every <placeholder>: pbm-backup refuses to run while any is left. Same
+# content on every member of the replica set.
 #
 # - User and password: create them with mongodb/pbmuser.create.js; it prints
 #   this exact line, with the password already URI-encoded.

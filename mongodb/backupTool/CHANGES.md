@@ -354,6 +354,41 @@ skipped, probes returned nothing).
 - `backup.numParallelCollections` exists from PBM 2.7 (not in 2.5): marked in
   the templates.
 
+## Installer: configuration files with confirmation, log directories, .yml (0.6.8)
+
+- The package copies are edited before running `install.sh`, which copies
+  them: `sysconfig/pbm-conf` -> `pbm-conf` and the new editable
+  `etc/pbm-backup.conf` -> `pbm-backup` always; with `--pbm-agent-env`,
+  `--pbm-agent-yml` (refused on PBM < 2.9) and `--pbm-storage hmac|gcs`
+  also the agent environment, the agent `.yml` + drop-in and
+  `/etc/pbm-storage.conf`. A missing file is copied; an existing one is
+  replaced only by an edited copy (saved first as `<file>.replaced.<ts>` or
+  the upgrade copy); an unedited template never overwrites it.
+- The copies are listed in the plan and need a confirmation. Templates
+  still holding `<placeholders>` (or the default `pbm-backup`) show a
+  WARNING and need a second one; after the run, every managed file still
+  holding placeholders is listed with what to set. `--yes` answers both;
+  no terminal and no `--yes` -> exit 2; declined -> exit 3, nothing changed.
+  Before, `pbm-conf` and `pbm-backup` were only created when missing.
+- `install.sh` creates `PBM_LOCAL_ROOT` and `LOG_DIR` (0750, from the
+  configuration in effect) and the pbm-agent log directory (`log.path` of
+  `/etc/pbm-agent.yml`, agent user) when missing, and writes
+  `/etc/logrotate.d/pbm-backup` (and `pbm-agent`, copytruncate) with a
+  "Managed by" marker; files without it are never touched.
+  `--no-logrotate` / `--logrotate` (kept in `install.state`). Uninstall
+  removes the pbm-backup rule only.
+- PBM templates renamed `.yaml` -> `.yml`, as in the Percona packages:
+  `conf/pbm-conf.yml`, `pbm-conf-gcp-hmac.yml`, `pbm-conf-gcs.yml`,
+  `pbm-agent.yml`.
+- INSTALL.md: section 4 starts with the table of configuration files
+  (package file, destination, owner/mode, flag, what to edit, PBM
+  versions) and the copy rules; new section 4.4 (log directories and
+  rotation for pbm-backup and pbm-agent by PBM version).
+- `build-dist.sh` refuses to package an edited `etc/pbm-backup.conf` or a
+  `sysconfig/pbm-conf` without placeholders.
+- `tests/install.test.sh`: 138 checks (confirmations, edited / unedited
+  copies, replace with backup, agent and storage files, log dirs, logrotate).
+
 ## Diffs of the replaced scripts
 
 <details>
