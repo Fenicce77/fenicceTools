@@ -31,7 +31,8 @@ storage:
      chunkSize: 10240000
 
 ## GCS access credentials. You can use either HMAC or Service Account keys.
-## HMAC Example:
+## HMAC Example (gcs type: PBM 2.10 - 2.15 only, removed in 2.16; on any
+## version use the S3 block below / conf/pbm-conf-gcp-hmac.yaml):
 #     credentials:
 #       hmacAccessKey: GOOG1E7GHK2...
 #       hmacSecret: U7PCRkLy...
@@ -138,7 +139,7 @@ backup:
 
 ## Set the number of parallel collections to process during a logical backup.
 ## Default value is half of the number of CPU cores.
-  numParallelCollections: 4
+  numParallelCollections: 4      # PBM >= 2.7
 
 #==========================Restore Configuration===========================
 ## Options to adjust the memory consumption in environments with tight memory bounds.

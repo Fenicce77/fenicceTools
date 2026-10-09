@@ -1,0 +1,54 @@
+# pbm-conf-gcp-hmac.yaml - PBM configuration: GCP bucket through the
+# S3-compatible API with an HMAC key ("type: s3").
+#
+# Apply once per replica set (it REPLACES the whole PBM configuration, which
+# is stored in MongoDB and read by every pbm-agent):
+#   chmod 600 pbm-conf-gcp-hmac.yaml && pbm config --file pbm-conf-gcp-hmac.yaml
+#
+# Works with every PBM 2.x, and it is the template to use for:
+#   - PBM < 2.10 (2.5.0 for MongoDB 4.4, 2.3.1 for MongoDB 4.2): no native
+#     "gcs" type, an HMAC key is the only option;
+#   - PBM >= 2.16 with an HMAC key: the native "gcs" type only accepts a
+#     service account key or Workload Identity (see pbm-conf-gcs.yaml).
+# "pbm status" shows "S3 s3://https://storage.googleapis.com/<bucket>/<prefix>";
+# pbm-backup accepts it as GCS (REQUIRED_STORAGE_TYPES=GCS, the default).
+#
+# HMAC key: INSTALL.md 1.2 (A). Check it before applying:
+#   python3 /usr/local/share/doc/pbm-backup/gcs-hmac-test.py <bucket> <prefix> <region>
+# Keys checked in the PBM 2.5.0 and 2.16.0 source (pbm/storage/s3, pbm/config).
+# The file holds the HMAC secret: keep it 0600 and delete it after applying.
+
+storage:
+  type: s3
+  s3:
+    region: "<bucket location, e.g. europe-west3>"
+    endpointUrl: https://storage.googleapis.com
+    bucket: "<bucket>"
+    # One prefix per replica set, without a trailing "/".
+    prefix: "<prefix, e.g. mongocluster/rs44>"
+    credentials:
+      access-key-id: "<HMAC access id>"
+      secret-access-key: "<HMAC secret>"
+
+backup:
+  # pbm-backup also passes --compression/--compression-level on every backup.
+  compression: gzip
+  compressionLevel: 5
+  timeouts:
+    # Seconds PBM waits for a backup to leave the "starting" state.
+    startingStatus: 33
+  # PBM >= 2.7 only (logical backups, collections dumped in parallel):
+  #numParallelCollections: 4
+
+# PITR (oplog slices) is managed by pbm-backup. "pbm config --file" replaces
+# the whole configuration, PITR included:
+#   - PSMDB (physical scheme): keep this section commented (PITR must be off).
+#   - Community (logical scheme): pbm-backup enables PITR after the first
+#     full. If you re-apply this file on a replica set already in service,
+#     uncomment these lines (with your OPLOG_INCR_MIN) so that PITR stays on;
+#     otherwise no oplog is saved until the next full (gap in the chain).
+#pitr:
+#  enabled: true
+#  oplogSpanMin: 360
+#  compression: gzip
+#  compressionLevel: 5

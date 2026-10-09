@@ -42,7 +42,9 @@ backupTool/
 │       pbm-physical-incremental
 │       pbm-deletion
 ├── conf/                             [pkg] PBM templates
-│   ├── pbm-conf.yaml                       PBM cluster config (storage, backup, PITR) -> pbm config --file
+│   ├── pbm-conf-gcp-hmac.yaml              PBM config: GCP bucket via S3 + HMAC key, any PBM 2.x -> pbm config --file
+│   ├── pbm-conf-gcs.yaml                   PBM config: native gcs + service account key, PBM >= 2.10 -> pbm config --file
+│   ├── pbm-conf.yaml                       PBM config reference with every option (storage, backup, PITR)
 │   ├── pbm-agent.yaml                      pbm-agent config file, PBM >= 2.9         -> /etc/pbm-agent.yaml
 │   └── pbm-agent-config.conf               systemd drop-in loading it, PBM >= 2.9   -> pbm-agent.service.d/
 ├── systemd/                          [pkg]

@@ -336,6 +336,24 @@ skipped, probes returned nothing).
 - `tests/install.test.sh`: 71 lifecycle checks in a `--destdir` root (run by
   `build-dist.sh`).
 
+## PBM storage templates (0.6.7)
+
+- Two ready-to-use PBM configuration templates (`pbm config --file`), each
+  with its section uncommented:
+  - `conf/pbm-conf-gcp-hmac.yaml`: GCP bucket through the S3-compatible API
+    with an HMAC key (`type: s3`). Every PBM 2.x; the only option below 2.10
+    (MongoDB 4.2/4.4) and the only way to use HMAC from PBM 2.16.
+  - `conf/pbm-conf-gcs.yaml`: native `gcs` with a service account JSON key,
+    PBM >= 2.10 (Workload Identity >= 2.13 and HMAC 2.10 - 2.15 commented).
+  Both explain that `pbm config --file` replaces the PITR section too
+  (commented Community values to keep PITR on when re-applying).
+- Correction (checked in the PBM source): HMAC credentials exist in the
+  `gcs` type only in PBM 2.10 - 2.15; 2.16 removed them (`gcs` takes
+  `clientEmail`/`privateKey` or `workloadIdentity`). INSTALL.md §1.2 said
+  "PBM >= 2.10: optional HMAC"; with PBM >= 2.16 HMAC needs `type: s3`.
+- `backup.numParallelCollections` exists from PBM 2.7 (not in 2.5): marked in
+  the templates.
+
 ## Diffs of the replaced scripts
 
 <details>
