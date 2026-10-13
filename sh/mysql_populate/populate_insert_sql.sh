@@ -21,8 +21,11 @@
 qrytrans=""
 DEFMAXINS=1000
 MYSERVER=$1
-MYUSER="rmateos"
-MYPASS="MyB0nham2k21"
+MYUSER="${MYUSER:-rmateos}"
+# Password is never hardcoded. Preferred: mysql_config_editor login-path (or ~/.my.cnf, chmod 600):
+#   mysql_config_editor set --login-path=populate --host=<server> --user=rmateos --password
+#   mysql --login-path=populate ...
+# Fallback (deprecated in MySQL 8.0+, not shown in ps): read -rs MYSQL_PWD && export MYSQL_PWD
 if [ -z "$2" ]; then 
 	NUMINS=${DEFMAXINS}
 	echo "No insertion account limit provided, Default value : ${NUMINS} will be used "
@@ -32,7 +35,7 @@ else
 	echo "Insertion account limit provided : ${NUMINS} "
 fi
 #exit 0
-#INITROWSINTABLE=`echo "select count(*) as total from t1;"|mysql -u${MYUSER} -h $MYSERVER -A feniccedb -N -p${MYPASS}`
+#INITROWSINTABLE=`echo "select count(*) as total from t1;"|mysql -u${MYUSER} -h $MYSERVER -A feniccedb -N`
 #echo "[`date +"%Y-%m-%d %H:%M:%S"]` Initial Rows in table : ${INITROWSINTABLE}"
 for i in $(seq 1 $NUMINS);do
 	host=`hostname`
@@ -47,7 +50,7 @@ for i in $(seq 1 $NUMINS);do
 done
 fulltrans="${qryBegin}${qrytrans}${qryCommit}"
 #echo $fulltrans
-#echo $fulltrans | mysql -u${MYUSER} -h $MYSERVER -A feniccedb -N -p${MYPASS}
-#ROWSINTABLE=`echo "select count(*) as total from t1;"|mysql -u${MYUSER} -h $MYSERVER -A feniccedb -N -p${MYPASS}`
+#echo $fulltrans | mysql -u${MYUSER} -h $MYSERVER -A feniccedb -N
+#ROWSINTABLE=`echo "select count(*) as total from t1;"|mysql -u${MYUSER} -h $MYSERVER -A feniccedb -N`
 #echo "[`date +"%Y-%m-%d %H:%M:%S"]` Final Rows in table : ${ROWSINTABLE}"
 
