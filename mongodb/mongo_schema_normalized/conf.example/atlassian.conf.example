@@ -1,0 +1,50 @@
+# =============================================================================
+# <project_root>/conf/atlassian.conf  -  betika_mongodb_normalized
+#
+# Jira / Confluence Data Center (or Server) settings for --publish-jira and
+# --publish-confluence. Parsed as KEY=VALUE data: it is NEVER sourced/executed.
+# Recommended mode: chmod 600.
+#
+# Authentication: Personal Access Token (Authorization: Bearer). For servers
+# without PAT support (Jira < 8.14, Confluence < 7.9) set *_USER: HTTP basic
+# is then used with the token value as password.
+# =============================================================================
+
+# --- Jira ----------------------------------------------------------------------
+JIRA_URL="https://jira.betika.private"
+# Token: first defined source wins (same rules as instance passwords)
+JIRA_TOKEN_ENV="BMN_JIRA_PAT"
+# JIRA_TOKEN_FILE="~/.config/betika_mongodb_normalized/secrets/jira.pat"
+# JIRA_TOKEN_CMD="security find-generic-password -a rmateos -s bmn-jira -w"   # macOS Keychain
+# JIRA_USER="rmateos"                                                        # basic auth only
+
+JIRA_PROJECT="DBA"
+JIRA_ISSUE_TYPE="Task"
+JIRA_LABELS="mongodb,schema-centralization"
+# JIRA_COMPONENTS="Databases"
+# Update an existing issue instead of creating one (also: --jira-issue KEY;
+# otherwise the key stored in <report_dir>/publish.json is reused)
+# JIRA_ISSUE="DBA-1234"
+# Default summary: "MongoDB schema centralization analysis - <READY|BLOCKED> (N errors, N warnings) - <date>"
+# JIRA_SUMMARY="MongoDB centralization - Betika"
+# --jira-comment: restrict who can see the comment ("role:<project role>" or "group:<group>")
+# JIRA_COMMENT_VISIBILITY="role:Developers"
+# Files attached with --jira-attach (comma-separated, relative to the report directory)
+# JIRA_ATTACH="report.md,centralization_plan.md,analysis.json"
+
+# --- Confluence -------------------------------------------------------------------
+CONFLUENCE_URL="https://confluence.betika.private"
+CONFLUENCE_TOKEN_ENV="BMN_CONFLUENCE_PAT"
+# CONFLUENCE_TOKEN_FILE="~/.config/betika_mongodb_normalized/secrets/confluence.pat"
+# CONFLUENCE_USER="rmateos"
+
+CONFLUENCE_SPACE="DBA"
+# Parent page id for new pages (Page > ... > Page Information: pageId=NNN)
+# CONFLUENCE_PARENT_ID="123456"
+# A page with this title in the space is updated (new version); otherwise it is created.
+CONFLUENCE_TITLE="MongoDB schema centralization analysis"
+
+# --- Common -----------------------------------------------------------------------
+# Internal CA bundle for HTTPS (Data Center behind a corporate CA)
+# ATLASSIAN_CA_FILE="/etc/ssl/betika/ca.pem"
+# ATLASSIAN_TIMEOUT="60"

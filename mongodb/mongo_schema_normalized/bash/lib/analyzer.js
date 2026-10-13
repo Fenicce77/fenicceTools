@@ -1095,6 +1095,8 @@ function renderPlan(an) {
     '', '## 5. Generated artifacts', '',
     '- `analysis.json`: machine-readable analysis (mapping, drift, findings).',
     '- `report.md`: inventory and cross-instance comparison.',
+    '- `report.jira.txt`: Jira wiki markup summary for an issue description (REST API v2 or Data Center).',
+    '- `report.confluence.xml`: full report in Confluence storage format (REST API `body.storage`).',
     '- `target_bootstrap.js`: idempotent mongosh bootstrap for the target (phased).',
     '- `migration_commands.sh`: mongodump/mongorestore jobs with namespace remapping.',
     '- `normalization_suggestions.js`: type normalization candidates.',
@@ -1198,6 +1200,455 @@ function renderMigration(an, tplDir) {
   return replaceAll(s, '@@JOBS@@', jobs.join('\n'));
 }
 
+// ------------------------------------------------------------------ Atlassian renderers
+// Mirror of python/bmn/renderers_atlassian.py (Jira wiki markup + Confluence storage format).
+const JIRA_SAFE_LIMIT = 32000;
+const JIRA_SPECIAL = new Set('[]{}|*_+^~?-!#'.split(''));
+const JIRA_COLORS = { ERROR: '#DE350B', WARN: '#FF8B00', INFO: '#0052CC', READY: '#00875A', BLOCKED: '#DE350B' };
+const CONFLUENCE_COLOURS = { ERROR: 'Red', WARN: 'Yellow', INFO: 'Blue', READY: 'Green', BLOCKED: 'Red' };
+const RECOMMENDATIONS = [['Users to migrate (activity observed)', 'migrate'],
+  ['Users to review (access granted, no activity observed)', 'review'],
+  ['Users without activity data (no oplog window or sampling)', 'unknown']];
+// Items listed per section in compact mode (the rest is summarized): keeps every section in the description.
+const COMPACT_CAPS = { ERROR: 40, WARN: 25, rows: 60, items: 30 };
+const RUNBOOK = [
+  'Resolve every blocking issue and re-run the analysis until the status is READY.',
+  'Create the database-tools YAML files referenced by migration_commands.sh (chmod 600).',
+  'Freeze writes on the source databases: mongodump without --oplog is not point-in-time.',
+  'BMN_PHASE=collections mongosh <target> --file target_bootstrap.js (dry-run), then with BMN_APPLY=1.',
+  './migration_commands.sh --list, then ./migration_commands.sh --apply.',
+  'BMN_PHASE=indexes, then BMN_PHASE=views, then BMN_PHASE=security with BMN_APPLY=1.',
+  'Review and optionally apply normalization_suggestions.js.',
+  'BMN_PHASE=verify to compare document counts, then switch application connection strings.',
+];
+
+const reportStatus = (an) => (an.summary.errors ? 'BLOCKED' : 'READY');
+const targetText = (an) => (an.target ? `${an.target.name} (MongoDB ${an.target.version}, ${an.target.topology})` : 'not defined');
+const userName = (u) => (u.db ? `${u.user}@${u.db}` : u.user);
+const sortedKeys = (counts) => Object.entries(counts).sort(byCountThenName).map((e) => e[0]);
+
+function findingCounts(an) {
+  const seen = {};
+  const order = [];
+  for (const f of an.findings) {
+    const key = `${f.severity}|${f.code}`;
+    if (!has(seen, key)) {
+      order.push(key);
+      seen[key] = 0;
+    }
+    seen[key] += 1;
+  }
+  return order.map((k) => [k.split('|')[0], k.split('|')[1], seen[k]]);
+}
+
+// ---------------------------------------------------------------- Jira
+function jesc(text) {
+  let out = '';
+  for (const ch of String(text).split('\r').join(' ').split('\n').join(' ')) {
+    if (ch === '\\') out += '&#92;';
+    else if (JIRA_SPECIAL.has(ch)) out += `\\${ch}`;
+    else out += ch;
+  }
+  return out;
+}
+const jmono = (text) => `{{${jesc(text)}}}`;
+const jcolor = (sev, text) => `{color:${JIRA_COLORS[sev]}}*${jesc(text === undefined ? sev : text)}*{color}`;
+const jrow = (cells, header = false) => {
+  const sep = header ? '||' : '|';
+  return sep + cells.map((c) => (c !== '' ? c : ' ')).join(sep) + sep;
+};
+const jnoformat = (lines) => ['{noformat}'].concat(lines.map((l) => l.split('{noformat}').join('{ noformat}')), ['{noformat}']);
+
+function jiraFinding(f, maxDetails) {
+  const where = f.namespace ? ` ${jmono(f.namespace)}` : '';
+  const inst = f.instance ? ` (${jesc(f.instance)})` : '';
+  const lines = [`* ${jcolor(f.severity)} *${jesc(f.code)}*${where}${inst}: ${jesc(f.message)}`];
+  const details = f.details;
+  if (details.length && maxDetails > 0) {
+    let shown = details.slice(0, maxDetails);
+    if (details.length > maxDetails) shown = shown.concat([`... ${details.length - maxDetails} more (see report.md / analysis.json)`]);
+    lines.push(...jnoformat(shown));
+  }
+  return lines;
+}
+
+const capItems = (items, compact, key) => (!compact || items.length <= COMPACT_CAPS[key] ? [items, 0] : [items.slice(0, COMPACT_CAPS[key]), items.length - COMPACT_CAPS[key]]);
+const omittedLine = (n, what) => (n ? [`_... ${n} more ${what} (see report.md)_`] : []);
+
+function jiraBody(an, compact) {
+  const s = an.summary;
+  const status = reportStatus(an);
+  const p = an.params;
+  const L = [];
+  const note = s.errors ? `${s.errors} blocking error(s) must be resolved before migrating.` : 'No blocking errors (review the warnings).';
+  L.push(`{panel:title=MongoDB Schema Centralization - ${status}|borderColor=${JIRA_COLORS[status]}|titleBGColor=${JIRA_COLORS[status]}|titleColor=#FFFFFF}`,
+    `*Status:* ${jcolor(status)} - ${jesc(note)}`,
+    `*Findings:* ${jcolor('ERROR', `${s.errors} errors`)}, ${jcolor('WARN', `${s.warnings} warnings`)}, ${jcolor('INFO', `${s.info} info`)}`,
+    `*Target instance:* ${jesc(targetText(an))}`,
+    `*Scope:* ${s.sources} source instance(s), ${s.source_databases} database(s) -> ${s.target_databases}, ${s.source_collections} collection(s), ${s.source_views} view(s)`,
+    `*Naming strategy:* ${jmono(p.naming_strategy)} (separator ${jmono(p.prefix_sep)}, mapping entries: ${p.mapping_entries})`,
+    `*Generated at:* ${jesc(an.generated_at)} (${jesc(an.implementation)} implementation)`,
+    '{panel}', '');
+
+  L.push('h2. Instances', '', jrow(['Instance', 'Alias', 'Role', 'Status', 'Version', 'Topology', 'DBs', 'Collections', 'Documents', 'Storage', 'Indexes'], true));
+  for (const i of an.instances) {
+    const st = i.status === 'ok' ? jcolor('READY', 'ok') : jcolor('ERROR', i.status);
+    L.push(jrow([jesc(i.name), jesc(i.alias), jesc(i.role), st, jesc(i.version || '-'), jesc(i.topology || '-'), String(i.databases),
+      String(i.collections), String(i.documents), jesc(humanBytes(i.storage_size)), jesc(humanBytes(i.index_size))]));
+  }
+  const tot = an.capacity.total;
+  L.push('', `*Data to move:* ${jesc(humanBytes(tot.storage_size + tot.index_size))} (storage + indexes, ${tot.documents} document(s))`, '');
+
+  L.push('h2. Findings summary', '');
+  const counts = findingCounts(an);
+  if (counts.length) {
+    L.push(jrow(['Severity', 'Code', 'Count'], true));
+    for (const [sev, code, n] of counts) L.push(jrow([jcolor(sev), jmono(code), String(n)]));
+  } else {
+    L.push('_No findings._');
+  }
+  for (const [sev, title] of SEVERITY_TITLES.slice(0, 2)) {
+    const items = an.findings.filter((f) => f.severity === sev);
+    L.push('', `h2. ${title} (${items.length})`, '');
+    if (!items.length) L.push('_None._');
+    const [shown, omitted] = capItems(items, compact, sev);
+    for (const f of shown) L.push(...jiraFinding(f, compact ? 0 : (sev === 'ERROR' ? 10 : 5)));
+    L.push(...omittedLine(omitted, title.toLowerCase()));
+  }
+  const infos = an.findings.filter((f) => f.severity === 'INFO');
+  L.push('', `h2. Informational (${infos.length})`, '');
+  if (!infos.length) L.push('_None._');
+  const byCode = {};
+  for (const f of infos) (byCode[f.code] = byCode[f.code] || []).push(f.namespace || f.instance || '-');
+  for (const code of sortStr(Object.keys(byCode))) {
+    const targets = byCode[code];
+    let line = `* ${jmono(code)}: ${targets.length}`;
+    if (!compact) line += ` - ${jesc(limitList(targets, 8))}`;
+    L.push(line);
+  }
+
+  L.push('', 'h2. Database mapping', '');
+  if (an.db_mapping.length) {
+    L.push(jrow(['Instance', 'Source DB', 'Target DB', 'Reason', 'Collections', 'Documents', 'Storage'], true));
+    const [shown, omitted] = capItems(an.db_mapping, compact, 'rows');
+    for (const e of shown) {
+      let tgt = jmono(e.target_db);
+      if (e.source_db !== e.target_db) tgt = `*${tgt}*`;
+      L.push(jrow([jesc(e.instance), jmono(e.source_db), tgt, jesc(e.reason), String(e.collections), String(e.documents), jesc(humanBytes(e.storage_size))]));
+    }
+    L.push(...omittedLine(omitted, 'database mapping(s)'));
+  } else {
+    L.push('_No source databases._');
+  }
+
+  L.push('', 'h2. Required modifications', '');
+  const renames = an.db_mapping.filter((e) => e.source_db !== e.target_db);
+  L.push(`*Database renames (application impact):* ${renames.length}`);
+  let [shown, omitted] = capItems(renames, compact, 'items');
+  for (const e of shown) L.push(`* ${jesc(e.instance)}: ${jmono(e.source_db)} -> ${jmono(e.target_db)}`);
+  L.push(...omittedLine(omitted, 'rename(s)'));
+  const idxDrift = an.drift.filter((d) => d.index_diff.length);
+  L.push(`*Index harmonization:* ${idxDrift.length} namespace(s)`);
+  [shown, omitted] = capItems(idxDrift, compact, 'items');
+  for (const d of shown) L.push(`* ${jmono(d.namespace)}: ${d.index_diff.length} index difference(s)`);
+  L.push(...omittedLine(omitted, 'namespace(s)'));
+  L.push(`*Data type normalization candidates:* ${an.normalization.length}`);
+  [shown, omitted] = capItems(an.normalization, compact, 'items');
+  for (const n of shown) L.push(`* ${jmono(n.target_ns)} field ${jmono(n.path)} -> *${jesc(n.dominant_type)}*`);
+  L.push(...omittedLine(omitted, 'candidate(s)'));
+  if (an.users.length) {
+    for (const [title, rec] of RECOMMENDATIONS) {
+      const items = an.users.filter((u) => u.recommendation === rec);
+      L.push(`*${jesc(title)}:* ${items.length}`);
+      if (compact && rec !== 'migrate') continue;
+      const [uShown, uOmitted] = capItems(items, compact, 'rows');
+      for (const u of uShown) L.push(`* ${jesc(u.instance)}: ${jmono(userName(u))} - access: ${jesc(u.access.join(', ') || '-')}`);
+      L.push(...omittedLine(uOmitted, 'user(s)'));
+    }
+  } else {
+    L.push('*Users:* not collected (use --include-security and --oplog-window / --activity-samples)');
+  }
+
+  L.push('', 'h2. Next steps', '');
+  for (const step of RUNBOOK) L.push(`# ${jesc(step)}`);
+  L.push('', '----', `_${jesc('Full details: attach report.confluence.xml / report.md / centralization_plan.md / analysis.json. Generated by betika_mongodb_normalized.')}_`);
+  return `${L.join('\n')}\n`;
+}
+
+function renderJira(an) {
+  let text = jiraBody(an, false);
+  if (text.length <= JIRA_SAFE_LIMIT) return text; // String.length = UTF-16 code units, like Jira (Java)
+  text = jiraBody(an, true);
+  if (text.length <= JIRA_SAFE_LIMIT) return text;
+  const marker = '\n\n{color:#DE350B}*Truncated to fit the Jira description limit: see report.md.*{color}\n';
+  const budget = JIRA_SAFE_LIMIT - marker.length;
+  const kept = [];
+  let size = 0;
+  let inNoformat = false;
+  for (const line of text.split('\n')) {
+    const cost = line.length + 1;
+    if (size + cost > budget) break;
+    kept.push(line);
+    size += cost;
+    if (line === '{noformat}') inNoformat = !inNoformat;
+  }
+  if (inNoformat) kept.push('{noformat}');
+  return kept.join('\n') + marker;
+}
+
+// ---------------------------------------------------------------- Confluence
+const xesc = (text) => String(text).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('"').join('&quot;');
+const xcode = (text) => `<code>${xesc(text)}</code>`;
+const xstatus = (sev, title) => `<ac:structured-macro ac:name="status"><ac:parameter ac:name="colour">${CONFLUENCE_COLOURS[sev]}</ac:parameter><ac:parameter ac:name="title">${xesc(title === undefined ? sev : title)}</ac:parameter></ac:structured-macro>`;
+function xmacro(name, body, params) {
+  const ps = (params || []).map(([k, v]) => `<ac:parameter ac:name="${k}">${xesc(v)}</ac:parameter>`).join('');
+  const inner = body === null ? '' : `<ac:rich-text-body>${body}</ac:rich-text-body>`;
+  return `<ac:structured-macro ac:name="${name}">${ps}${inner}</ac:structured-macro>`;
+}
+const xcodeblock = (lines) => `<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">text</ac:parameter><ac:plain-text-body><![CDATA[${lines.join('\n').split(']]>').join(']]]]><![CDATA[>')}]]></ac:plain-text-body></ac:structured-macro>`;
+function xtable(head, rows) {
+  const out = ['<table><tbody>', `<tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr>`];
+  for (const r of rows) out.push(`<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`);
+  out.push('</tbody></table>');
+  return out.join('\n');
+}
+const xlist = (items, ordered = false) => {
+  const tag = ordered ? 'ol' : 'ul';
+  return `<${tag}>${items.map((i) => `<li>${i}</li>`).join('')}</${tag}>`;
+};
+const xp = (html) => `<p>${html}</p>`;
+
+function xfinding(f) {
+  const where = f.namespace ? ` ${xcode(f.namespace)}` : '';
+  const inst = f.instance ? ` (${xesc(f.instance)})` : '';
+  const head = `${xstatus(f.severity)} <strong>${xesc(f.code)}</strong>${where}${inst}: ${xesc(f.message)}`;
+  if (!f.details.length) return head;
+  return head + xmacro('expand', xcodeblock(f.details), [['title', `${f.details.length} detail line(s)`]]);
+}
+const xFindingsBlock = (items) => (items.length ? xlist(items.map(xfinding)) : xp('<em>None.</em>'));
+
+function renderConfluence(an, snapshots) {
+  const s = an.summary;
+  const status = reportStatus(an);
+  const p = an.params;
+  const B = [];
+  B.push(xmacro('toc', null, [['maxLevel', '2']]));
+  const note = s.errors ? `${s.errors} blocking error(s) must be resolved before migrating.` : 'No blocking errors (review the warnings).';
+  const summary = [
+    xp(`<strong>Status:</strong> ${xstatus(status)} ${xesc(note)}`),
+    xp(`<strong>Findings:</strong> ${xstatus('ERROR', `${s.errors} errors`)} ${xstatus('WARN', `${s.warnings} warnings`)} ${xstatus('INFO', `${s.info} info`)}`),
+    xp(`<strong>Target instance:</strong> ${xesc(targetText(an))}`),
+    xp(`<strong>Scope:</strong> ${s.sources} source instance(s), ${s.source_databases} database(s) -&gt; ${s.target_databases}, ${s.source_collections} collection(s), ${s.source_views} view(s)`),
+    xp(`<strong>Naming strategy:</strong> ${xcode(p.naming_strategy)} (separator ${xcode(p.prefix_sep)}, mapping entries: ${p.mapping_entries})`),
+    xp(`<strong>Generated at:</strong> ${xesc(an.generated_at)} (${xesc(an.implementation)} implementation)`),
+  ].join('');
+  B.push('<h1>1. Summary</h1>');
+  B.push(xmacro(s.errors ? 'warning' : 'tip', summary, [['title', `Status: ${status}`]]));
+
+  B.push('<h1>2. Findings</h1>');
+  const counts = findingCounts(an);
+  B.push(counts.length ? xtable(['Severity', 'Code', 'Count'], counts.map(([sev, code, n]) => [xstatus(sev), xcode(code), String(n)])) : xp('<em>No findings.</em>'));
+  for (const [sev, title] of SEVERITY_TITLES) {
+    const items = an.findings.filter((f) => f.severity === sev);
+    B.push(`<h2>${xesc(title)} (${items.length})</h2>`);
+    const block = xFindingsBlock(items);
+    B.push(sev === 'INFO' && items.length ? xmacro('expand', block, [['title', `Show ${items.length} informational finding(s)`]]) : block);
+  }
+
+  B.push('<h1>3. Instances and capacity</h1>');
+  B.push(xtable(['Instance', 'Alias', 'Role', 'Status', 'Version', 'FCV', 'Topology', 'DBs', 'Collections', 'Views', 'Documents', 'Data', 'Storage', 'Indexes'],
+    an.instances.map((i) => [xesc(i.name), xesc(i.alias), xesc(i.role), i.status === 'ok' ? xstatus('READY', 'ok') : xstatus('ERROR', i.status),
+      xesc(i.version || '-'), xesc(i.fcv || '-'), xesc(i.topology || '-'), String(i.databases), String(i.collections), String(i.views),
+      String(i.documents), xesc(humanBytes(i.data_size)), xesc(humanBytes(i.storage_size)), xesc(humanBytes(i.index_size))])));
+  const cap = an.capacity;
+  const capRows = cap.per_instance.map((r) => [xesc(r.instance), String(r.documents), xesc(humanBytes(r.data_size)), xesc(humanBytes(r.storage_size)), xesc(humanBytes(r.index_size))]);
+  const t = cap.total;
+  capRows.push(['<strong>Total</strong>', `<strong>${t.documents}</strong>`, `<strong>${xesc(humanBytes(t.data_size))}</strong>`,
+    `<strong>${xesc(humanBytes(t.storage_size))}</strong>`, `<strong>${xesc(humanBytes(t.index_size))}</strong>`]);
+  B.push('<h2>Capacity (sources)</h2>');
+  B.push(xtable(['Instance', 'Documents', 'Data', 'Storage', 'Indexes'], capRows));
+  const te = cap.target_existing;
+  if (te) {
+    B.push(xmacro('info', xp(`Target already holds ${te.documents} document(s), ${xesc(humanBytes(te.storage_size))} storage and `
+      + `${xesc(humanBytes(te.index_size))} of indexes. Required free space (storage + indexes of sources, `
+      + `without compression gains): <strong>${xesc(humanBytes(t.storage_size + t.index_size))}</strong>.`)));
+  }
+
+  B.push('<h1>4. Database mapping</h1>');
+  if (an.db_mapping.length) {
+    B.push(xtable(['Instance', 'Source DB', 'Target DB', 'Reason', 'Collections', 'Views', 'Documents', 'Storage'], an.db_mapping.map((e) => {
+      let tgt = xcode(e.target_db);
+      if (e.source_db !== e.target_db) tgt = `<strong>${tgt}</strong>`;
+      return [xesc(e.instance), xcode(e.source_db), tgt, xesc(e.reason), String(e.collections), String(e.views), String(e.documents), xesc(humanBytes(e.storage_size))];
+    })));
+  } else {
+    B.push(xp('<em>No source databases.</em>'));
+  }
+
+  B.push('<h1>5. Required modifications</h1>');
+  B.push('<h2>Blocking issues</h2>');
+  B.push(xFindingsBlock(an.findings.filter((f) => f.severity === 'ERROR')));
+  B.push('<h2>Database renames (application impact)</h2>');
+  const renames = an.db_mapping.filter((e) => e.source_db !== e.target_db);
+  if (renames.length) {
+    B.push(xp('Update connection strings, application database names and any cross-database $lookup/$merge/$out references:'));
+    B.push(xlist(renames.map((e) => `${xesc(e.instance)}: ${xcode(e.source_db)} -&gt; ${xcode(e.target_db)}`)));
+  } else {
+    B.push(xp('<em>No database renames required.</em>'));
+  }
+  B.push('<h2>Index harmonization</h2>');
+  const idxDrift = an.drift.filter((d) => d.index_diff.length);
+  B.push(idxDrift.length ? xlist(idxDrift.map((d) => `${xcode(d.namespace)}: agree on a single index set before consolidating`
+    + xlist(d.index_diff.map((x) => `${xcode(x.signature)} only in ${xesc(x.present_in.join(', '))}`)))) : xp('<em>No index drift between instances.</em>'));
+  B.push('<h2>Data type normalization</h2>');
+  if (an.normalization.length) {
+    B.push(xp(`Candidates executed by ${xcode('normalization_suggestions.js')} (dry-run by default) after the data load:`));
+    B.push(xlist(an.normalization.map((n) => `${xcode(n.target_ns)} field ${xcode(n.path)} -&gt; <strong>${xesc(n.dominant_type)}</strong> `
+      + `(${xesc(Object.entries(n.types).map(([k, v]) => `${k}=${v}`).join(', '))}; source ${xesc(n.instance)})`)));
+  } else {
+    B.push(xp('<em>No scalar type normalization candidates.</em>'));
+  }
+  B.push('<h2>Sharding</h2>');
+  const shard = an.findings.filter((f) => f.code === 'SHARD_KEY' || f.code === 'SHARD_KEY_LOST');
+  B.push(shard.length ? xFindingsBlock(shard) : xp('<em>No sharded source collections.</em>'));
+  B.push('<h2>Security</h2>');
+  const sp = an.security_plan;
+  if (sp === null) {
+    B.push(xp('<em>Security objects not collected (run the collection with --include-security).</em>'));
+  } else {
+    B.push(xp(`${sp.users.length} user(s) and ${sp.roles.length} custom role(s) will be created by the ${xcode('security')} bootstrap phase (passwords are prompted, never exported).`));
+    const conflicts = an.findings.filter((f) => f.code === 'USER_CONFLICT' || f.code === 'ROLE_CONFLICT');
+    if (conflicts.length) B.push(xFindingsBlock(conflicts));
+  }
+
+  B.push('<h1>6. Cross-instance comparison</h1>');
+  const overlap = {};
+  for (const e of an.db_mapping) (overlap[e.source_db] = overlap[e.source_db] || []).push(e.instance);
+  const shared = sortStr(Object.keys(overlap)).filter((d) => overlap[d].length > 1);
+  B.push('<h2>Database name overlap</h2>');
+  B.push(shared.length ? xtable(['Database', 'Instances'], shared.map((d) => [xcode(d), xesc(overlap[d].join(', '))])) : xp('<em>No overlapping database names.</em>'));
+  B.push('<h2>Shared namespaces (drift)</h2>');
+  if (!an.drift.length) B.push(xp('<em>No namespaces shared across instances.</em>'));
+  for (const d of an.drift) {
+    const items = [];
+    if (d.index_diff.length) {
+      items.push(`Indexes: <strong>${d.index_diff.length} difference(s)</strong>` + xlist(d.index_diff.map((x) => `${xcode(x.signature)} present in: ${xesc(x.present_in.join(', '))}; missing in: ${xesc(x.missing_in.join(', '))}`)));
+    } else {
+      items.push('Indexes: identical');
+    }
+    if (d.options_equal) items.push('Options: identical');
+    else items.push('Options: <strong>differ</strong>' + xlist(Object.entries(d.options).map(([i, v]) => `${xesc(i)}: ${xcode(v)}`)));
+    if (d.type_conflicts.length) {
+      items.push(`Field types: <strong>${d.type_conflicts.length} conflict(s)</strong>` + xlist(d.type_conflicts.map((tc) => `${xcode(tc.path)}: `
+        + xesc(Object.entries(tc.types).map(([i, v]) => `${i}=[${v.join(',')}]`).join('; ')))));
+    } else {
+      items.push('Field types: consistent');
+    }
+    B.push(`<h3>${xcode(d.namespace)} - ${xesc(d.instances.join(', '))}</h3>`);
+    B.push(xlist(items));
+  }
+
+  B.push('<h1>7. Activity</h1>');
+  if (!an.activity.length) {
+    B.push(xp('<em>Activity not collected.</em>'));
+  } else {
+    B.push(xmacro('info', xp('~ dates come from ObjectId _id values (inserts only, client clock). Last modified comes from date fields '
+      + 'matching the modified pattern: exact through an index or --modified-scan; ≥ is a lower bound taken from '
+      + 'the sampled documents.')));
+  }
+  for (const a of an.activity) {
+    B.push(`<h2>Instance ${xcode(a.instance)}</h2>`);
+    const o = a.oplog;
+    const smp = a.sampling;
+    const hasTop = a.collections.some((c) => c.top);
+    const hasOplog = o !== null && !o.error;
+    const hasUsers = hasOplog || smp !== null;
+    const notes = [];
+    if (a.members.length) {
+      notes.push(`Members: ${xesc(a.members.map((m) => `${m.host} (${m.state || 'unreachable'}${m.started_at ? `, up since ${m.started_at}` : ''})`).join(', '))}`);
+    }
+    if (o !== null) {
+      notes.push(o.error ? `Oplog: ${xstatus('ERROR', 'error')} ${xesc(o.error)}`
+        : `Oplog: ${o.window_hours} h requested on ${xesc(dash(o.member))}; analyzed from ${xesc(o.from)} to ${xesc(o.oplog_last)}`);
+    }
+    if (smp !== null) notes.push(`Live sampling: ${smp.samples} round(s) every ${smp.interval_s} s on ${smp.members} member(s), ${xesc(smp.started_at)} - ${xesc(dash(smp.finished_at))}`);
+    if (notes.length) B.push(xlist(notes));
+    if (!a.collections.length) {
+      B.push(xp('<em>No collections.</em>'));
+      continue;
+    }
+    const head = ['Namespace', '_id', 'First insert ~', 'Last insert ~', 'Last modified', 'Modified field'];
+    if (hasTop) head.push('Reads since restart', 'Writes since restart');
+    if (hasOplog) head.push('Created (oplog)', 'Last write (oplog)', 'Oplog i/u/d/c');
+    if (smp !== null) head.push('Sampled ops');
+    if (hasUsers) head.push('Users');
+    const rows = a.collections.map((c) => {
+      const row = [xcode(c.namespace), xesc(dash(c.id_type)), xesc(dash(c.first_insert)), xesc(dash(c.last_insert)), xesc(modifiedCell(c)), xesc(modifiedFieldCell(c))];
+      const tt = c.top;
+      if (hasTop) row.push(xesc(dash(tt ? tt.reads : null)), xesc(dash(tt ? tt.writes : null)));
+      const op = c.oplog;
+      if (hasOplog) row.push(xesc(dash(c.created_at)), xesc(dash(c.last_write)), op ? `${op.inserts}/${op.updates}/${op.deletes}/${op.commands}` : '-');
+      if (smp !== null) row.push(xesc(dash(c.sampled_ops)));
+      if (hasUsers) {
+        const users = {};
+        for (const u of c.users) users[u.user] = u.oplog + u.sampled;
+        row.push(xesc(limitList(topUsers(users, 3), 3)));
+      }
+      return row;
+    });
+    B.push(xtable(head, rows));
+  }
+
+  B.push('<h1>8. Users</h1>');
+  if (!an.users.length) {
+    B.push(xp('<em>No user information (collect with --include-security and/or --oplog-window / --activity-samples).</em>'));
+  } else {
+    const recColour = { migrate: 'READY', review: 'WARN', unknown: 'INFO' };
+    B.push(xtable(['Instance', 'User', 'Defined', 'Access (source DBs)', 'Observed via', 'Oplog writes', 'Sampled ops', 'Namespaces', 'Applications', 'Clients', 'Recommendation'],
+      an.users.map((u) => [xesc(u.instance), xcode(userName(u)), u.defined ? 'yes' : 'no', xesc(u.access.join(', ') || '-'), xesc(u.sources.join(', ') || '-'),
+        String(u.oplog_writes), String(u.sampled_ops), xesc(limitList(u.namespaces, 5)), xesc(limitList(sortedKeys(u.apps), 3)),
+        xesc(limitList(sortedKeys(u.clients), 3)), xstatus(recColour[u.recommendation], u.recommendation)])));
+    for (const [title, rec] of RECOMMENDATIONS) {
+      B.push(xp(`<strong>${xesc(title)}:</strong> ${an.users.filter((u) => u.recommendation === rec).length}`));
+    }
+  }
+
+  B.push('<h1>9. Inventory</h1>');
+  for (const snap of snapshots.slice().sort((a, b) => strcmp(sName(a), sName(b)))) {
+    const name = sName(snap);
+    if (snap.status !== 'ok') {
+      B.push(`<h2>Instance ${xcode(name)}</h2>`);
+      B.push(xmacro('warning', xp(`Collection failed: ${xesc(snap.error || 'unknown error')}`)));
+      continue;
+    }
+    const rows = [];
+    for (const d of sDbs(snap)) {
+      for (const c of sColls(d)) {
+        const ctype = c.type || 'collection';
+        if (ctype === 'view') {
+          rows.push([xcode(d.name), xcode(c.name), 'view'].concat(Array(8).fill('-')));
+          continue;
+        }
+        const opts = c.options || {};
+        const st = c.stats || {};
+        const mixed = Object.values(sFields(c)).filter((f) => classifyTypes(f.types || {}) === 'mixed').length;
+        rows.push([xcode(d.name), xcode(c.name), xesc(ctype), String(num(st.count)), xesc(humanBytes(st.size || 0)), xesc(humanBytes(st.storage_size || 0)),
+          String((c.indexes || []).length), xesc(humanBytes(st.total_index_size || 0)), opts.validator ? 'yes' : 'no',
+          c.shard_key ? xcode(canon(c.shard_key, false)) : '-', String(mixed)]);
+      }
+    }
+    const body = rows.length ? xtable(['Database', 'Collection', 'Type', 'Documents', 'Data', 'Storage', 'Indexes', 'Index size', 'Validator', 'Shard key', 'Mixed-type fields'], rows)
+      : xp('<em>No user databases.</em>');
+    B.push(`<h2>Instance ${xcode(name)}</h2>`);
+    B.push(xmacro('expand', body, [['title', `${rows.length} collection(s) / view(s)`]]));
+  }
+
+  B.push('<h1>10. Execution runbook</h1>');
+  B.push(xlist(RUNBOOK.map(xesc), true));
+  B.push(xmacro('note', xp(`Generated by betika_mongodb_normalized. Machine-readable details: ${xcode('analysis.json')}; raw snapshots: ${xcode('snapshots/')}.`)));
+  return `${B.join('\n')}\n`;
+}
+
 // ------------------------------------------------------------------ io / main
 function loadMappings(file) {
   if (!file) return [];
@@ -1268,6 +1719,8 @@ function main() {
     ['analysis.json', `${dumpPretty(an)}\n`],
     ['report.md', renderReport(an, snapshots)],
     ['centralization_plan.md', renderPlan(an)],
+    ['report.jira.txt', renderJira(an)],
+    ['report.confluence.xml', renderConfluence(an, snapshots)],
     ['target_bootstrap.js', renderBootstrap(an, snapshots, tplDir)],
     ['migration_commands.sh', renderMigration(an, tplDir)],
     ['normalization_suggestions.js', renderNormalization(an, tplDir)],

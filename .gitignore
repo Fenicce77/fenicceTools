@@ -35,3 +35,17 @@ coverage.out
 /obj/mac/porko1k
 /obj/mac/porko2k
 /obj/mac/porko5k
+
+# Local MongoDB connection files with credentials (use the *.template.* files)
+mongodb/monitoringTools/*/conf/*_mongo_config.conf
+mongodb/monitoringTools/sh/*_mongo_config.conf
+mongodb/monitoringTools/*/conf/mongo_config.conf
+mongodb/monitoringTools/sh/mongo_config.conf
+mongodb/sh/mongoconn.*.sh
+!mongodb/sh/mongoconn.template.sh
+
+# mongo_schema_normalized: local configuration and collected data
+mongodb/mongo_schema_normalized/conf/
+mongodb/mongo_schema_normalized/reports/
+mongodb/mongo_schema_normalized/bash/reports/
+mongodb/mongo_schema_normalized/snapshots/
