@@ -5,6 +5,8 @@ import re
 import argparse
 from pymongo import MongoClient
 
+from mt_credentials import CredentialError, client_settings, die, parse_config
+
 class Colors:
     CYAN = '\033[96m'
     GREEN = '\033[92m'
@@ -31,28 +33,24 @@ def show_help():
     print(f"{Colors.BOLD}EXAMPLES:{Colors.RESET}")
     print(f"  python3 {script_name} mongo_config.conf")
     print(f"  python3 {script_name} mongo_config.conf --exclude-internal")
-    print(f"  python3 {script_name} mongo_config.conf --group hour\n")
+    print(f"  python3 {script_name} mongo_config.conf --group hour")
+    print(f"  read -rs MONGO_PWD_PROD && export MONGO_PWD_PROD   # config: MONGOADMINPAS_ENV=\"MONGO_PWD_PROD\"")
+    print(f"  python3 {script_name} prod_mongo_config.conf --exclude-internal\n")
+    print(f"{Colors.BOLD}CREDENTIALS (config file, first defined wins):{Colors.RESET}")
+    print(f"  {Colors.YELLOW}MONGOADMINPAS_ENV{Colors.RESET}     Name of an environment variable holding the password.")
+    print(f"  {Colors.YELLOW}MONGOADMINPAS_FILE{Colors.RESET}    File whose first line is the password (chmod 600).")
+    print(f"  {Colors.YELLOW}MONGOADMINPAS_CMD{Colors.RESET}     Command printing the password (Keychain, pass, vault...).")
+    print(f"  {Colors.YELLOW}MONGOADMINPAS{Colors.RESET}         Plaintext password (legacy, warned).\n")
     sys.exit(0)
 
-def build_uri_from_config(config_path):
-    config = {}
+def build_client_settings(config_path):
     if not os.path.isfile(config_path):
         print(f"{Colors.RED}Error: Configuration file '{config_path}' not found.{Colors.RESET}")
         sys.exit(1)
-
-    with open(config_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'): continue
-            if line.startswith('export '): line = line.replace('export ', '', 1)
-            if '=' in line:
-                key, value = line.split('=', 1)
-                config[key.strip()] = value.strip(' "\'')
-
-    host_parts = config['MONGOHOST'].split('/')
-    if len(host_parts) == 2:
-        return f"mongodb://{config['MONGOADMINUSR']}:{config['MONGOADMINPAS']}@{host_parts[1]}/?replicaSet={host_parts[0]}&authSource={config['ADMINDB']}"
-    return f"mongodb://{config['MONGOADMINUSR']}:{config['MONGOADMINPAS']}@{config['MONGOHOST']}/?authSource={config['ADMINDB']}"
+    try:
+        return client_settings(parse_config(config_path))
+    except CredentialError as exc:
+        die(str(exc))
 
 def format_delta(diff, pct, is_size=False):
     sign = "+" if diff > 0 else ""
@@ -67,10 +65,10 @@ def format_delta(diff, pct, is_size=False):
     return f"{color}{padded_str}{Colors.RESET}"
 
 def analyze_oplog(config_file, include_pbm, exclude_internal, group_by):
-    mongo_uri = build_uri_from_config(config_file)
+    settings = build_client_settings(config_file)
 
     try:
-        client = MongoClient(mongo_uri)
+        client = MongoClient(**settings)
         oplog = client["local"]["oplog.rs"]
 
         match_query = {"op": {"$in": ["i", "u", "d"]}}

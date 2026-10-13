@@ -1,4 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/mongo_auth.sh
+source "${SCRIPT_DIR}/lib/mongo_auth.sh"
 
 print_help() {
     printf "\n\033[95m\033[1m=== MongoDB Live Activity Monitor (Percona 8.0.x) ===\033[0m\n\n"
@@ -10,9 +15,17 @@ print_help() {
     printf "  \033[32m-t, --time\033[0m     Initial filter for minimum execution time in seconds (Default: 0)\n"
     printf "  \033[32m-c, --config\033[0m   Path to custom config file (Default: searches locally for mongo_config.conf)\n"
     printf "  \033[32m-h, --help\033[0m     Show this colored help message and exit\n\n"
+    printf "\033[1mCREDENTIALS (config file, first defined wins):\033[0m\n"
+    printf "  \033[33mMONGOADMINPAS_ENV\033[0m    Name of an environment variable holding the password\n"
+    printf "  \033[33mMONGOADMINPAS_FILE\033[0m   File whose first line is the password (chmod 600)\n"
+    printf "  \033[33mMONGOADMINPAS_CMD\033[0m    Command printing the password (Keychain, pass, vault...)\n"
+    printf "  \033[33mMONGOADMINPAS\033[0m        Plaintext password (legacy, warned)\n"
+    printf "  The password is passed to mongosh through its environment, never on the command line.\n\n"
     printf "\033[1mEXAMPLES:\033[0m\n"
     printf "  $0 -d 3\n"
-    printf "  $0 --user appUser1,appUser2 --time 5 --delay 2\n\n"
+    printf "  $0 --user appUser1,appUser2 --time 5 --delay 2\n"
+    printf "  read -rs MONGO_PWD_PROD && export MONGO_PWD_PROD   # config: MONGOADMINPAS_ENV=\"MONGO_PWD_PROD\"\n"
+    printf "  $0 -c prod_mongo_config.conf -d 3\n\n"
 }
 
 if [ "$#" -eq 0 ]; then
@@ -27,11 +40,11 @@ DELAY=2
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        -c|--config) CONFIG_FILE="$2"; shift ;;
-        -u|--user) FILTER_USER="$2"; shift ;;
-        -t|--time) MIN_TIME="$2"; shift ;;
+        -c|--config) CONFIG_FILE="${2:-}"; shift ;;
+        -u|--user) FILTER_USER="${2:-}"; shift ;;
+        -t|--time) MIN_TIME="${2:-}"; shift ;;
         -d|--delay) 
-            if [[ "$2" =~ ^[0-9]+$ ]]; then
+            if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
                 DELAY="$2"; shift
             else
                 DELAY=2
@@ -51,13 +64,13 @@ if [ -z "$CONFIG_FILE" ] || [ ! -f "$CONFIG_FILE" ]; then
         exit 1
     fi
 fi
+# shellcheck disable=SC1090
 source "$CONFIG_FILE"
-
-IFS='/' read -r REPLSET NODES <<< "$MONGOHOST"
-CONN_URI="mongodb://${MONGOADMINUSR}:${MONGOADMINPAS}@${NODES}/?authSource=${ADMINDB}&replicaSet=${REPLSET}"
+mt_check_config
+MT_PRELUDE="$(mt_js_prelude)"
 
 while true; do
-    clear
+    clear 2>/dev/null || true
 
     JS_SCRIPT="
         const C_BLU = '\x1b[34m', C_GRN = '\x1b[32m', C_RED = '\x1b[31m', C_RST = '\x1b[0m', C_BLD = '\x1b[1m';
@@ -111,14 +124,14 @@ while true; do
     printf "Users Filter: \033[32m%s\033[0m | Min Time: \033[32m%ss\033[0m | Refresh: \033[32m%ss\033[0m\n" "$DISPLAY_USERS" "$MIN_TIME" "$DELAY"
     printf "%s\n" "----------------------------------------------------------------------------------------------------------------------------------------------------------------"
     
-    env NODE_NO_WARNINGS=1 $MONGOSHBINPATH "$CONN_URI" --quiet --eval "$JS_SCRIPT" 2>/dev/null
+    mt_mongosh --quiet --eval "${MT_PRELUDE}
+${JS_SCRIPT}" 2>/dev/null || true
     
     printf "%s\n" "----------------------------------------------------------------------------------------------------------------------------------------------------------------"
     printf "\033[1mInteractive Menu (Press Key):\033[0m [\033[33mu\033[0m] Set Users | [\033[33mt\033[0m] Min Time | [\033[33md\033[0m] Delay | [\033[33mq\033[0m] Quit\n"
     
-    read -t $DELAY -n 1 choice
-    
-    if [ $? -eq 0 ]; then
+    choice=""
+    if read -r -t "$DELAY" -n 1 choice; then
         echo ""
         case $choice in
             u|U) read -p "Enter users to monitor (comma-separated, leave blank for all): " FILTER_USER ;;

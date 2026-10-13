@@ -9,6 +9,8 @@ import tty
 import argparse
 from pymongo import MongoClient
 
+from mt_credentials import CredentialError, client_settings, die, parse_config
+
 class Colors:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
@@ -32,10 +34,18 @@ def print_help():
   {Colors.GREEN}-c, --config{Colors.END}   Path to custom config file (Default: searches locally for mongo_config.conf)
   {Colors.GREEN}-h, --help{Colors.END}     Show this colored help message and exit
 
+{Colors.BOLD}CREDENTIALS (config file, first defined wins):{Colors.END}
+  {Colors.WARN}MONGOADMINPAS_ENV{Colors.END}    Name of an environment variable holding the password
+  {Colors.WARN}MONGOADMINPAS_FILE{Colors.END}   File whose first line is the password (chmod 600)
+  {Colors.WARN}MONGOADMINPAS_CMD{Colors.END}    Command printing the password (Keychain, pass, vault...)
+  {Colors.WARN}MONGOADMINPAS{Colors.END}        Plaintext password (legacy, warned)
+
 {Colors.BOLD}EXAMPLES:{Colors.END}
   {sys.argv[0]} -d        (Starts with default 2s delay)
   {sys.argv[0]} -d 5      (Starts with 5s delay)
   {sys.argv[0]} --user appUser1,appUser2 --time 5 -d
+  read -rs MONGO_PWD_PROD && export MONGO_PWD_PROD   # config: MONGOADMINPAS_ENV="MONGO_PWD_PROD"
+  {sys.argv[0]} -c prod_mongo_config.conf -d 3
 """
     print(help_text)
 
@@ -51,18 +61,6 @@ def find_config(custom_path=None):
         if os.path.exists(path):
             return path
     return None
-
-def parse_config(config_path):
-    config = {}
-    with open(config_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("export "):
-                line = line[7:]
-            if "=" in line:
-                key, val = line.split("=", 1)
-                config[key] = val.strip('"').strip("'").strip('`')
-    return config
 
 def get_single_keypress(timeout):
     fd = sys.stdin.fileno()
@@ -98,17 +96,13 @@ def main():
         print(f"{Colors.FAIL}Error: mongo_config.conf not found.{Colors.END}")
         sys.exit(1)
 
-    conf = parse_config(config_path)
     try:
-        replset_name, nodes = conf.get("MONGOHOST", "").split("/", 1)
-    except ValueError:
-        print(f"{Colors.FAIL}Error: MONGOHOST must be 'replSetName/node1,node2'{Colors.END}")
-        sys.exit(1)
+        settings = client_settings(parse_config(config_path))
+    except CredentialError as exc:
+        die(str(exc))
 
-    uri = f"mongodb://{conf.get('MONGOADMINUSR')}:{conf.get('MONGOADMINPAS')}@{nodes}/?authSource={conf.get('ADMINDB')}&replicaSet={replset_name}"
-    
     try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client = MongoClient(serverSelectionTimeoutMS=5000, **settings)
         client.admin.command('ping')
     except Exception as e:
         print(f"{Colors.FAIL}Connection failed: {e}{Colors.END}")
