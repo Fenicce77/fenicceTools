@@ -1,4 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/mongo_auth.sh
+source "${SCRIPT_DIR}/lib/mongo_auth.sh"
 
 function show_help() {
     echo -e "\n\033[96m\033[1m=== MONGODB OPLOG ANALYZER ===\033[0m\n"
@@ -13,10 +18,18 @@ function show_help() {
     echo -e "  \033[92m--include-pbm\033[0m         Include Percona Backup for MongoDB (admin.pbm*) collections."
     echo -e "  \033[92m--exclude-internal\033[0m    Exclude native MongoDB DBs/collections (config, admin, local, system)."
     echo -e "  \033[92m--group <hour|day>\033[0m    Force grouping by 'hour' or 'day'. Adapts dynamically if omitted.\n"
+    echo -e "\033[1mCREDENTIALS (config file, first defined wins):\033[0m"
+    echo -e "  \033[93mMONGOADMINPAS_ENV\033[0m     Name of an environment variable holding the password."
+    echo -e "  \033[93mMONGOADMINPAS_FILE\033[0m    File whose first line is the password (chmod 600)."
+    echo -e "  \033[93mMONGOADMINPAS_CMD\033[0m     Command printing the password (Keychain, pass, vault...)."
+    echo -e "  \033[93mMONGOADMINPAS\033[0m         Plaintext password (legacy, warned)."
+    echo -e "  The password is passed to mongosh through its environment, never on the command line.\n"
     echo -e "\033[1mEXAMPLES:\033[0m"
     echo -e "  $0 mongo_config.conf"
     echo -e "  $0 mongo_config.conf --exclude-internal"
-    echo -e "  $0 mongo_config.conf --group day\n"
+    echo -e "  $0 mongo_config.conf --group day"
+    echo -e "  read -rs MONGO_PWD_PROD && export MONGO_PWD_PROD   # config: MONGOADMINPAS_ENV=\"MONGO_PWD_PROD\""
+    echo -e "  $0 prod_mongo_config.conf --exclude-internal\n"
     exit 0
 }
 
@@ -33,7 +46,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --include-pbm) INCLUDE_PBM="true"; shift ;;
         --exclude-internal) EXCLUDE_INTERNAL="true"; shift ;;
-        --group) GROUP_BY="$2"; shift 2 ;;
+        --group) GROUP_BY="${2:-}"; shift; [[ "$#" -gt 0 ]] && shift ;;
         -h|--help) show_help ;;
         *) CONFIG_FILE="$1"; shift ;;
     esac
@@ -50,7 +63,9 @@ if [[ -n "$GROUP_BY" && "$GROUP_BY" != "hour" && "$GROUP_BY" != "day" ]]; then
 fi
 
 if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
     source "$CONFIG_FILE"
+    mt_check_config
 else
     echo -e "\033[91mError: Configuration file $CONFIG_FILE not found.\033[0m"
     exit 1
@@ -58,12 +73,13 @@ fi
 
 echo -e "\033[96mConnecting to $MONGOHOST and analyzing data...\033[0m"
 
-export NO_UPDATE_NOTIFIER=true
-export DISABLE_UPDATE_NOTIFIER=true
+# Portable temp file with a .js suffix (BSD mktemp does not expand X's before a suffix)
+JS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/analyze_oplog.XXXXXX")"
+JS_FILE="${JS_DIR}/analyze_oplog.js"
+trap 'rm -rf "${JS_DIR}"' EXIT
+mt_js_prelude > "$JS_FILE"
 
-JS_FILE=$(mktemp /tmp/analyze_oplog_XXXXXX.js)
-
-cat << EOF > "$JS_FILE"
+cat << EOF >> "$JS_FILE"
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const CYAN = "\x1b[36m";
@@ -245,5 +261,4 @@ if (printableRows.length === 0) {
 }
 EOF
 
-$MONGOSHBINPATH --host "$MONGOHOST" -u "$MONGOADMINUSR" -p "$MONGOADMINPAS" --authenticationDatabase "$ADMINDB" --quiet "$JS_FILE"
-rm -f "$JS_FILE"
+mt_mongosh --quiet "$JS_FILE"
