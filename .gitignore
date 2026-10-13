@@ -46,6 +46,5 @@ mongodb/sh/mongoconn.*.sh
 
 # mongo_schema_normalized: local configuration and collected data
 mongodb/mongo_schema_normalized/conf/
-mongodb/mongo_schema_normalized/reports/
 mongodb/mongo_schema_normalized/bash/reports/
 mongodb/mongo_schema_normalized/snapshots/
