@@ -53,6 +53,16 @@ SECTIONS: List[Tuple[str, str, List[Option]]] = [
         ("    --activity-samples", "N", "Live $currentOp sampling rounds", ("def", "0 = disabled")),
         ("    --activity-interval", "SEC", "Seconds between sampling rounds", ("def", "10")),
     ]),
+    ("PUBLISH OPTIONS", "run, analyze, publish  (Jira / Confluence Data Center: conf/atlassian.conf)", [
+        ("    --publish-jira", "", "Create or update the Jira issue (report.jira.txt)", ("opt", "")),
+        ("    --publish-confluence", "", "Create or update the Confluence page", ("opt", "")),
+        ("    --publish-dry-run", "", "Show the publication plan (read-only calls)", ("opt", "")),
+        ("    --atlassian-conf", "FILE", "Jira / Confluence settings", ("def", "<conf-dir>/atlassian.conf")),
+        ("    --jira-issue", "KEY", "Update this issue instead of creating one", ("def", "JIRA_ISSUE / publish.json")),
+        ("    --jira-comment", "", "Add the report as a comment to --jira-issue KEY", ("opt", "")),
+        ("    --jira-attach", "", "Attach report.md, plan and analysis.json", ("opt", "")),
+        ("    --confluence-title", "TITLE", "Page title (updated in place if it exists)", ("def", "CONFLUENCE_TITLE")),
+    ]),
     ("CHECK OPTIONS", "check", [
         ("    --connect", "", "Also test connectivity with every instance", ("opt", "")),
     ]),
@@ -65,6 +75,12 @@ EXAMPLES = [
     ("plan against the central instance, including users and roles", "run --target central01 --include-security"),
     ("users to migrate: 24 h of oplog + 30 live samples (5 min)",
      "run --include-security --oplog-window 24 --activity-samples 30 --activity-interval 10"),
+    ("preview, then publish an existing report to Jira and Confluence",
+     "publish -o ./reports/20261013T100000Z --publish-jira --publish-confluence --publish-dry-run"),
+    ("analyze and publish in one go, attaching the reports to the issue",
+     "run --publish-jira --publish-confluence --jira-attach"),
+    ("comment the analysis on an existing ticket (summary/description untouched)",
+     "publish -o ./reports/20261013T100000Z --jira-comment --jira-issue DBA-1234"),
     ("re-analyze existing snapshots with another strategy (no DB access)",
      "analyze -s ./reports/20260930T101500Z/snapshots -n prefix"),
 ]
@@ -128,6 +144,7 @@ def render_help(prog: str, colored: bool) -> str:
     command("collect", "Only collect snapshots into <output-dir>/snapshots")
     command("analyze", "Offline analysis of existing snapshots (no DB)", f"{_tag(('req', 'analyze'), c)} --snapshot-dir")
     command("check", "Validate configuration files and secrets")
+    command("publish", "Publish an existing report to Jira / Confluence", f"{_tag(('req', 'publish'), c)} --output-dir")
 
     for title, subtitle, options in SECTIONS:
         section(title, subtitle)
@@ -155,7 +172,7 @@ def render_help(prog: str, colored: bool) -> str:
 
     section("EXIT CODES")
     lines.append(f"  {c('0', 'opt')} ok   {c('1', 'req')} blocking findings   {c('2', 'req')} usage/config error"
-                 f"   {c('3', 'req')} collection errors")
+                 f"   {c('3', 'req')} collection errors   {c('4', 'req')} publication errors")
     return "\n".join(lines) + "\n"
 
 

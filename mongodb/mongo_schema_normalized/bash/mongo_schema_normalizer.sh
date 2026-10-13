@@ -16,6 +16,8 @@ readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly BMN_HOME="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 readonly LIB_DIR="${SCRIPT_DIR}/lib"
+# shellcheck source=lib/publish.sh
+source "${LIB_DIR}/publish.sh"
 readonly TEMPLATES_DIR="${BMN_HOME}/share/templates"
 PROJECT_ROOT="${BMN_PROJECT_ROOT:-$(cd "${BMN_HOME}/.." && pwd -P)}"
 
@@ -47,6 +49,14 @@ MEMBER_STATS=0
 MODIFIED_PATTERN="modif"
 MODIFIED_SCAN=0
 STALE_DAYS=180
+PUBLISH_JIRA=0
+PUBLISH_CONFLUENCE=0
+PUBLISH_DRY_RUN=0
+ATLASSIAN_CONF=""
+JIRA_ISSUE_KEY=""
+JIRA_ATTACH_FLAG=0
+JIRA_COMMENT_FLAG=0
+CONFLUENCE_TITLE_OPT=""
 VERBOSE=0
 MONGOSH_BIN="${MONGOSH_BIN:-}"
 TMP_DIR=""
@@ -127,6 +137,7 @@ usage() {
   h_cmd collect "Only collect snapshots into <output-dir>/snapshots"
   h_cmd analyze "Offline analysis of existing snapshots (no DB)" "$(h_req 'analyze') --snapshot-dir"
   h_cmd check   "Validate configuration files and secrets"
+  h_cmd publish "Publish an existing report to Jira / Confluence" "$(h_req 'publish') --output-dir"
 
   h_section "GENERAL OPTIONS" "all commands"
   h_opt "-c, --conf-dir" "DIR" "Instance configuration directory (*.conf)" "$(h_def '<project_root>/conf')"
@@ -167,6 +178,16 @@ usage() {
   h_opt "    --activity-samples" "N" "Live \$currentOp sampling rounds" "$(h_def '0 = disabled')"
   h_opt "    --activity-interval" "SEC" "Seconds between sampling rounds" "$(h_def '10')"
 
+  h_section "PUBLISH OPTIONS" "run, analyze, publish  (Jira / Confluence Data Center: conf/atlassian.conf)"
+  h_opt "    --publish-jira" "" "Create or update the Jira issue (report.jira.txt)" "$(h_optnl)"
+  h_opt "    --publish-confluence" "" "Create or update the Confluence page" "$(h_optnl)"
+  h_opt "    --publish-dry-run" "" "Show the publication plan (read-only calls)" "$(h_optnl)"
+  h_opt "    --atlassian-conf" "FILE" "Jira / Confluence settings" "$(h_def '<conf-dir>/atlassian.conf')"
+  h_opt "    --jira-issue" "KEY" "Update this issue instead of creating one" "$(h_def 'JIRA_ISSUE / publish.json')"
+  h_opt "    --jira-comment" "" "Add the report as a comment to --jira-issue KEY" "$(h_optnl)"
+  h_opt "    --jira-attach" "" "Attach report.md, plan and analysis.json" "$(h_optnl)"
+  h_opt "    --confluence-title" "TITLE" "Page title (updated in place if it exists)" "$(h_def 'CONFLUENCE_TITLE')"
+
   h_section "CHECK OPTIONS" "check"
   h_opt "    --connect" "" "Also test connectivity with every instance" "$(h_optnl)"
 
@@ -186,6 +207,12 @@ usage() {
   printf '  %s run --target central01 --include-security\n' "${SCRIPT_NAME}"
   printf '  %s# users to migrate: 24 h of oplog + 30 live samples (5 min)%s\n' "${H_DIM}" "${H_OFF}"
   printf '  %s run --include-security --oplog-window 24 --activity-samples 30 --activity-interval 10\n' "${SCRIPT_NAME}"
+  printf '  %s# preview, then publish an existing report to Jira and Confluence%s\n' "${H_DIM}" "${H_OFF}"
+  printf '  %s publish -o ./reports/20261013T100000Z --publish-jira --publish-confluence --publish-dry-run\n' "${SCRIPT_NAME}"
+  printf '  %s# analyze and publish in one go, attaching the reports to the issue%s\n' "${H_DIM}" "${H_OFF}"
+  printf '  %s run --publish-jira --publish-confluence --jira-attach\n' "${SCRIPT_NAME}"
+  printf '  %s# comment the analysis on an existing ticket (summary/description untouched)%s\n' "${H_DIM}" "${H_OFF}"
+  printf '  %s publish -o ./reports/20261013T100000Z --jira-comment --jira-issue DBA-1234\n' "${SCRIPT_NAME}"
   printf '  %s# re-analyze existing snapshots with another strategy (no DB access)%s\n' "${H_DIM}" "${H_OFF}"
   printf '  %s analyze -s ./reports/20260930T101500Z/snapshots -n prefix\n' "${SCRIPT_NAME}"
 
@@ -200,8 +227,8 @@ usage() {
   printf '  %s%-18s%s disable colors when set\n' "${H_ARG}" NO_COLOR "${H_OFF}"
 
   h_section "EXIT CODES"
-  printf '  %s0%s ok   %s1%s blocking findings   %s2%s usage/config error   %s3%s collection errors\n' \
-    "${H_OPT}" "${H_OFF}" "${H_REQ}" "${H_OFF}" "${H_REQ}" "${H_OFF}" "${H_REQ}" "${H_OFF}"
+  printf '  %s0%s ok   %s1%s blocking findings   %s2%s usage/config error   %s3%s collection errors   %s4%s publication errors\n' \
+    "${H_OPT}" "${H_OFF}" "${H_REQ}" "${H_OFF}" "${H_REQ}" "${H_OFF}" "${H_REQ}" "${H_OFF}" "${H_REQ}" "${H_OFF}"
 }
 
 # --- helpers --------------------------------------------------------------------
@@ -243,7 +270,7 @@ parse_args() {
   for a in "$@"; do [[ "${a}" == "--no-color" ]] && disable_colors; done
   if [[ $# -gt 0 ]]; then
     case "$1" in
-      run|collect|analyze|check) COMMAND="$1"; shift ;;
+      run|collect|analyze|check|publish) COMMAND="$1"; shift ;;
     esac
   fi
   while [[ $# -gt 0 ]]; do
@@ -274,6 +301,14 @@ parse_args() {
       --modified-pattern) MODIFIED_PATTERN="${2?$1 requires a value}"; shift ;;
       --modified-scan) MODIFIED_SCAN=1 ;;
       --stale-days) STALE_DAYS="${2:?$1 requires a value}"; shift ;;
+      --publish-jira) PUBLISH_JIRA=1 ;;
+      --publish-confluence) PUBLISH_CONFLUENCE=1 ;;
+      --publish-dry-run) PUBLISH_DRY_RUN=1 ;;
+      --atlassian-conf) ATLASSIAN_CONF="${2:?$1 requires a value}"; shift ;;
+      --jira-issue) JIRA_ISSUE_KEY="${2:?$1 requires a value}"; shift ;;
+      --jira-attach) JIRA_ATTACH_FLAG=1 ;;
+      --jira-comment) JIRA_COMMENT_FLAG=1 ;;
+      --confluence-title) CONFLUENCE_TITLE_OPT="${2:?$1 requires a value}"; shift ;;
       --no-color) disable_colors ;;
       -v|--verbose) VERBOSE=1 ;;
       -V|--version) echo "betika_mongodb_normalized ${VERSION}"; exit 0 ;;
@@ -660,12 +695,23 @@ main() {
   trap 'log_error "interrupted"; exit 130' INT TERM
   parse_args "$@"
   umask 077
+  local wants_publish=0 rc_p=0
+  [[ "${PUBLISH_JIRA}" -eq 1 || "${PUBLISH_CONFLUENCE}" -eq 1 || "${JIRA_COMMENT_FLAG}" -eq 1 ]] && wants_publish=1
   case "${COMMAND}" in
     check) cmd_check; exit $? ;;
+    publish)
+      [[ -n "${OUTPUT_DIR}" ]] || die "publish requires --output-dir (the report directory)"
+      [[ "${wants_publish}" -eq 1 ]] || die "publish requires --publish-jira, --jira-comment and/or --publish-confluence"
+      cmd_publish "${OUTPUT_DIR}" || rc_p=$?; exit "${rc_p}" ;;
     analyze)
       [[ -n "${SNAPSHOT_DIR}" ]] || die "analyze requires --snapshot-dir"
       [[ -n "${OUTPUT_DIR}" ]] || OUTPUT_DIR="$(cd "${SNAPSHOT_DIR}/.." && pwd -P)"
-      local rc=0; cmd_analyze "${SNAPSHOT_DIR}" "${OUTPUT_DIR}" || rc=$?; exit "${rc}" ;;
+      local rc=0; cmd_analyze "${SNAPSHOT_DIR}" "${OUTPUT_DIR}" || rc=$?
+      if [[ "${wants_publish}" -eq 1 ]]; then
+        cmd_publish "${OUTPUT_DIR}" || rc_p=$?
+        [[ "${rc_p}" -ne 0 ]] && exit "${rc_p}"
+      fi
+      exit "${rc}" ;;
     collect|run)
       [[ -n "${OUTPUT_DIR}" ]] || OUTPUT_DIR="${PROJECT_ROOT}/reports/$(utc_ts)"
       local rc_c=0 rc_a=0
@@ -674,6 +720,10 @@ main() {
         log_info "snapshots written to ${OUTPUT_DIR}/snapshots"; exit "${rc_c}"
       fi
       cmd_analyze "${OUTPUT_DIR}/snapshots" "${OUTPUT_DIR}" || rc_a=$?
+      if [[ "${wants_publish}" -eq 1 ]]; then
+        cmd_publish "${OUTPUT_DIR}" || rc_p=$?
+        [[ "${rc_p}" -ne 0 ]] && exit "${rc_p}"
+      fi
       [[ "${rc_a}" -ne 0 ]] && exit "${rc_a}"
       exit "${rc_c}" ;;
   esac

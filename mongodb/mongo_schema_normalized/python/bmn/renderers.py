@@ -359,6 +359,8 @@ def render_plan(an: dict) -> str:
           "", "## 5. Generated artifacts", "",
           "- `analysis.json`: machine-readable analysis (mapping, drift, findings).",
           "- `report.md`: inventory and cross-instance comparison.",
+          "- `report.jira.txt`: Jira wiki markup summary for an issue description (REST API v2 or Data Center).",
+          "- `report.confluence.xml`: full report in Confluence storage format (REST API `body.storage`).",
           "- `target_bootstrap.js`: idempotent mongosh bootstrap for the target (phased).",
           "- `migration_commands.sh`: mongodump/mongorestore jobs with namespace remapping.",
           "- `normalization_suggestions.js`: type normalization candidates.",
@@ -459,11 +461,15 @@ def render_migration(an: dict) -> str:
 
 
 def write_artifacts(an: dict, snapshots: List[dict], out_dir: Path) -> List[Path]:
+    from .renderers_atlassian import render_confluence, render_jira  # late import: avoids a circular import
+
     out_dir.mkdir(parents=True, exist_ok=True)
     files = {
         "analysis.json": dump_pretty(an) + "\n",
         "report.md": render_report(an, snapshots),
         "centralization_plan.md": render_plan(an),
+        "report.jira.txt": render_jira(an),
+        "report.confluence.xml": render_confluence(an, snapshots),
         "target_bootstrap.js": render_bootstrap(an, snapshots),
         "migration_commands.sh": render_migration(an),
         "normalization_suggestions.js": render_normalization(an),

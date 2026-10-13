@@ -15,13 +15,17 @@ betika_mongodb_normalized/
 │   ├── mongo_schema_normalizer.sh      # bash CLI (bash >= 3.2, macOS default shell OK)
 │   └── lib/
 │       ├── collector.js                # mongosh collector (credentials via env, never argv)
-│       └── analyzer.js                 # offline analyzer + renderers (mongosh --nodb or node)
+│       ├── analyzer.js                 # offline analyzer + renderers (mongosh --nodb or node)
+│       ├── atlassian.js                # Jira / Confluence payload builder + response parser
+│       └── publish.sh                  # Jira / Confluence Data Center publisher (curl)
 ├── python/
 │   ├── mongo_schema_normalizer.py      # Python CLI entry point (Python >= 3.8)
 │   ├── requirements.txt                # pymongo
 │   └── bmn/                            # config, collector, analyzer, renderers, cli, ui
 ├── share/templates/                    # generated-artifact templates shared by both CLIs
-├── conf.example/instance.conf.example  # recommended configuration format
+├── conf.example/
+│   ├── instance.conf.example           # recommended instance configuration format
+│   └── atlassian.conf.example          # Jira / Confluence Data Center publication settings
 └── tests/
     ├── fixtures/                       # synthetic snapshots + mapping file
     └── parity_check.sh                 # asserts byte-identical output of both CLIs
@@ -112,6 +116,7 @@ and are kept as defined).
 | `collect` | snapshots only (`<output-dir>/snapshots/<instance>.json`)     |
 | `analyze` | offline analysis of a snapshot directory (no DB access)       |
 | `check`   | validate configuration files, `--connect` tests connectivity  |
+| `publish` | publish an existing report directory to Jira / Confluence DC  |
 
 Naming strategies (`-n`):
 
@@ -123,7 +128,7 @@ Naming strategies (`-n`):
 A mapping file (`-m`) overrides any strategy per database:
 `<instance|alias>:<source_db>=<target_db>` (one entry per line, `#` comments).
 
-Exit codes: `0` ok, `1` blocking findings, `2` usage/config error, `3` collection errors.
+Exit codes: `0` ok, `1` blocking findings, `2` usage/config error, `3` collection errors, `4` publication errors.
 
 ## Collected data
 
@@ -168,10 +173,73 @@ mongo_schema_normalizer.sh run --include-security --oplog-window 24 --activity-s
 |--------------------------------|-------------------------------------------------------------------------|
 | `report.md`                    | instances, findings, per-instance inventory, cross-instance drift        |
 | `centralization_plan.md`       | capacity, database mapping, required modifications, runbook             |
+| `report.jira.txt`              | Jira wiki markup summary for an issue description (<= 32,767 chars)     |
+| `report.confluence.xml`        | full report + plan in Confluence storage format (macros, expands)       |
 | `analysis.json`                | machine-readable analysis (mapping, drift, findings, capacity)          |
 | `target_bootstrap.js`          | idempotent, phased mongosh bootstrap for the target (dry-run default)   |
 | `migration_commands.sh`        | `mongodump \| mongorestore --nsFrom/--nsTo` jobs (dry-run default)      |
 | `normalization_suggestions.js` | `$convert` fixes for fields with mixed scalar BSON types (dry-run)      |
+
+### Jira and Confluence
+
+`report.jira.txt` (Jira **wiki markup**) is an actionable summary for an issue description:
+status panel, instances, findings (errors and warnings with details, info grouped by code),
+database mapping, required modifications, users to migrate/review and next steps. It always
+fits the 32,767-character description limit: above ~32,000 characters it switches to a compact
+mode (no detail blocks, capped lists with "... N more"), and truncates only as a last resort.
+
+`report.confluence.xml` (Confluence **storage format**) is the complete page: table of contents,
+status lozenges per severity, warning/tip/info panels, finding details and per-instance
+inventory in expand macros, activity and users tables, and the runbook.
+
+#### Publishing to Jira / Confluence Data Center
+
+Configure `conf/atlassian.conf` (template: `conf.example/atlassian.conf.example`, `chmod 600`):
+URLs, a Personal Access Token per product (`*_TOKEN_ENV`, `*_TOKEN_FILE` or `*_TOKEN_CMD`;
+`*_USER` switches to HTTP basic for servers without PAT support), Jira project / issue type /
+labels and the Confluence space / parent page / title. Then:
+
+```bash
+# preview: read-only calls only (issue / page lookup), prints what would be created or updated
+mongo_schema_normalizer.sh publish -o ./reports/20261013T100000Z --publish-jira --publish-confluence --publish-dry-run
+# publish an existing report directory
+mongo_schema_normalizer.sh publish -o ./reports/20261013T100000Z --publish-jira --publish-confluence --jira-attach
+# or analyze and publish in one go
+mongo_schema_normalizer.sh run --publish-jira --publish-confluence
+# add the analysis as a comment to an existing ticket (e.g. the migration task)
+mongo_schema_normalizer.sh publish -o ./reports/20261013T100000Z --jira-comment --jira-issue DBA-1234
+```
+
+| Product | Behaviour |
+|---|---|
+| Jira | `POST /rest/api/2/issue` (project, type, summary, description, labels, components), or `PUT` summary + description when an issue key is known: `--jira-issue`, `JIRA_ISSUE`, or the key stored in `<report_dir>/publish.json` by a previous publication. `--jira-attach` uploads `JIRA_ATTACH` files. |
+| Jira comment | `--jira-comment --jira-issue KEY` (or `JIRA_ISSUE`): `POST /rest/api/2/issue/KEY/comment` with `report.jira.txt`; summary and description are left untouched. `JIRA_COMMENT_VISIBILITY="role:<name>"` or `"group:<name>"` restricts the comment. The key must be explicit (never taken from `publish.json`) and the result is stored separately (`jira_comment`), so a later `--publish-jira` never overwrites that ticket. `--jira-attach` also works. |
+| Confluence | Looks up the page by title in `CONFLUENCE_SPACE`: updates it with a new version (history kept) or creates it under `CONFLUENCE_PARENT_ID`. |
+
+- The token is never passed on the command line: Python sends it from memory, bash through a
+  private curl header file (`-H @file`, mode 600, removed at exit). It is not written to any output.
+- `ATLASSIAN_CA_FILE` sets an internal CA bundle for HTTPS.
+- Results (issue key, page id/version, URLs) are stored in `<report_dir>/publish.json` (mode 600).
+- Exit code `4` on any publication failure; a blocked analysis is still published (status BLOCKED).
+- The bash implementation needs `curl`; JSON is handled by `lib/atlassian.js` (mongosh or node, no jq).
+
+For Jira / Confluence **Cloud** (not handled by `publish`) use the REST examples below: Jira Cloud
+accepts wiki markup only through REST API v2, and Confluence Cloud lives under `/wiki/rest/api`.
+For a manual paste in Confluence use `report.md` with *Insert > Markup > Markdown*.
+
+```bash
+REPORT_DIR=./reports/20261013T100000Z
+jq -n --arg project DBA --arg summary "MongoDB centralization analysis" \
+      --rawfile desc "${REPORT_DIR}/report.jira.txt" \
+      '{fields: {project: {key: $project}, issuetype: {name: "Task"}, summary: $summary, description: $desc}}' \
+  | curl -sS -u "rmateos@example.com:${JIRA_API_TOKEN}" -H 'Content-Type: application/json' \
+         -X POST "https://your-domain.atlassian.net/rest/api/2/issue" --data-binary @-
+jq -n --arg space DBA --arg title "MongoDB centralization analysis" \
+      --rawfile body "${REPORT_DIR}/report.confluence.xml" \
+      '{type: "page", title: $title, space: {key: $space}, body: {storage: {value: $body, representation: "storage"}}}' \
+  | curl -sS -u "rmateos@example.com:${CONFLUENCE_API_TOKEN}" -H 'Content-Type: application/json' \
+         -X POST "https://your-domain.atlassian.net/wiki/rest/api/content" --data-binary @-
+```
 
 Runbook (also in `centralization_plan.md`):
 

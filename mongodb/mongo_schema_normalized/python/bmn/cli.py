@@ -19,6 +19,7 @@ from .common import PROJECT_HOME, TOOL_NAME, human_bytes
 from .config import ConfigError, InstanceConfig, load_configs, load_mappings, redact_uri
 from .renderers import write_artifacts
 from .help import render_help, wants_color
+from .publish import PublishError, publish
 from .ui import Log, Style
 
 PROG = "mongo_schema_normalizer.py"
@@ -39,7 +40,7 @@ class CliArgumentParser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     p = CliArgumentParser(prog=PROG, add_help=False)
     p.add_argument("-h", "--help", action="store_true")
-    p.add_argument("command", nargs="?", default="run", choices=("run", "collect", "analyze", "check"))
+    p.add_argument("command", nargs="?", default="run", choices=("run", "collect", "analyze", "check", "publish"))
     p.add_argument("-c", "--conf-dir", type=Path, default=PROJECT_ROOT / "conf",
                    help="instance configuration directory (default: %(default)s)")
     p.add_argument("-o", "--output-dir", type=Path, help="output directory (default: <project_root>/reports/<UTC ts>)")
@@ -59,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=15, help="connection timeout in seconds (default: 15)")
     p.add_argument("--op-timeout", type=int, default=120, help="per-operation maxTimeMS in seconds (default: 120)")
     p.add_argument("--connect", action="store_true", help="check: also test connectivity")
+    p.add_argument("--publish-jira", action="store_true", help="publish report.jira.txt to Jira")
+    p.add_argument("--publish-confluence", action="store_true", help="publish report.confluence.xml to Confluence")
+    p.add_argument("--publish-dry-run", action="store_true", help="show the publication plan (read-only calls)")
+    p.add_argument("--atlassian-conf", type=Path, help="Jira/Confluence settings (default: <conf-dir>/atlassian.conf)")
+    p.add_argument("--jira-issue", default="", help="existing issue key to update")
+    p.add_argument("--jira-attach", action="store_true", help="attach report files to the issue")
+    p.add_argument("--jira-comment", action="store_true", help="add the report as a comment to --jira-issue")
+    p.add_argument("--confluence-title", default="", help="page title (default: CONFLUENCE_TITLE)")
     p.add_argument("--no-activity", action="store_true", help="skip activity collection")
     p.add_argument("--oplog-window", type=int, default=0, help="hours of oplog to analyze, 0 disables")
     p.add_argument("--oplog-timeout", type=int, default=600, help="oplog aggregation maxTimeMS in seconds")
@@ -210,6 +219,23 @@ def print_summary(an: dict, out_dir: Path, files: List[str]) -> None:
         print(f"    - {name}")
 
 
+def wants_publish(args: argparse.Namespace) -> bool:
+    return bool(args.publish_jira or args.publish_confluence or args.jira_comment)
+
+
+def cmd_publish(args: argparse.Namespace, report_dir: Path) -> int:
+    conf = args.atlassian_conf or (args.conf_dir / "atlassian.conf")
+    mode = " (dry-run)" if args.publish_dry_run else ""
+    Log.title(f"publishing {report_dir}{mode}")
+    try:
+        return publish(report_dir, conf, args.publish_jira or args.jira_comment, args.publish_confluence,
+                       args.publish_dry_run, args.jira_issue, args.jira_attach, args.confluence_title,
+                       args.jira_comment)
+    except PublishError as exc:
+        Log.error(str(exc))
+        return 4
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if "--no-color" in argv:
@@ -222,17 +248,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.command == "check":
             return cmd_check(args)
+        if args.command == "publish":
+            if not args.output_dir:
+                raise ConfigError("publish requires --output-dir (the report directory)")
+            if not wants_publish(args):
+                raise ConfigError("publish requires --publish-jira, --jira-comment and/or --publish-confluence")
+            return cmd_publish(args, args.output_dir)
         if args.command == "analyze":
             if not args.snapshot_dir:
                 raise ConfigError("analyze requires --snapshot-dir")
             out_dir = args.output_dir or args.snapshot_dir.resolve().parent
-            return cmd_analyze(args, args.snapshot_dir, out_dir)
+            rc_an = cmd_analyze(args, args.snapshot_dir, out_dir)
+            return cmd_publish(args, out_dir) or rc_an if wants_publish(args) else rc_an
         out_dir = args.output_dir or (PROJECT_ROOT / "reports" / _utc_ts())
         rc = cmd_collect(args, out_dir)
         if args.command == "collect":
             Log.info(f"snapshots written to {out_dir / 'snapshots'}")
             return rc
         rc_an = cmd_analyze(args, out_dir / "snapshots", out_dir)
+        if wants_publish(args):
+            return cmd_publish(args, out_dir) or rc_an or rc
         return rc_an or rc
     except ConfigError as exc:
         Log.error(str(exc))
