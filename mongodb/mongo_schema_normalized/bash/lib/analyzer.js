@@ -784,6 +784,58 @@ function analyzeActivity(sources, F, staleDays) {
 // ------------------------------------------------------------------ renderers
 const SEVERITY_TITLES = [['ERROR', 'Errors'], ['WARN', 'Warnings'], ['INFO', 'Informational']];
 
+// Groups findings by instance, in the order of the instances table; findings on
+// several instances (or global ones) go last under an empty key (cross-instance).
+function groupByInstance(an, items) {
+  const names = an.instances.map((i) => i.name);
+  const groups = new Map();
+  for (const f of items) {
+    const key = f.instance && !f.instance.includes(',') ? f.instance : '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const order = names.filter((n) => groups.has(n)).concat(sortStr([...groups.keys()].filter((k) => k && !names.includes(k))));
+  if (groups.has('')) order.push('');
+  return order.map((k) => [k, groups.get(k)]);
+}
+
+// Groups (already code-sorted) findings by code, keeping their order.
+function groupByCode(items) {
+  const groups = new Map();
+  for (const f of items) {
+    if (!groups.has(f.code)) groups.set(f.code, []);
+    groups.get(f.code).push(f);
+  }
+  return [...groups.entries()];
+}
+
+const codeCounts = (items) => groupByCode(items).map(([code, list]) => `${code} (${list.length})`).join(', ');
+const CROSS_INSTANCE = 'Cross-instance';
+
+// Finding line inside an instance/code group: severity and code are in the headings.
+function groupedFindingLines(f, withInstance) {
+  const parts = [];
+  if (f.namespace) parts.push(`\`${md(f.namespace)}\``);
+  if (withInstance && f.instance) parts.push(`(${md(f.instance)})`);
+  const head = parts.length ? `${parts.join(' ')}: ` : '';
+  return [`- ${head}${md(f.message)}`].concat(f.details.map((d) => `  - \`${md(d)}\``));
+}
+
+function infoSectionLines(an, items, num) {
+  if (!items.length) return ['_None._'];
+  const groups = groupByInstance(an, items);
+  const L = ['| Instance | Findings | Codes |', '|---|---:|---|'];
+  for (const [inst, list] of groups) L.push(`| ${inst ? md(inst) : `_${CROSS_INSTANCE.toLowerCase()}_`} | ${list.length} | ${codeCounts(list)} |`);
+  groups.forEach(([inst, list], idx) => {
+    L.push('', `### ${num}.${idx + 1} ${inst ? `Instance \`${md(inst)}\`` : CROSS_INSTANCE} (${list.length})`);
+    for (const [code, byCode] of groupByCode(list)) {
+      L.push('', `**${code}** (${byCode.length})`, '');
+      for (const f of byCode) L.push(...groupedFindingLines(f, !inst));
+    }
+  });
+  return L;
+}
+
 function findingLines(f) {
   const where = f.namespace ? ` \`${md(f.namespace)}\`` : '';
   const inst = f.instance ? ` (${md(f.instance)})` : '';
@@ -838,6 +890,10 @@ function renderReport(an, snapshots) {
   SEVERITY_TITLES.forEach(([sev, title], idx) => {
     L.push('', `## ${idx + 3}. ${title}`, '');
     const items = an.findings.filter((f) => f.severity === sev);
+    if (sev === 'INFO') {
+      L.push(...infoSectionLines(an, items, idx + 3));
+      return;
+    }
     if (!items.length) L.push('_None._');
     for (const f of items) L.push(...findingLines(f));
   });
@@ -1318,13 +1374,17 @@ function jiraBody(an, compact) {
   const infos = an.findings.filter((f) => f.severity === 'INFO');
   L.push('', `h2. Informational (${infos.length})`, '');
   if (!infos.length) L.push('_None._');
-  const byCode = {};
-  for (const f of infos) (byCode[f.code] = byCode[f.code] || []).push(f.namespace || f.instance || '-');
-  for (const code of sortStr(Object.keys(byCode))) {
-    const targets = byCode[code];
-    let line = `* ${jmono(code)}: ${targets.length}`;
-    if (!compact) line += ` - ${jesc(limitList(targets, 8))}`;
-    L.push(line);
+  const infoGroups = groupByInstance(an, infos);
+  if (infoGroups.length) L.push(jrow(['Instance', 'Findings', 'Codes'], true));
+  for (const [inst, list] of infoGroups) L.push(jrow([inst ? jesc(inst) : `_${CROSS_INSTANCE.toLowerCase()}_`, String(list.length), jesc(codeCounts(list))]));
+  if (!compact) {
+    for (const [inst, list] of infoGroups) {
+      L.push('', `h3. ${inst ? `Instance ${jesc(inst)}` : CROSS_INSTANCE} (${list.length})`, '');
+      for (const [code, byCode] of groupByCode(list)) {
+        const targets = byCode.map((f) => f.namespace || (inst ? '' : f.instance)).filter((t) => t);
+        L.push(`* ${jmono(code)}: ${byCode.length}${targets.length ? ` - ${jesc(limitList(targets, 8))}` : ''}`);
+      }
+    }
   }
 
   L.push('', 'h2. Database mapping', '');
@@ -1425,6 +1485,26 @@ function xfinding(f) {
   if (!f.details.length) return head;
   return head + xmacro('expand', xcodeblock(f.details), [['title', `${f.details.length} detail line(s)`]]);
 }
+function xGroupedFinding(f, withInstance) {
+  const parts = [];
+  if (f.namespace) parts.push(xcode(f.namespace));
+  if (withInstance && f.instance) parts.push(`(${xesc(f.instance)})`);
+  const head = (parts.length ? `${parts.join(' ')}: ` : '') + xesc(f.message);
+  if (!f.details.length) return head;
+  return head + xmacro('expand', xcodeblock(f.details), [['title', `${f.details.length} detail line(s)`]]);
+}
+
+function xInfoSection(an, items) {
+  if (!items.length) return [xp('<em>None.</em>')];
+  const groups = groupByInstance(an, items);
+  const B = [xtable(['Instance', 'Findings', 'Codes'], groups.map(([inst, list]) => [inst ? xesc(inst) : `<em>${CROSS_INSTANCE.toLowerCase()}</em>`, String(list.length), xesc(codeCounts(list))]))];
+  for (const [inst, list] of groups) {
+    B.push(`<h3>${inst ? `Instance ${xesc(inst)}` : CROSS_INSTANCE} (${list.length})</h3>`);
+    const body = groupByCode(list).map(([code, byCode]) => xp(`<strong>${xesc(code)}</strong> (${byCode.length})`) + xlist(byCode.map((f) => xGroupedFinding(f, !inst)))).join('');
+    B.push(xmacro('expand', body, [['title', `Show ${list.length} informational finding(s)`]]));
+  }
+  return B;
+}
 const xFindingsBlock = (items) => (items.length ? xlist(items.map(xfinding)) : xp('<em>None.</em>'));
 
 function renderConfluence(an, snapshots) {
@@ -1451,8 +1531,8 @@ function renderConfluence(an, snapshots) {
   for (const [sev, title] of SEVERITY_TITLES) {
     const items = an.findings.filter((f) => f.severity === sev);
     B.push(`<h2>${xesc(title)} (${items.length})</h2>`);
-    const block = xFindingsBlock(items);
-    B.push(sev === 'INFO' && items.length ? xmacro('expand', block, [['title', `Show ${items.length} informational finding(s)`]]) : block);
+    if (sev === 'INFO') B.push(...xInfoSection(an, items));
+    else B.push(xFindingsBlock(items));
   }
 
   B.push('<h1>3. Instances and capacity</h1>');

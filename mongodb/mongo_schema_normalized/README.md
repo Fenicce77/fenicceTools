@@ -284,6 +284,11 @@ database-tools YAML files (`uri: ...`, `chmod 600`) in
 | INFO | `USER_NO_ACTIVITY`, `USER_UNRESOLVED` | user with access but no observed activity / session user not resolvable |
 | INFO | `DB_MERGE`, `NUMERIC_TYPE_MIXED`, `TTL_INDEX`, `CAPPED`, `VIEW`, `SHARD_KEY`, `INDEX_LEGACY_OPTION`, `MIXED_VERSIONS`, `NO_TARGET`, `SCHEMA_TRUNCATED`, `USER_DUPLICATE`, `ROLE_DUPLICATE` | informational |
 
+Informational findings are grouped by instance in every report (`report.md`, Jira,
+Confluence): a per-instance summary table (findings and codes), then one subsection per
+instance with its findings grouped by code. Findings that span several instances, or
+none, are listed last under *Cross-instance*.
+
 ## Limitations
 
 - Schema inference is sample-based (`$sample`, default 100 docs per collection): rare

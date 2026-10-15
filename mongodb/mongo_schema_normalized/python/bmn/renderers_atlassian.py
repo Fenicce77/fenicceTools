@@ -14,7 +14,10 @@ from typing import Dict, List, Optional, Tuple
 
 from .activity_analysis import top_users
 from .common import canon, classify_types, human_bytes
-from .renderers import SEVERITY_TITLES, _dash, _limit, _modified_cell, _modified_field_cell
+from .renderers import (
+    CROSS_INSTANCE, SEVERITY_TITLES, _dash, _limit, _modified_cell, _modified_field_cell, code_counts, group_by_code,
+    group_by_instance,
+)
 
 JIRA_LIMIT = 32767
 JIRA_SAFE_LIMIT = 32000
@@ -180,15 +183,19 @@ def _jira_body(an: dict, compact: bool) -> str:
     L += ["", f"h2. Informational ({len(infos)})", ""]
     if not infos:
         L.append("_None._")
-    by_code: Dict[str, List[str]] = {}
-    for f in infos:
-        by_code.setdefault(f["code"], []).append(f["namespace"] or f["instance"] or "-")
-    for code in sorted(by_code):
-        targets = by_code[code]
-        line = f"* {jmono(code)}: {len(targets)}"
-        if not compact:
-            line += " - " + jesc(_limit(targets, 8))
-        L.append(line)
+    info_groups = group_by_instance(an, infos)
+    if info_groups:
+        L.append(jrow(["Instance", "Findings", "Codes"], header=True))
+    for inst, lst in info_groups:
+        label = jesc(inst) if inst else f"_{CROSS_INSTANCE.lower()}_"
+        L.append(jrow([label, str(len(lst)), jesc(code_counts(lst))]))
+    if not compact:
+        for inst, lst in info_groups:
+            title = f"Instance {jesc(inst)}" if inst else CROSS_INSTANCE
+            L += ["", f"h3. {title} ({len(lst)})", ""]
+            for code, by_code in group_by_code(lst):
+                targets = [t for t in (f["namespace"] or ("" if inst else f["instance"]) for f in by_code) if t]
+                L.append(f"* {jmono(code)}: {len(by_code)}" + (f" - {jesc(_limit(targets, 8))}" if targets else ""))
 
     L += ["", "h2. Database mapping", ""]
     if an["db_mapping"]:
@@ -325,6 +332,35 @@ def _xfinding(f: dict) -> str:
     return head + xmacro("expand", xcodeblock(f["details"]), [("title", f"{len(f['details'])} detail line(s)")])
 
 
+def _x_grouped_finding(f: dict, with_instance: bool) -> str:
+    parts = []
+    if f["namespace"]:
+        parts.append(xcode(f["namespace"]))
+    if with_instance and f["instance"]:
+        parts.append(f"({xesc(f['instance'])})")
+    head = (f"{' '.join(parts)}: " if parts else "") + xesc(f["message"])
+    if not f["details"]:
+        return head
+    return head + xmacro("expand", xcodeblock(f["details"]), [("title", f"{len(f['details'])} detail line(s)")])
+
+
+def _x_info_section(an: dict, items: List[dict]) -> List[str]:
+    if not items:
+        return [xp("<em>None.</em>")]
+    groups = group_by_instance(an, items)
+    rows = [[xesc(inst) if inst else f"<em>{CROSS_INSTANCE.lower()}</em>", str(len(lst)), xesc(code_counts(lst))]
+            for inst, lst in groups]
+    B = [xtable(["Instance", "Findings", "Codes"], rows)]
+    for inst, lst in groups:
+        title = f"Instance {xesc(inst)}" if inst else CROSS_INSTANCE
+        B.append(f"<h3>{title} ({len(lst)})</h3>")
+        body = "".join(xp(f"<strong>{xesc(code)}</strong> ({len(by_code)})")
+                       + xlist([_x_grouped_finding(f, not inst) for f in by_code])
+                       for code, by_code in group_by_code(lst))
+        B.append(xmacro("expand", body, [("title", f"Show {len(lst)} informational finding(s)")]))
+    return B
+
+
 def _x_findings_block(items: List[dict]) -> str:
     return xlist([_xfinding(f) for f in items]) if items else xp("<em>None.</em>")
 
@@ -362,9 +398,10 @@ def render_confluence(an: dict, snapshots: List[dict]) -> str:  # noqa: C901 - l
     for sev, title in SEVERITY_TITLES:
         items = [f for f in an["findings"] if f["severity"] == sev]
         B.append(f"<h2>{xesc(title)} ({len(items)})</h2>")
-        block = _x_findings_block(items)
-        B.append(xmacro("expand", block, [("title", f"Show {len(items)} informational finding(s)")])
-                 if sev == "INFO" and items else block)
+        if sev == "INFO":
+            B += _x_info_section(an, items)
+        else:
+            B.append(_x_findings_block(items))
 
     # ---------------------------------------------------------------- instances / capacity
     B.append("<h1>3. Instances and capacity</h1>")

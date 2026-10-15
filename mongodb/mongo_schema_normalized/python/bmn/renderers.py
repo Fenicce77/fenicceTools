@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from .activity_analysis import top_users
 from .common import (
@@ -10,6 +10,64 @@ from .common import (
 )
 
 SEVERITY_TITLES = (("ERROR", "Errors"), ("WARN", "Warnings"), ("INFO", "Informational"))
+
+
+CROSS_INSTANCE = "Cross-instance"
+
+
+def group_by_instance(an: dict, items: List[dict]) -> List[Tuple[str, List[dict]]]:
+    """Findings grouped by instance, in the order of the instances table; findings on
+    several instances (or global ones) go last under an empty key (cross-instance)."""
+    names = [i["name"] for i in an["instances"]]
+    groups: Dict[str, List[dict]] = {}
+    for f in items:
+        key = f["instance"] if f["instance"] and "," not in f["instance"] else ""
+        groups.setdefault(key, []).append(f)
+    order = [n for n in names if n in groups] + sorted(k for k in groups if k and k not in names)
+    if "" in groups:
+        order.append("")
+    return [(k, groups[k]) for k in order]
+
+
+def group_by_code(items: List[dict]) -> List[Tuple[str, List[dict]]]:
+    """(Already code-sorted) findings grouped by code, keeping their order."""
+    groups: Dict[str, List[dict]] = {}
+    for f in items:
+        groups.setdefault(f["code"], []).append(f)
+    return list(groups.items())
+
+
+def code_counts(items: List[dict]) -> str:
+    return ", ".join(f"{code} ({len(lst)})" for code, lst in group_by_code(items))
+
+
+def _grouped_finding_lines(f: dict, with_instance: bool) -> List[str]:
+    """Finding line inside an instance/code group: severity and code are in the headings."""
+    parts = []
+    if f["namespace"]:
+        parts.append(f"`{md(f['namespace'])}`")
+    if with_instance and f["instance"]:
+        parts.append(f"({md(f['instance'])})")
+    head = f"{' '.join(parts)}: " if parts else ""
+    return [f"- {head}{md(f['message'])}"] + [f"  - `{md(d)}`" for d in f["details"]]
+
+
+def _info_section_lines(an: dict, items: List[dict], num: int) -> List[str]:
+    if not items:
+        return ["_None._"]
+    groups = group_by_instance(an, items)
+    L = ["| Instance | Findings | Codes |", "|---|---:|---|"]
+    for inst, lst in groups:
+        label = md(inst) if inst else f"_{CROSS_INSTANCE.lower()}_"
+        L.append(f"| {label} | {len(lst)} | {code_counts(lst)} |")
+    for idx, (inst, lst) in enumerate(groups, start=1):
+        title = f"Instance `{md(inst)}`" if inst else CROSS_INSTANCE
+        L += ["", f"### {num}.{idx} {title} ({len(lst)})"]
+        for code, by_code in group_by_code(lst):
+            L += ["", f"**{code}** ({len(by_code)})", ""]
+            for f in by_code:
+                L += _grouped_finding_lines(f, not inst)
+    return L
 
 
 def _finding_lines(f: dict) -> List[str]:
@@ -66,6 +124,9 @@ def render_report(an: dict, snapshots: List[dict]) -> str:
     for num, (sev, title) in enumerate(SEVERITY_TITLES, start=3):
         L += ["", f"## {num}. {title}", ""]
         items = [f for f in an["findings"] if f["severity"] == sev]
+        if sev == "INFO":
+            L += _info_section_lines(an, items, num)
+            continue
         if not items:
             L.append("_None._")
         for f in items:
