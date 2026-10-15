@@ -3,7 +3,7 @@
 # Test suite for proxysql_eventslog_purge.sh.
 # Uses temporary fixture directories only; never touches real ProxySQL files.
 #
-# Usage: bash mysql/proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
+# Usage: bash proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
 
 set -euo pipefail
 

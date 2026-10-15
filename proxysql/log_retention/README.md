@@ -175,7 +175,7 @@ The test suite builds temporary fixture directories only and never touches real
 ProxySQL files:
 
 ```bash
-bash mysql/proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
+bash proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
 ```
 
 It covers argument validation, dry-run, retention by count and age, protection
