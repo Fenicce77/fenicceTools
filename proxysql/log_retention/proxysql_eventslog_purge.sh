@@ -13,7 +13,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly VERSION="1.1.0"
+readonly VERSION="1.1.1"
 
 # Defaults
 LOG_DIR="/data/proxysql"
@@ -72,6 +72,12 @@ ${BOLD}EXAMPLES${NC}
     # Cron (/etc/cron.d/proxysql-logs), every 30 minutes
     */30 * * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p query.log -k 20 -a 3 -c >/dev/null 2>&1
     */30 * * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p audit.log -k 1000 -a 30 -c >/dev/null 2>&1
+
+    # Cron, once a day at 00:00
+    0 0 * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p query.log -k 200 -a 3 -c >>/var/log/proxysql/log_retention.log 2>&1
+
+    # systemd timer, once a day at 00:00 (see README for the full unit files)
+    OnCalendar=*-*-* 00:00:00
 EOF
 }
 

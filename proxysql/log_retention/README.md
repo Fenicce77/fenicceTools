@@ -108,48 +108,122 @@ Summary: deleted=2 compressed=2 skipped=0 freed=371.40 MB
 
 ## Scheduling
 
-Install the script and run it from cron as the user that owns the log
-directory:
+Install the script, then schedule it as the user that owns the log directory:
 
 ```bash
 sudo install -m 0755 proxysql_eventslog_purge.sh /usr/local/bin/
 ```
 
+Choose the frequency from the rotation rate. With a daily run, rotated files
+accumulate for up to 24 hours, so the disk must hold a full day of logs and
+`--keep` must be large enough not to drop files you still need within that
+day. Estimate it from `mysql-eventslog_filesize` and the number of rotations
+per day:
+
+```bash
+# Rotations over the last 24 hours
+find /data/proxysql -maxdepth 1 -name 'query.log.[0-9]*' -mtime -1 | wc -l
+```
+
+Schedule times use the server time zone (`timedatectl` on Linux).
+
+### Cron
+
+Every 30 minutes:
+
 ```cron
 # /etc/cron.d/proxysql-logs
-*/30 * * * * proxysql /usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p query.log -k 20  -a 3  -c >/dev/null 2>&1
+*/30 * * * * proxysql /usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p query.log -k 20   -a 3  -c >/dev/null 2>&1
 */30 * * * * proxysql /usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p audit.log -k 1000 -a 30 -c >/dev/null 2>&1
 ```
 
-Equivalent systemd timer:
+Once a day at 00:00, keeping the output in a log file:
+
+```cron
+# /etc/cron.d/proxysql-logs
+0 0 * * * proxysql /usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p query.log -k 200  -a 3  -c >>/var/log/proxysql/log_retention.log 2>&1
+0 0 * * * proxysql /usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p audit.log -k 1000 -a 30 -c >>/var/log/proxysql/log_retention.log 2>&1
+```
+
+Files in `/etc/cron.d/` must be owned by root, mode `0644`, include the user
+field, and end with a newline. For a user crontab (`crontab -e -u proxysql`),
+omit the user field:
+
+```cron
+0 0 * * * /usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p query.log -k 200 -a 3 -c >>/var/log/proxysql/log_retention.log 2>&1
+```
+
+Make sure the log directory exists and is writable by the cron user:
+
+```bash
+sudo install -d -o proxysql -g proxysql -m 0750 /var/log/proxysql
+```
+
+### systemd service and timer
+
+A single `oneshot` service runs both prefixes in sequence. Output goes to the
+journal without ANSI colors, because stdout is not a TTY.
 
 ```ini
-# /etc/systemd/system/proxysql-eventslog-purge.service
+# /etc/systemd/system/proxysql-log-retention.service
 [Unit]
-Description=ProxySQL events log retention
+Description=ProxySQL events and audit log retention
+After=proxysql.service
 
 [Service]
 Type=oneshot
 User=proxysql
-ExecStart=/usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p query.log -k 20 -a 3 -c
+Group=proxysql
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p query.log -k 200 -a 3 -c
+ExecStart=/usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql -p audit.log -k 1000 -a 30 -c
 ```
 
+Once a day at 00:00:
+
 ```ini
-# /etc/systemd/system/proxysql-eventslog-purge.timer
+# /etc/systemd/system/proxysql-log-retention.timer
 [Unit]
-Description=Run ProxySQL events log retention every 30 minutes
+Description=Run ProxySQL log retention daily at 00:00
 
 [Timer]
-OnCalendar=*:0/30
+OnCalendar=*-*-* 00:00:00
 Persistent=true
+AccuracySec=1min
 
 [Install]
 WantedBy=timers.target
 ```
 
+`Persistent=true` runs a missed execution at the next boot if the server was
+down at 00:00. To pin the schedule to a specific time zone regardless of the
+server setting, use `OnCalendar=*-*-* 00:00:00 Atlantic/Canary` (systemd 235 or
+newer).
+
+Every 30 minutes instead, replace the `[Timer]` section with:
+
+```ini
+[Timer]
+OnCalendar=*:0/30
+Persistent=true
+```
+
+Enable and verify:
+
 ```bash
+# Validate the expression and show the next trigger
+systemd-analyze calendar '*-*-* 00:00:00'
+
 sudo systemctl daemon-reload
-sudo systemctl enable --now proxysql-eventslog-purge.timer
+sudo systemctl enable --now proxysql-log-retention.timer
+
+# Next and last executions
+systemctl list-timers proxysql-log-retention.timer
+
+# Run once now, outside the schedule, and review the output
+sudo systemctl start proxysql-log-retention.service
+journalctl -u proxysql-log-retention.service --since today --no-pager
 ```
 
 ## Operational notes
