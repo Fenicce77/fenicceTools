@@ -13,13 +13,18 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly VERSION="1.1.1"
+readonly VERSION="1.2.0"
 
-# Defaults
-LOG_DIR="/data/proxysql"
-PREFIX="query.log"
-KEEP=10
-MAX_AGE_DAYS=0
+# Defaults (help always shows these, not values parsed so far)
+readonly DEFAULT_LOG_DIR="/data/proxysql"
+readonly DEFAULT_PREFIX="query.log"
+readonly DEFAULT_KEEP=10
+readonly DEFAULT_MAX_AGE_DAYS=0
+
+LOG_DIR="$DEFAULT_LOG_DIR"
+PREFIX="$DEFAULT_PREFIX"
+KEEP="$DEFAULT_KEEP"
+MAX_AGE_DAYS="$DEFAULT_MAX_AGE_DAYS"
 COMPRESS=0
 DRY_RUN=0
 
@@ -37,47 +42,74 @@ warn()  { printf '%s[WARN]%s  %s\n' "$YELLOW" "$NC" "$*" >&2; }
 die()   { printf '%s[ERROR]%s %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
 
 usage() {
+    # Help has its own palette: always colored (repository convention for
+    # explicitly requested help), unless NO_COLOR is set (https://no-color.org).
+    local T="" H="" F="" M="" C="" X="" W="" R="" N=""
+    if [[ -z "${NO_COLOR:-}" ]]; then
+        T=$'\033[1;36m'   # title: bold cyan
+        H=$'\033[1;33m'   # section headers: bold yellow
+        F=$'\033[0;32m'   # flags: green
+        M=$'\033[0;36m'   # metavariables and defaults: cyan
+        C=$'\033[0;90m'   # comments: gray
+        X=$'\033[0;37m'   # example commands: white
+        W=$'\033[0;33m'   # warnings: yellow
+        R=$'\033[1;31m'   # destructive actions: bold red
+        N=$'\033[0m'
+    fi
+
     cat <<EOF
-${BOLD}${SCRIPT_NAME}${NC} v${VERSION}
+${T}${SCRIPT_NAME}${N} ${M}v${VERSION}${N}
+ProxySQL events log and audit log retention
 
-Purge and/or compress rotated ProxySQL events log (query.log.NNNNNNNN) or
-audit log (audit.log.NNNNNNNN) files. One prefix is processed per run.
-The most recent file (the one ProxySQL is writing to) is always preserved.
-Files currently opened by any process (checked via lsof, if available) are skipped.
+${H}DESCRIPTION${N}
+    Purge and/or compress rotated ProxySQL events log (${M}query.log.NNNNNNNN${N}) or
+    audit log (${M}audit.log.NNNNNNNN${N}) files. One prefix is processed per run.
 
-${BOLD}USAGE${NC}
-    ${SCRIPT_NAME} [OPTIONS]
+${H}USAGE${N}
+    ${SCRIPT_NAME} ${F}[OPTIONS]${N}
 
-${BOLD}OPTIONS${NC}
-    -d, --dir DIR         Directory holding the events log files (default: ${LOG_DIR})
-    -p, --prefix NAME     Log base name, as in mysql-eventslog_filename or
-                          mysql-auditlog_filename (default: ${PREFIX})
-    -k, --keep N          Number of rotated files to keep, active file excluded (default: ${KEEP})
-    -a, --max-age DAYS    Also delete rotated files older than DAYS days (default: 0 = disabled)
-    -c, --compress        gzip rotated files that are kept
-    -n, --dry-run         Show what would be done without changing anything
-    -h, --help            Show this help and exit
-    -V, --version         Show version and exit
+${H}OPTIONS${N}
+    ${F}-d, --dir${N} ${M}DIR${N}         Directory holding the log files
+                          (default: ${M}${DEFAULT_LOG_DIR}${N})
+    ${F}-p, --prefix${N} ${M}NAME${N}     Log base name, as in mysql-eventslog_filename or
+                          mysql-auditlog_filename (default: ${M}${DEFAULT_PREFIX}${N})
+    ${F}-k, --keep${N} ${M}N${N}          Rotated files to keep, active file excluded
+                          (default: ${M}${DEFAULT_KEEP}${N})
+    ${F}-a, --max-age${N} ${M}DAYS${N}    Also delete rotated files older than DAYS days
+                          (default: ${M}${DEFAULT_MAX_AGE_DAYS}${N} = disabled)
+    ${F}-c, --compress${N}        gzip rotated files that are kept
+    ${F}-n, --dry-run${N}         Show what would be done without changing anything
+    ${F}-h, --help${N}            Show this help and exit
+    ${F}-V, --version${N}         Show version and exit
 
-${BOLD}EXAMPLES${NC}
-    # Preview: keep the last 20 rotated files
-    ${SCRIPT_NAME} --keep 20 --dry-run
+${H}SAFETY${N}
+    ${R}Deletion is permanent.${N} Run with ${F}--dry-run${N} first.
+    The active file (highest numeric suffix) is ${W}never${N} deleted or compressed.
+    Files still open by a process are skipped when ${M}lsof${N} is available.
 
-    # Keep max 20 rotated files, none older than 3 days, compress the survivors
-    ${SCRIPT_NAME} -d /data/proxysql -k 20 -a 3 -c
+${H}EXAMPLES${N}
+    ${C}# Preview: keep the last 20 rotated files${N}
+    ${X}${SCRIPT_NAME}${N} ${F}--keep${N} ${M}20${N} ${F}--dry-run${N}
 
-    # Audit log: keep 30 days, compress everything rotated
-    ${SCRIPT_NAME} -d /data/proxysql -p audit.log -k 1000 -a 30 -c
+    ${C}# Keep max 20 rotated files, none older than 3 days, compress the survivors${N}
+    ${X}${SCRIPT_NAME}${N} ${F}-d${N} ${M}/data/proxysql${N} ${F}-k${N} ${M}20${N} ${F}-a${N} ${M}3${N} ${F}-c${N}
 
-    # Cron (/etc/cron.d/proxysql-logs), every 30 minutes
-    */30 * * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p query.log -k 20 -a 3 -c >/dev/null 2>&1
-    */30 * * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p audit.log -k 1000 -a 30 -c >/dev/null 2>&1
+    ${C}# Audit log: keep 30 days, compress everything rotated${N}
+    ${X}${SCRIPT_NAME}${N} ${F}-d${N} ${M}/data/proxysql${N} ${F}-p${N} ${M}audit.log${N} ${F}-k${N} ${M}1000${N} ${F}-a${N} ${M}30${N} ${F}-c${N}
 
-    # Cron, once a day at 00:00
-    0 0 * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p query.log -k 200 -a 3 -c >>/var/log/proxysql/log_retention.log 2>&1
+    ${C}# Cron (/etc/cron.d/proxysql-logs), every 30 minutes${N}
+    ${X}*/30 * * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p query.log -k 20 -a 3 -c >/dev/null 2>&1${N}
+    ${X}*/30 * * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p audit.log -k 1000 -a 30 -c >/dev/null 2>&1${N}
 
-    # systemd timer, once a day at 00:00 (see README for the full unit files)
-    OnCalendar=*-*-* 00:00:00
+    ${C}# Cron, once a day at 00:00${N}
+    ${X}0 0 * * * proxysql /usr/local/bin/${SCRIPT_NAME} -p query.log -k 200 -a 3 -c >>/var/log/proxysql/log_retention.log 2>&1${N}
+
+    ${C}# systemd timer, once a day at 00:00 (see README for the full unit files)${N}
+    ${X}OnCalendar=*-*-* 00:00:00${N}
+
+${H}EXIT STATUS${N}
+    ${F}0${N}  Success, including when no matching files exist
+    ${R}1${N}  Invalid arguments, missing directory, or gzip not found with --compress
 EOF
 }
 

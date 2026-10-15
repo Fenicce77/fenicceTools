@@ -22,8 +22,10 @@ catch-all query rule with `log=1`, the log directory grows without limit.
 - `--compress` gzips the rotated files that survive retention. Compressed files
   keep counting towards `--keep` on later runs.
 - One prefix is processed per run. `query.log` never matches `audit.log` files.
-- Colors are emitted only when stdout is a TTY, so cron and log output stay
-  clean.
+- Runtime colors are emitted only when stdout is a TTY, so cron, journal and
+  log output stay clean.
+- `--help` is always colored, also when piped (use `less -R` to page it).
+  Set `NO_COLOR=1` to get plain help text.
 
 ## Requirements
 
@@ -252,7 +254,7 @@ ProxySQL files:
 bash proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
 ```
 
-It covers argument validation, dry-run, retention by count and age, protection
+It covers argument validation, colored help and `NO_COLOR`, dry-run, retention by count and age, protection
 of the active file, compression and re-runs, numeric ordering of suffixes,
 prefix isolation between `query.log` and `audit.log`, and color suppression on
 non-TTY output.
