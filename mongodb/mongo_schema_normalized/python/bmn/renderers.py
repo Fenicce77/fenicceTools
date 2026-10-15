@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .activity_analysis import top_users
 from .common import (
@@ -41,16 +41,194 @@ def code_counts(items: List[dict]) -> str:
     return ", ".join(f"{code} ({len(lst)})" for code, lst in group_by_code(items))
 
 
-def _info_table_lines(items: List[dict], with_instance: bool) -> List[str]:
-    """Table of one instance group (code-sorted); cross-instance groups add an Instances column."""
-    head = ["Code", "Namespace"] + (["Instances"] if with_instance else []) + ["Finding", "Details"]
-    L = [f"| {' | '.join(head)} |", "|" + "|".join("---" for _ in head) + "|"]
-    for f in items:
-        cells = [f["code"], f"`{md(f['namespace'])}`" if f["namespace"] else "-"]
-        if with_instance:
-            cells.append(md(f["instance"]) if f["instance"] else "-")
-        cells += [md(f["message"]), "<br>".join(f"`{md(d)}`" for d in f["details"]) if f["details"] else "-"]
-        L.append(f"| {' | '.join(cells)} |")
+# ---- per-code Informational tables: short cells, the explanation goes in one note per code.
+# A cell is (text, is_code); each renderer escapes/formats it (markdown, Jira, Confluence).
+Cell = Tuple[str, bool]
+
+
+def icell(v: Any, code: bool = False) -> Cell:
+    empty = v is None or v == ""
+    return ("-" if empty else (str(v) if not isinstance(v, bool) else str(v).lower()), code and not empty)
+
+
+def _last_update(d: dict) -> str:
+    if not d.get("last_modified"):
+        return "-"
+    return f">= {d['last_modified']}" if d.get("modified_method") == "sample" else d["last_modified"]
+
+
+def _ns(f: dict) -> Cell:
+    return icell(f["namespace"], True)
+
+
+def _stale_rows(f: dict) -> List[List[Cell]]:
+    d = f["data"]
+    parts = []
+    if d.get("last_insert"):
+        parts.append("_id")
+    if d.get("modified_field"):
+        parts.append(f"{d['modified_field']} ({d['modified_method']})")
+    how = " + ".join(parts) + ("" if d.get("modified_field") else " (updates not visible)")
+    return [[_ns(f), icell(d.get("last_insert")), icell(_last_update(d)), icell(d["idle_days"]), icell(how.strip())]]
+
+
+def _no_activity_rows(f: dict) -> List[List[Cell]]:
+    d = f["data"]
+    checked = " + ".join(["oplog"] + (["top"] if d.get("top_since") else []) + (["$currentOp"] if d.get("sampled") else []))
+    return [[_ns(f), icell(d.get("last_insert")), icell(_last_update(d)), icell(d.get("oplog_from")), icell(checked)]]
+
+
+_NO_DB_REASONS = {"excluded": "all excluded by --include-dbs/--exclude-dbs", "no_user_databases": "no user databases",
+                  "unverified": "listDatabases privilege not verified"}
+
+INFO_SPECS: Dict[str, Dict[str, Any]] = {
+    "STALE_COLLECTION": {
+        "note": lambda lst: (f"No inserts or updates for at least {lst[0]['data']['stale_days']} days (--stale-days) before "
+                             "the collection date. Last insert ~ comes from the ObjectId _id; updates are only visible "
+                             "through an exact (index/scan) modified date field."),
+        "cols": ["Namespace", "Last insert ~", "Last update", "Idle days", "Obtained from"],
+        "rows": _stale_rows,
+    },
+    "NO_RECENT_ACTIVITY": {
+        "note": lambda lst: ("No writes in the oplog window and no reads/writes in top or $currentOp sampling: candidate for "
+                             "archiving instead of migrating. Last insert ~ comes from the ObjectId _id; Last update from a "
+                             "modified date field (>= = lower bound from the sample)."),
+        "cols": ["Namespace", "Last insert ~", "Last update", "No writes since (oplog)", "Checked"],
+        "rows": _no_activity_rows,
+    },
+    "MODIFIED_FROM_SAMPLE": {
+        "note": lambda lst: ("Last update is a lower bound taken from the sampled documents (field not indexed): index the "
+                             "field or run with --modified-scan for an exact value."),
+        "cols": ["Namespace", "Field", "Last update >="],
+        "rows": lambda f: [[_ns(f), icell(f["data"].get("field"), True), icell(f["data"].get("last_modified"))]],
+    },
+    "OPLOG_WINDOW_SHORT": {
+        "note": lambda lst: "The oplog does not cover the whole requested window: older write activity is not visible.",
+        "cols": ["Oplog first entry", "Requested from"],
+        "rows": lambda f: [[icell(f["data"]["oplog_first"]), icell(f["data"]["requested_from"])]],
+    },
+    "USER_NO_ACTIVITY": {
+        "note": lambda lst: ("User with access but no activity observed (oplog writes / $currentOp sampling): review before "
+                             "migrating."),
+        "cols": ["User", "Access (databases)"],
+        "rows": lambda f: [[_ns(f), icell(", ".join(f["data"]["access"]))]],
+    },
+    "USER_UNRESOLVED": {
+        "note": lambda lst: ("Session user from the oplog that could not be resolved (dropped user or missing viewUser "
+                             "privilege)."),
+        "cols": ["Session user", "Oplog writes"],
+        "rows": lambda f: [[_ns(f), icell(f["data"]["oplog_writes"])]],
+    },
+    "ARRAY_TYPES_POLYMORPHIC": {
+        "note": lambda lst: ("Arrays mixing BSON types inside the same document (key/value pattern, usually by design): not "
+                             "a normalization candidate."),
+        "cols": ["Namespace", "Field", "Types", "Docs"],
+        "rows": lambda f: [[_ns(f), icell(x["path"], True), icell(x["types"]), icell(x["docs"])] for x in f["data"]["fields"]],
+    },
+    "NUMERIC_TYPE_MIXED": {
+        "note": lambda lst: "Numeric fields mixing widths (int/long/double/decimal) in the sample.",
+        "cols": ["Namespace", "Field", "Types", "Sampled docs"],
+        "rows": lambda f: [[_ns(f), icell(x["path"], True), icell(x["types"]), icell(f["data"]["sampled"])]
+                           for x in f["data"]["fields"]],
+    },
+    "SCHEMA_TRUNCATED": {
+        "note": lambda lst: "Field path limit reached while sampling (dynamic keys?): the inferred schema is partial.",
+        "cols": ["Namespace", "Sampled docs"],
+        "rows": lambda f: [[_ns(f), icell(f["data"]["sampled"])]],
+    },
+    "INDEX_LEGACY_OPTION": {
+        "note": lambda lst: "Legacy index options are stripped in the target bootstrap.",
+        "cols": ["Namespace", "Index", "Option"],
+        "rows": lambda f: [[_ns(f), icell(x["index"], True), icell(x["option"], True)] for x in f["data"]["options"]],
+    },
+    "CAPPED": {
+        "note": lambda lst: "Capped collections are recreated with the same size and max.",
+        "cols": ["Namespace", "Size (bytes)", "Max docs"],
+        "rows": lambda f: [[_ns(f), icell(f["data"]["size"]), icell(f["data"]["max"])]],
+    },
+    "TTL_INDEX": {
+        "note": lambda lst: "Expired documents are purged as soon as the TTL index exists on the target.",
+        "cols": ["Namespace", "Index", "expireAfterSeconds"],
+        "rows": lambda f: [[_ns(f), icell(x["index"], True), icell(x["expire_after_seconds"])]
+                           for x in f["data"]["indexes"]],
+    },
+    "VIEW": {
+        "note": lambda lst: "Views must be created after their source collections.",
+        "cols": ["Namespace", "View on"],
+        "rows": lambda f: [[_ns(f), icell(f["data"]["view_on"], True)]],
+    },
+    "SHARD_KEY": {
+        "note": lambda lst: "shardCollection is included in the target bootstrap.",
+        "cols": ["Namespace", "Shard key"],
+        "rows": lambda f: [[_ns(f), icell(f["data"]["shard_key"], True)]],
+    },
+    "DB_MERGE": {
+        "note": lambda lst: "Target database receives collections from several sources.",
+        "cols": ["Target DB", "Sources"],
+        "rows": lambda f: [[_ns(f), icell(", ".join(f["details"]))]],
+    },
+    "NO_TARGET": {
+        "note": lambda lst: "No target instance defined: the central instance should run at least this MongoDB version.",
+        "cols": ["Minimum version"],
+        "rows": lambda f: [[icell(f["data"]["min_version"])]],
+    },
+    "MIXED_VERSIONS": {
+        "note": lambda lst: "Source instances run different major versions.",
+        "cols": ["Instance", "Version"],
+        "rows": lambda f: [[icell(x["instance"]), icell(x["version"])] for x in f["data"]["versions"]],
+    },
+    "NO_USER_DATABASES": {
+        "note": lambda lst: "Nothing to migrate from this instance.",
+        "cols": ["Reason", "Databases"],
+        "rows": lambda f: [[icell(_NO_DB_REASONS.get(f["data"]["reason"], f["data"]["reason"])),
+                            icell(", ".join(f["data"]["databases"]))]],
+    },
+    "USER_DUPLICATE": {
+        "note": lambda lst: "Same user and roles defined in several sources: created once in the bootstrap.",
+        "cols": ["User"],
+        "rows": lambda f: [[_ns(f)]],
+    },
+    "ROLE_DUPLICATE": {
+        "note": lambda lst: "Same custom role defined in several sources: created once in the bootstrap.",
+        "cols": ["Role"],
+        "rows": lambda f: [[_ns(f)]],
+    },
+}
+_NEEDS_DATA_EXEMPT = {"DB_MERGE", "USER_DUPLICATE", "ROLE_DUPLICATE"}
+FALLBACK_SPEC: Dict[str, Any] = {
+    "note": lambda lst: "",
+    "cols": ["Namespace", "Finding", "Details"],
+    "rows": lambda f: [[_ns(f), icell(f["message"]), icell("; ".join(f["details"]))]],
+}
+
+
+def info_code_tables(items: List[dict]) -> List[Dict[str, Any]]:
+    """Tables of one instance group: code, count, note, head, rows. The cross-instance group
+    gets an Instances column when any finding of the code spans several instances."""
+    out = []
+    for code, by_code in group_by_code(items):
+        spec = INFO_SPECS.get(code, FALLBACK_SPEC)
+        if spec is not FALLBACK_SPEC and code not in _NEEDS_DATA_EXEMPT and any("data" not in f for f in by_code):
+            spec = FALLBACK_SPEC
+        with_inst = any(f["instance"] and "," in f["instance"] for f in by_code)
+        head = [spec["cols"][0], "Instances"] + spec["cols"][1:] if with_inst else list(spec["cols"])
+        rows = []
+        for f in by_code:
+            for r in spec["rows"](f):
+                rows.append([r[0], icell(f["instance"])] + r[1:] if with_inst else r)
+        out.append({"code": code, "count": len(by_code), "note": spec["note"](by_code), "head": head, "rows": rows})
+    return out
+
+
+def _info_table_lines(items: List[dict]) -> List[str]:
+    L: List[str] = []
+    for t in info_code_tables(items):
+        L += ["", f"#### {t['code']} ({t['count']})", ""]
+        if t["note"]:
+            L += [f"> {md(t['note'])}", ""]
+        L += [f"| {' | '.join(t['head'])} |", "|" + "|".join("---" for _ in t["head"]) + "|"]
+        for r in t["rows"]:
+            L.append("| " + " | ".join(f"`{md(v)}`" if c else md(v) for v, c in r) + " |")
     return L
 
 
@@ -64,8 +242,9 @@ def _info_section_lines(an: dict, items: List[dict], num: int) -> List[str]:
         L.append(f"| {label} | {len(lst)} | {code_counts(lst)} |")
     for idx, (inst, lst) in enumerate(groups, start=1):
         title = f"Instance `{md(inst)}`" if inst else CROSS_INSTANCE
-        L += ["", f"### {num}.{idx} {title} ({len(lst)})", ""]
-        L += _info_table_lines(lst, not inst)
+        L.append("")
+        L.append(f"### {num}.{idx} {title} ({len(lst)})")
+        L += _info_table_lines(lst)
     return L
 
 

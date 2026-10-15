@@ -15,8 +15,8 @@ from typing import Dict, List, Optional, Tuple
 from .activity_analysis import top_users
 from .common import canon, classify_types, human_bytes
 from .renderers import (
-    CROSS_INSTANCE, SEVERITY_TITLES, _dash, _limit, _modified_cell, _modified_field_cell, code_counts, group_by_code,
-    group_by_instance,
+    CROSS_INSTANCE, SEVERITY_TITLES, _dash, _limit, _modified_cell, _modified_field_cell, code_counts, group_by_instance,
+    info_code_tables,
 )
 
 JIRA_LIMIT = 32767
@@ -192,15 +192,13 @@ def _jira_body(an: dict, compact: bool) -> str:
     if not compact:
         for inst, lst in info_groups:
             title = f"Instance {jesc(inst)}" if inst else CROSS_INSTANCE
-            L += ["", f"h3. {title} ({len(lst)})", "",
-                  jrow(["Code", "Count", "Namespaces" if inst else "Namespaces (instances)"], header=True)]
-            for code, by_code in group_by_code(lst):
-                if inst:
-                    targets = [f["namespace"] for f in by_code if f["namespace"]]
-                else:
-                    targets = [t for t in (" ".join(x for x in (f["namespace"], f"({f['instance']})" if f["instance"] else "")
-                                                    if x) for f in by_code) if t]
-                L.append(jrow([jmono(code), str(len(by_code)), jesc(_limit(targets, 8))]))
+            L += ["", f"h3. {title} ({len(lst)})"]
+            for t in info_code_tables(lst):
+                L += ["", f"h4. {jesc(t['code'])} ({t['count']})"]
+                if t["note"]:
+                    L.append(f"_{jesc(t['note'])}_")
+                L.append(jrow([jesc(h) for h in t["head"]], header=True))
+                L += [jrow([jmono(v) if c else jesc(v) for v, c in r]) for r in t["rows"]]
 
     L += ["", "h2. Database mapping", ""]
     if an["db_mapping"]:
@@ -337,16 +335,11 @@ def _xfinding(f: dict) -> str:
     return head + xmacro("expand", xcodeblock(f["details"]), [("title", f"{len(f['details'])} detail line(s)")])
 
 
-def _x_info_table(items: List[dict], with_instance: bool) -> str:
-    head = ["Code", "Namespace"] + (["Instances"] if with_instance else []) + ["Finding", "Details"]
-    rows = []
-    for f in items:
-        row = [xcode(f["code"]), xcode(f["namespace"]) if f["namespace"] else "-"]
-        if with_instance:
-            row.append(xesc(f["instance"]) if f["instance"] else "-")
-        row += [xesc(f["message"]), "<br/>".join(xcode(d) for d in f["details"]) if f["details"] else "-"]
-        rows.append(row)
-    return xtable(head, rows)
+def _x_info_tables(items: List[dict]) -> str:
+    return "".join(
+        xp(f"<strong>{xesc(t['code'])}</strong> ({t['count']})") + (xp(f"<em>{xesc(t['note'])}</em>") if t["note"] else "")
+        + xtable([xesc(h) for h in t["head"]], [[xcode(v) if c else xesc(v) for v, c in r] for r in t["rows"]])
+        for t in info_code_tables(items))
 
 
 def _x_info_section(an: dict, items: List[dict]) -> List[str]:
@@ -359,7 +352,7 @@ def _x_info_section(an: dict, items: List[dict]) -> List[str]:
     for inst, lst in groups:
         title = f"Instance {xesc(inst)}" if inst else CROSS_INSTANCE
         B.append(f"<h3>{title} ({len(lst)})</h3>")
-        B.append(xmacro("expand", _x_info_table(lst, not inst), [("title", f"Show {len(lst)} informational finding(s)")]))
+        B.append(xmacro("expand", _x_info_tables(lst), [("title", f"Show {len(lst)} informational finding(s)")]))
     return B
 
 
