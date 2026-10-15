@@ -192,10 +192,15 @@ def _jira_body(an: dict, compact: bool) -> str:
     if not compact:
         for inst, lst in info_groups:
             title = f"Instance {jesc(inst)}" if inst else CROSS_INSTANCE
-            L += ["", f"h3. {title} ({len(lst)})", ""]
+            L += ["", f"h3. {title} ({len(lst)})", "",
+                  jrow(["Code", "Count", "Namespaces" if inst else "Namespaces (instances)"], header=True)]
             for code, by_code in group_by_code(lst):
-                targets = [t for t in (f["namespace"] or ("" if inst else f["instance"]) for f in by_code) if t]
-                L.append(f"* {jmono(code)}: {len(by_code)}" + (f" - {jesc(_limit(targets, 8))}" if targets else ""))
+                if inst:
+                    targets = [f["namespace"] for f in by_code if f["namespace"]]
+                else:
+                    targets = [t for t in (" ".join(x for x in (f["namespace"], f"({f['instance']})" if f["instance"] else "")
+                                                    if x) for f in by_code) if t]
+                L.append(jrow([jmono(code), str(len(by_code)), jesc(_limit(targets, 8))]))
 
     L += ["", "h2. Database mapping", ""]
     if an["db_mapping"]:
@@ -332,16 +337,16 @@ def _xfinding(f: dict) -> str:
     return head + xmacro("expand", xcodeblock(f["details"]), [("title", f"{len(f['details'])} detail line(s)")])
 
 
-def _x_grouped_finding(f: dict, with_instance: bool) -> str:
-    parts = []
-    if f["namespace"]:
-        parts.append(xcode(f["namespace"]))
-    if with_instance and f["instance"]:
-        parts.append(f"({xesc(f['instance'])})")
-    head = (f"{' '.join(parts)}: " if parts else "") + xesc(f["message"])
-    if not f["details"]:
-        return head
-    return head + xmacro("expand", xcodeblock(f["details"]), [("title", f"{len(f['details'])} detail line(s)")])
+def _x_info_table(items: List[dict], with_instance: bool) -> str:
+    head = ["Code", "Namespace"] + (["Instances"] if with_instance else []) + ["Finding", "Details"]
+    rows = []
+    for f in items:
+        row = [xcode(f["code"]), xcode(f["namespace"]) if f["namespace"] else "-"]
+        if with_instance:
+            row.append(xesc(f["instance"]) if f["instance"] else "-")
+        row += [xesc(f["message"]), "<br/>".join(xcode(d) for d in f["details"]) if f["details"] else "-"]
+        rows.append(row)
+    return xtable(head, rows)
 
 
 def _x_info_section(an: dict, items: List[dict]) -> List[str]:
@@ -354,10 +359,7 @@ def _x_info_section(an: dict, items: List[dict]) -> List[str]:
     for inst, lst in groups:
         title = f"Instance {xesc(inst)}" if inst else CROSS_INSTANCE
         B.append(f"<h3>{title} ({len(lst)})</h3>")
-        body = "".join(xp(f"<strong>{xesc(code)}</strong> ({len(by_code)})")
-                       + xlist([_x_grouped_finding(f, not inst) for f in by_code])
-                       for code, by_code in group_by_code(lst))
-        B.append(xmacro("expand", body, [("title", f"Show {len(lst)} informational finding(s)")]))
+        B.append(xmacro("expand", _x_info_table(lst, not inst), [("title", f"Show {len(lst)} informational finding(s)")]))
     return B
 
 

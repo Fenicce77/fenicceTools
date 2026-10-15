@@ -812,13 +812,17 @@ function groupByCode(items) {
 const codeCounts = (items) => groupByCode(items).map(([code, list]) => `${code} (${list.length})`).join(', ');
 const CROSS_INSTANCE = 'Cross-instance';
 
-// Finding line inside an instance/code group: severity and code are in the headings.
-function groupedFindingLines(f, withInstance) {
-  const parts = [];
-  if (f.namespace) parts.push(`\`${md(f.namespace)}\``);
-  if (withInstance && f.instance) parts.push(`(${md(f.instance)})`);
-  const head = parts.length ? `${parts.join(' ')}: ` : '';
-  return [`- ${head}${md(f.message)}`].concat(f.details.map((d) => `  - \`${md(d)}\``));
+// Table of one instance group (code-sorted); cross-instance groups add an Instances column.
+function infoTableLines(list, withInstance) {
+  const head = ['Code', 'Namespace'].concat(withInstance ? ['Instances'] : [], ['Finding', 'Details']);
+  const L = [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`];
+  for (const f of list) {
+    const cells = [f.code, f.namespace ? `\`${md(f.namespace)}\`` : '-'];
+    if (withInstance) cells.push(f.instance ? md(f.instance) : '-');
+    cells.push(md(f.message), f.details.length ? f.details.map((d) => `\`${md(d)}\``).join('<br>') : '-');
+    L.push(`| ${cells.join(' | ')} |`);
+  }
+  return L;
 }
 
 function infoSectionLines(an, items, num) {
@@ -827,11 +831,8 @@ function infoSectionLines(an, items, num) {
   const L = ['| Instance | Findings | Codes |', '|---|---:|---|'];
   for (const [inst, list] of groups) L.push(`| ${inst ? md(inst) : `_${CROSS_INSTANCE.toLowerCase()}_`} | ${list.length} | ${codeCounts(list)} |`);
   groups.forEach(([inst, list], idx) => {
-    L.push('', `### ${num}.${idx + 1} ${inst ? `Instance \`${md(inst)}\`` : CROSS_INSTANCE} (${list.length})`);
-    for (const [code, byCode] of groupByCode(list)) {
-      L.push('', `**${code}** (${byCode.length})`, '');
-      for (const f of byCode) L.push(...groupedFindingLines(f, !inst));
-    }
+    L.push('', `### ${num}.${idx + 1} ${inst ? `Instance \`${md(inst)}\`` : CROSS_INSTANCE} (${list.length})`, '');
+    L.push(...infoTableLines(list, !inst));
   });
   return L;
 }
@@ -1379,10 +1380,10 @@ function jiraBody(an, compact) {
   for (const [inst, list] of infoGroups) L.push(jrow([inst ? jesc(inst) : `_${CROSS_INSTANCE.toLowerCase()}_`, String(list.length), jesc(codeCounts(list))]));
   if (!compact) {
     for (const [inst, list] of infoGroups) {
-      L.push('', `h3. ${inst ? `Instance ${jesc(inst)}` : CROSS_INSTANCE} (${list.length})`, '');
+      L.push('', `h3. ${inst ? `Instance ${jesc(inst)}` : CROSS_INSTANCE} (${list.length})`, '', jrow(['Code', 'Count', inst ? 'Namespaces' : 'Namespaces (instances)'], true));
       for (const [code, byCode] of groupByCode(list)) {
-        const targets = byCode.map((f) => f.namespace || (inst ? '' : f.instance)).filter((t) => t);
-        L.push(`* ${jmono(code)}: ${byCode.length}${targets.length ? ` - ${jesc(limitList(targets, 8))}` : ''}`);
+        const targets = byCode.map((f) => (inst ? f.namespace : [f.namespace, f.instance ? `(${f.instance})` : ''].filter((t) => t).join(' '))).filter((t) => t);
+        L.push(jrow([jmono(code), String(byCode.length), jesc(limitList(targets, 8))]));
       }
     }
   }
@@ -1485,13 +1486,10 @@ function xfinding(f) {
   if (!f.details.length) return head;
   return head + xmacro('expand', xcodeblock(f.details), [['title', `${f.details.length} detail line(s)`]]);
 }
-function xGroupedFinding(f, withInstance) {
-  const parts = [];
-  if (f.namespace) parts.push(xcode(f.namespace));
-  if (withInstance && f.instance) parts.push(`(${xesc(f.instance)})`);
-  const head = (parts.length ? `${parts.join(' ')}: ` : '') + xesc(f.message);
-  if (!f.details.length) return head;
-  return head + xmacro('expand', xcodeblock(f.details), [['title', `${f.details.length} detail line(s)`]]);
+function xInfoTable(list, withInstance) {
+  const head = ['Code', 'Namespace'].concat(withInstance ? ['Instances'] : [], ['Finding', 'Details']);
+  return xtable(head, list.map((f) => [xcode(f.code), f.namespace ? xcode(f.namespace) : '-']
+    .concat(withInstance ? [f.instance ? xesc(f.instance) : '-'] : [], [xesc(f.message), f.details.length ? f.details.map(xcode).join('<br/>') : '-'])));
 }
 
 function xInfoSection(an, items) {
@@ -1500,8 +1498,7 @@ function xInfoSection(an, items) {
   const B = [xtable(['Instance', 'Findings', 'Codes'], groups.map(([inst, list]) => [inst ? xesc(inst) : `<em>${CROSS_INSTANCE.toLowerCase()}</em>`, String(list.length), xesc(codeCounts(list))]))];
   for (const [inst, list] of groups) {
     B.push(`<h3>${inst ? `Instance ${xesc(inst)}` : CROSS_INSTANCE} (${list.length})</h3>`);
-    const body = groupByCode(list).map(([code, byCode]) => xp(`<strong>${xesc(code)}</strong> (${byCode.length})`) + xlist(byCode.map((f) => xGroupedFinding(f, !inst)))).join('');
-    B.push(xmacro('expand', body, [['title', `Show ${list.length} informational finding(s)`]]));
+    B.push(xmacro('expand', xInfoTable(list, !inst), [['title', `Show ${list.length} informational finding(s)`]]));
   }
   return B;
 }

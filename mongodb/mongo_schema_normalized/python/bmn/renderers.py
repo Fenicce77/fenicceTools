@@ -41,15 +41,17 @@ def code_counts(items: List[dict]) -> str:
     return ", ".join(f"{code} ({len(lst)})" for code, lst in group_by_code(items))
 
 
-def _grouped_finding_lines(f: dict, with_instance: bool) -> List[str]:
-    """Finding line inside an instance/code group: severity and code are in the headings."""
-    parts = []
-    if f["namespace"]:
-        parts.append(f"`{md(f['namespace'])}`")
-    if with_instance and f["instance"]:
-        parts.append(f"({md(f['instance'])})")
-    head = f"{' '.join(parts)}: " if parts else ""
-    return [f"- {head}{md(f['message'])}"] + [f"  - `{md(d)}`" for d in f["details"]]
+def _info_table_lines(items: List[dict], with_instance: bool) -> List[str]:
+    """Table of one instance group (code-sorted); cross-instance groups add an Instances column."""
+    head = ["Code", "Namespace"] + (["Instances"] if with_instance else []) + ["Finding", "Details"]
+    L = [f"| {' | '.join(head)} |", "|" + "|".join("---" for _ in head) + "|"]
+    for f in items:
+        cells = [f["code"], f"`{md(f['namespace'])}`" if f["namespace"] else "-"]
+        if with_instance:
+            cells.append(md(f["instance"]) if f["instance"] else "-")
+        cells += [md(f["message"]), "<br>".join(f"`{md(d)}`" for d in f["details"]) if f["details"] else "-"]
+        L.append(f"| {' | '.join(cells)} |")
+    return L
 
 
 def _info_section_lines(an: dict, items: List[dict], num: int) -> List[str]:
@@ -62,11 +64,8 @@ def _info_section_lines(an: dict, items: List[dict], num: int) -> List[str]:
         L.append(f"| {label} | {len(lst)} | {code_counts(lst)} |")
     for idx, (inst, lst) in enumerate(groups, start=1):
         title = f"Instance `{md(inst)}`" if inst else CROSS_INSTANCE
-        L += ["", f"### {num}.{idx} {title} ({len(lst)})"]
-        for code, by_code in group_by_code(lst):
-            L += ["", f"**{code}** ({len(by_code)})", ""]
-            for f in by_code:
-                L += _grouped_finding_lines(f, not inst)
+        L += ["", f"### {num}.{idx} {title} ({len(lst)})", ""]
+        L += _info_table_lines(lst, not inst)
     return L
 
 
