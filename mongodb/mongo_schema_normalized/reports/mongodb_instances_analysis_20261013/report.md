@@ -244,8 +244,8 @@ _No namespaces shared across instances._
 
 ### Instance `cd`
 
-- Members: cd-mongodbcluster01-node01.betika.private:27017 (PRIMARY), cd-mongodbcluster01-node02.betika.private:27017 (SECONDARY), cd-mongodbcluster01-node03.betika.private:27017 (SECONDARY)
-- Oplog: 720 h requested on cd-mongodbcluster01-node02.betika.private:27017; analyzed from 2026-09-23T13:33:00Z to 2026-10-13T12:44:00Z
+- Members: cd-mongodbcluster01-node01:27017 (PRIMARY), cd-mongodbcluster01-node02:27017 (SECONDARY), cd-mongodbcluster01-node03:27017 (SECONDARY)
+- Oplog: 720 h requested on cd-mongodbcluster01-node02:27017; analyzed from 2026-09-23T13:33:00Z to 2026-10-13T12:44:00Z
 
 | Namespace | _id | First insert ~ | Last insert ~ | Last modified | Modified field | Created (oplog) | Last write (oplog) | Oplog i/u/d/c | Users |
 |---|---|---|---|---|---|---|---|---|---|
@@ -271,8 +271,8 @@ _No namespaces shared across instances._
 
 ### Instance `gh`
 
-- Members: gh-mongodbcluster01.betika.private:27017 (SECONDARY), gh-mongodbcluster02.betika.private:27017 (PRIMARY), gh-mongodbcluster03.betika.private:27017 (SECONDARY)
-- Oplog: 720 h requested on gh-mongodbcluster01.betika.private:27017; analyzed from 2026-09-13T12:42:25Z to 2026-10-13T12:42:23Z
+- Members: gh-mongodbcluster01:27017 (SECONDARY), gh-mongodbcluster02:27017 (PRIMARY), gh-mongodbcluster03:27017 (SECONDARY)
+- Oplog: 720 h requested on gh-mongodbcluster01:27017; analyzed from 2026-09-13T12:42:25Z to 2026-10-13T12:42:23Z
 
 | Namespace | _id | First insert ~ | Last insert ~ | Last modified | Modified field | Created (oplog) | Last write (oplog) | Oplog i/u/d/c | Users |
 |---|---|---|---|---|---|---|---|---|---|
@@ -280,8 +280,8 @@ _No namespaces shared across instances._
 
 ### Instance `ke`
 
-- Members: ke-mongodbcluster01.betika.private:27017 (SECONDARY), ke-mongodbcluster03.betika.private:27017 (SECONDARY), ke-mongodbcluster02.betika.private:27017 (PRIMARY)
-- Oplog: 720 h requested on ke-mongodbcluster01.betika.private:27017; analyzed from 2026-09-14T13:22:58Z to 2026-10-13T12:43:17Z
+- Members: ke-mongodbcluster01:27017 (SECONDARY), ke-mongodbcluster03:27017 (SECONDARY), ke-mongodbcluster02:27017 (PRIMARY)
+- Oplog: 720 h requested on ke-mongodbcluster01:27017; analyzed from 2026-09-14T13:22:58Z to 2026-10-13T12:43:17Z
 
 | Namespace | _id | First insert ~ | Last insert ~ | Last modified | Modified field | Created (oplog) | Last write (oplog) | Oplog i/u/d/c | Users |
 |---|---|---|---|---|---|---|---|---|---|
@@ -305,22 +305,22 @@ _No namespaces shared across instances._
 
 ### Instance `mw`
 
-- Members: mw-mongodbcluster01.betika.private:27017 (PRIMARY), mw-mongodbcluster02.betika.private:27017 (SECONDARY), mw-mongodbcluster03.betika.private:27017 (SECONDARY)
-- Oplog: 720 h requested on mw-mongodbcluster02.betika.private:27017; analyzed from 2026-09-13T12:42:23Z to 2026-10-13T12:42:23Z
+- Members: mw-mongodbcluster01:27017 (PRIMARY), mw-mongodbcluster02:27017 (SECONDARY), mw-mongodbcluster03:27017 (SECONDARY)
+- Oplog: 720 h requested on mw-mongodbcluster02:27017; analyzed from 2026-09-13T12:42:23Z to 2026-10-13T12:42:23Z
 
 _No collections._
 
 ### Instance `tz`
 
-- Members: tz-mongodbcluster01-node01.betika.private:27017 (SECONDARY), tz-mongodbcluster01-node02.betika.private:27017 (PRIMARY), tz-mongodbcluster01-node03.betika.private:27017 (SECONDARY)
-- Oplog: 720 h requested on tz-mongodbcluster01-node01.betika.private:27017; analyzed from 2026-09-13T12:42:23Z to 2026-10-13T12:42:22Z
+- Members: tz-mongodbcluster01-node01:27017 (SECONDARY), tz-mongodbcluster01-node02:27017 (PRIMARY), tz-mongodbcluster01-node03:27017 (SECONDARY)
+- Oplog: 720 h requested on tz-mongodbcluster01-node01:27017; analyzed from 2026-09-13T12:42:23Z to 2026-10-13T12:42:22Z
 
 _No collections._
 
 ### Instance `ug`
 
-- Members: ug-mongodbcluster01-node01.betika.private:27017 (SECONDARY), ug-mongodbcluster01-node02.betika.private:27017 (PRIMARY), ug-mongodbcluster01-node03.betika.private:27017 (SECONDARY)
-- Oplog: 720 h requested on ug-mongodbcluster01-node01.betika.private:27017; analyzed from 2026-09-13T12:42:23Z to 2026-10-13T12:42:19Z
+- Members: ug-mongodbcluster01-node01:27017 (SECONDARY), ug-mongodbcluster01-node02:27017 (PRIMARY), ug-mongodbcluster01-node03:27017 (SECONDARY)
+- Oplog: 720 h requested on ug-mongodbcluster01-node01:27017; analyzed from 2026-09-13T12:42:23Z to 2026-10-13T12:42:19Z
 
 _No collections._
 
