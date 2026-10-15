@@ -188,8 +188,40 @@ test_no_color_when_not_tty() {
     esac
 }
 
+test_help_colored() {
+    local out flag
+    for flag in -h --help; do
+        out=$("$SCRIPT_PATH" "$flag" | cat)
+        assert_contains "$out" $'\033[1;33mOPTIONS' "help ($flag) colors section headers even when piped"
+        assert_contains "$out" $'\033[0;32m-k, --keep' "help ($flag) colors flags"
+        assert_contains "$out" "SAFETY" "help ($flag) shows safety section"
+        assert_contains "$out" "EXIT STATUS" "help ($flag) shows exit status"
+    done
+}
+
+test_help_no_color_env() {
+    local out
+    out=$(NO_COLOR=1 "$SCRIPT_PATH" --help)
+    TEST_COUNT=$((TEST_COUNT + 1))
+    case "$out" in
+        *$'\033'*) fail "NO_COLOR must disable help colors" ;;
+    esac
+    assert_contains "$out" "-k, --keep N" "plain help keeps option layout"
+}
+
+test_help_shows_real_defaults() {
+    local out
+    out=$(NO_COLOR=1 "$SCRIPT_PATH" -d /nonexistent -k 99 -p audit.log --help)
+    assert_contains "$out" "(default: /data/proxysql)" "help default dir is not overridden by -d"
+    assert_contains "$out" "(default: 10)" "help default keep is not overridden by -k"
+    assert_contains "$out" "(default: query.log)" "help default prefix is not overridden by -p"
+}
+
 main() {
     test_syntax_and_help
+    test_help_colored
+    test_help_no_color_env
+    test_help_shows_real_defaults
     test_invalid_arguments
     test_dry_run_changes_nothing
     test_keep_by_count_protects_active
