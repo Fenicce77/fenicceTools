@@ -88,7 +88,8 @@ def analyze_activity(sources: List[dict], F, stale_days: int = 180) -> Tuple[Lis
                     and oplog["oplog_first"] > oplog["requested_from"]:
                 F.add("INFO", "OPLOG_WINDOW_SHORT", iname, "",
                       f"oplog only covers writes since {oplog['oplog_first']} "
-                      f"(requested since {oplog['requested_from']})")
+                      f"(requested since {oplog['requested_from']})", [],
+                      {"oplog_first": oplog["oplog_first"], "requested_from": oplog["requested_from"]})
 
             for db in sorted(s.get("databases") or [], key=lambda d: d["name"]):
                 for c in sorted(db.get("collections") or [], key=lambda x: x["name"]):
@@ -121,7 +122,8 @@ def analyze_activity(sources: List[dict], F, stale_days: int = 180) -> Tuple[Lis
                     if method == "sample":
                         F.add("INFO", "MODIFIED_FROM_SAMPLE", iname, ns,
                               f"last modification of '{ca.get('last_modified_field')}' is a lower bound taken from the "
-                              f"sample ({ca.get('last_modified')}); index the field or use --modified-scan for an exact value")
+                              f"sample ({ca.get('last_modified')}); index the field or use --modified-scan for an exact value",
+                              [], {"field": ca.get("last_modified_field"), "last_modified": ca.get("last_modified")})
                     exact_modified = ca.get("last_modified") if method in ("index", "scan") else None
                     uncertain = any(m.get("method") in ("sample", "none") or m.get("error") for m in modified)
                     newest = max([d for d in (ca.get("last_insert"), exact_modified) if d] or [""])
@@ -133,7 +135,13 @@ def analyze_activity(sources: List[dict], F, stale_days: int = 180) -> Tuple[Lis
                             scope = ("inserts or modifications" if exact_modified
                                      else "inserts (no *modified* date field: updates are not visible)")
                             F.add("INFO", "STALE_COLLECTION", iname, ns,
-                                  f"no {scope} since {newest} ({age} days before the collection date)")
+                                  f"no {scope} since {newest} ({age} days before the collection date)", [], {
+                                      "last_insert": ca.get("last_insert"), "id_type": ca.get("id_type"),
+                                      "last_modified": exact_modified,
+                                      "modified_field": ca.get("last_modified_field") if exact_modified else None,
+                                      "modified_method": method if exact_modified else None,
+                                      "idle_days": age, "stale_days": stale_days,
+                                  })
                     collections.append({
                         "namespace": ns, "type": c.get("type") or "collection",
                         "first_insert": ca.get("first_insert"), "last_insert": ca.get("last_insert"),
@@ -155,7 +163,13 @@ def analyze_activity(sources: List[dict], F, stale_days: int = 180) -> Tuple[Lis
                     if oplog_ok and writes == 0 and idle_top and idle_sample:
                         F.add("INFO", "NO_RECENT_ACTIVITY", iname, ns,
                               f"no writes since {oplog.get('from')} (oplog) and no reads/writes since "
-                              f"{(ct or {}).get('since') or '-'}: candidate for archiving instead of migrating")
+                              f"{(ct or {}).get('since') or '-'}: candidate for archiving instead of migrating", [], {
+                                  "last_insert": ca.get("last_insert"), "id_type": ca.get("id_type"),
+                                  "last_modified": ca.get("last_modified"),
+                                  "modified_field": ca.get("last_modified_field"), "modified_method": method,
+                                  "oplog_from": oplog.get("from"), "top_since": (ct or {}).get("since") or None,
+                                  "sampled": cs is not None,
+                              })
 
             for u, data in (act.get("users") or {}).items():
                 st = ustat(u)
@@ -196,8 +210,9 @@ def analyze_activity(sources: List[dict], F, stale_days: int = 180) -> Tuple[Lis
             if name.startswith("uid:"):
                 F.add("INFO", "USER_UNRESOLVED", iname, name,
                       "oplog writes from a session user that could not be resolved "
-                      "(dropped user or missing viewUser privilege)")
+                      "(dropped user or missing viewUser privilege)", [], {"oplog_writes": st["oplog_writes"]})
             elif recommendation == "review":
                 F.add("INFO", "USER_NO_ACTIVITY", iname, name,
-                      "user has access but no activity was observed (oplog/sampling)")
+                      "user has access but no activity was observed (oplog/sampling)", [],
+                      {"access": effective_access(defined.get(name, []), custom)})
     return activity_out, users_out

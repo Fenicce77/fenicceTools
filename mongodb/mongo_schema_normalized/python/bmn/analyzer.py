@@ -31,11 +31,15 @@ class Findings:
         self.items: List[Dict[str, Any]] = []
 
     def add(self, severity: str, code: str, instance: str, namespace: str, message: str,
-            details: Optional[List[str]] = None) -> None:
-        self.items.append({
+            details: Optional[List[str]] = None, data: Optional[Dict[str, Any]] = None) -> None:
+        """data: optional structured values used by the per-code report tables (INFO findings)."""
+        item: Dict[str, Any] = {
             "severity": severity, "code": code, "instance": instance or "", "namespace": namespace or "",
             "message": message, "details": list(details or []),
-        })
+        }
+        if data:
+            item["data"] = data
+        self.items.append(item)
 
     def sorted(self) -> List[Dict[str, Any]]:
         return sorted(self.items, key=lambda f: (SEV_RANK[f["severity"]], f["code"], f["instance"],
@@ -226,11 +230,14 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                 schema = c.get("schema") or {}
                 if schema.get("truncated"):
                     F.add("INFO", "SCHEMA_TRUNCATED", iname, sns,
-                          "field path limit reached while sampling (dynamic keys?); schema is partial")
+                          "field path limit reached while sampling (dynamic keys?); schema is partial", [],
+                          {"sampled": int(schema.get("sampled") or 0)})
 
                 mixed: List[str] = []
                 numeric: List[str] = []
                 polymorphic: List[str] = []
+                numeric_data: List[Dict[str, Any]] = []
+                polymorphic_data: List[Dict[str, Any]] = []
                 fields = _fields(c)
                 for path in sorted(fields):
                     types = fields[path].get("types") or {}
@@ -240,9 +247,12 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                     line = f"{path}: {fmt_types(types)}"
                     if cls == "numeric":
                         numeric.append(line)
+                        numeric_data.append({"path": path, "types": fmt_types(types)})
                         continue
                     if is_polymorphic_array(path, fields[path]):
                         polymorphic.append(f"{line} (in {int(fields[path].get('count') or 0)} doc(s))")
+                        polymorphic_data.append({"path": path, "types": fmt_types(types),
+                                                 "docs": int(fields[path].get("count") or 0)})
                         continue
                     mixed.append(line)
                     non_null = {t: n for t, n in types.items() if t not in NULLISH_TYPES}
@@ -263,10 +273,11 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                     F.add("INFO", "ARRAY_TYPES_POLYMORPHIC", iname, sns,
                           f"{len(polymorphic)} array field(s) mix BSON types inside the same document "
                           "(polymorphic / key-value pattern, usually by design; not a normalization candidate)",
-                          polymorphic)
+                          polymorphic, {"fields": polymorphic_data})
                 if numeric:
                     F.add("INFO", "NUMERIC_TYPE_MIXED", iname, sns,
-                          f"{len(numeric)} field(s) mix numeric widths (int/long/double/decimal)", numeric)
+                          f"{len(numeric)} field(s) mix numeric widths (int/long/double/decimal)", numeric,
+                          {"sampled": int(schema.get("sampled") or 0), "fields": numeric_data})
 
                 features: List[Tuple[str, Tuple[int, int]]] = []
                 if ctype == "timeseries":
@@ -289,25 +300,33 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                               f"geoHaystack index '{ix.get('name')}' was removed in MongoDB 5.0; "
                               "replace it with a 2d index and $geoWithin queries")
 
-                legacy = [f"{ix.get('name')}: {opt}" for ix in indexes for opt in ("background", "dropDups")
-                          if opt in ix]
+                legacy_data = [{"index": str(ix.get("name")), "option": opt}
+                               for ix in indexes for opt in ("background", "dropDups") if opt in ix]
+                legacy = [f"{d['index']}: {d['option']}" for d in legacy_data]
                 if legacy:
                     F.add("INFO", "INDEX_LEGACY_OPTION", iname, sns,
-                          f"{len(legacy)} legacy index option(s) will be stripped in bootstrap", legacy)
+                          f"{len(legacy)} legacy index option(s) will be stripped in bootstrap", legacy,
+                          {"options": legacy_data})
                 if "autoIndexId" in opts:
                     F.add("WARN", "OPTION_LEGACY", iname, sns,
                           "autoIndexId collection option is not supported by modern MongoDB and will be stripped")
                 if opts.get("capped"):
                     F.add("INFO", "CAPPED", iname, sns,
-                          f"capped collection (size={fmt_value(opts.get('size'))}, max={fmt_value(opts.get('max'))})")
+                          f"capped collection (size={fmt_value(opts.get('size'))}, max={fmt_value(opts.get('max'))})",
+                          [], {"size": fmt_value(opts.get("size")), "max": fmt_value(opts.get("max"))})
+                ttl_indexes = [ix for ix in indexes if "expireAfterSeconds" in ix and not ix.get("clustered")]
                 ttl = [f"{ix.get('name')}: expireAfterSeconds={fmt_value(ix.get('expireAfterSeconds'))}"
-                       for ix in indexes if "expireAfterSeconds" in ix and not ix.get("clustered")]
+                       for ix in ttl_indexes]
                 if ttl:
                     F.add("INFO", "TTL_INDEX", iname, sns,
-                          "TTL index(es): expired documents are purged as soon as the index exists on target", ttl)
+                          "TTL index(es): expired documents are purged as soon as the index exists on target", ttl,
+                          {"indexes": [{"index": str(ix.get("name")),
+                                        "expire_after_seconds": fmt_value(ix.get("expireAfterSeconds"))}
+                                       for ix in ttl_indexes]})
                 if ctype == "view":
                     F.add("INFO", "VIEW", iname, sns,
-                          f"view on '{opts.get('viewOn') or '-'}' must be created after its source collections")
+                          f"view on '{opts.get('viewOn') or '-'}' must be created after its source collections",
+                          [], {"view_on": str(opts.get("viewOn") or "-")})
                 if ctype == "timeseries" and tdb != sdb:
                     F.add("WARN", "TIMESERIES_RENAME", iname, sns,
                           "time-series collection remapped to another database: validate mongorestore "
@@ -316,7 +335,8 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
                 if shard_key:
                     if target_sharded:
                         F.add("INFO", "SHARD_KEY", iname, sns,
-                              f"sharded on {canon(shard_key, False)}; shardCollection is included in bootstrap")
+                              f"sharded on {canon(shard_key, False)}; shardCollection is included in bootstrap",
+                              [], {"shard_key": canon(shard_key, False)})
                     else:
                         state = "not sharded" if target else "undefined"
                         F.add("WARN", "SHARD_KEY_LOST", iname, sns,
@@ -355,13 +375,16 @@ def analyze(snapshots: List[dict], params: AnalysisParams) -> dict:  # noqa: C90
         for s in sources[1:]:
             if parse_version(s["server"].get("version")) > parse_version(best["server"].get("version")):
                 best = s
+        min_version = _ver_str(parse_version(best["server"].get("version")))
         F.add("INFO", "NO_TARGET", "", "",
-              f"no target instance defined; the central instance should run MongoDB >= "
-              f"{_ver_str(parse_version(best['server'].get('version')))}")
+              f"no target instance defined; the central instance should run MongoDB >= {min_version}",
+              [], {"min_version": min_version})
     majors = {parse_version((s.get("server") or {}).get("version"))[:2] for s in sources}
     if len(majors) > 1:
         F.add("INFO", "MIXED_VERSIONS", "", "", f"source instances run {len(majors)} different major versions",
-              sorted(f"{_name(s)}: {(s.get('server') or {}).get('version')}" for s in sources))
+              sorted(f"{_name(s)}: {(s.get('server') or {}).get('version')}" for s in sources),
+              {"versions": sorted(({"instance": _name(s), "version": str((s.get("server") or {}).get("version") or "-")}
+                                   for s in sources), key=lambda v: v["instance"])})
 
     # --- drift across instances (same source namespace)
     groups: Dict[str, List[Tuple[str, dict]]] = {}
@@ -518,13 +541,16 @@ def _listing_findings(s: dict, F: Findings) -> None:
         return
     if excluded:
         F.add("INFO", "NO_USER_DATABASES", iname, "",
-              f"all {len(excluded)} user database(s) were excluded by --include-dbs/--exclude-dbs", sorted(excluded))
+              f"all {len(excluded)} user database(s) were excluded by --include-dbs/--exclude-dbs", sorted(excluded),
+              {"reason": "excluded", "databases": sorted(excluded)})
     elif can_list is True:
         F.add("INFO", "NO_USER_DATABASES", iname, "",
-              f"the instance has no user databases (listed: {listed}): nothing to migrate")
+              f"the instance has no user databases (listed: {listed}): nothing to migrate", [],
+              {"reason": "no_user_databases", "databases": list(listing.get("listed") or [])})
     elif can_list is None:
         F.add("INFO", "NO_USER_DATABASES", iname, "",
-              f"no user databases listed (listed: {listed}); the listDatabases privilege could not be verified")
+              f"no user databases listed (listed: {listed}); the listDatabases privilege could not be verified", [],
+              {"reason": "unverified", "databases": list(listing.get("listed") or [])})
 
 
 def _split_role(ref: str) -> Dict[str, str]:

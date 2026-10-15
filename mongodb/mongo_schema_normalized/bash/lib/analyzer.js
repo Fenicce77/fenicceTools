@@ -162,8 +162,11 @@ function instanceSummary(s, role) {
 class Findings {
   constructor() { this.items = []; }
 
-  add(severity, code, instance, namespace, message, details) {
-    this.items.push({ severity, code, instance: instance || '', namespace: namespace || '', message, details: (details || []).slice() });
+  // data: optional structured values used by the per-code report tables (INFO findings).
+  add(severity, code, instance, namespace, message, details, data) {
+    const item = { severity, code, instance: instance || '', namespace: namespace || '', message, details: (details || []).slice() };
+    if (data) item.data = data;
+    this.items.push(item);
   }
 
   sorted() {
@@ -271,11 +274,13 @@ function analyze(snapshots, params) {
         if (c.stats_error) F.add('WARN', 'STATS_ERROR', iname, sns, `$collStats failed: ${c.stats_error}`);
         if (c.schema_error) F.add('WARN', 'SAMPLE_ERROR', iname, sns, `schema sampling failed: ${c.schema_error}`);
         const schema = c.schema || {};
-        if (schema.truncated) F.add('INFO', 'SCHEMA_TRUNCATED', iname, sns, 'field path limit reached while sampling (dynamic keys?); schema is partial');
+        if (schema.truncated) F.add('INFO', 'SCHEMA_TRUNCATED', iname, sns, 'field path limit reached while sampling (dynamic keys?); schema is partial', [], { sampled: num(schema.sampled) });
 
         const mixed = [];
         const numeric = [];
         const polymorphic = [];
+        const numericData = [];
+        const polymorphicData = [];
         const fields = sFields(c);
         for (const p of sortStr(Object.keys(fields))) {
           const types = fields[p].types || {};
@@ -284,10 +289,12 @@ function analyze(snapshots, params) {
           const line = `${p}: ${fmtTypes(types)}`;
           if (cls === 'numeric') {
             numeric.push(line);
+            numericData.push({ path: p, types: fmtTypes(types) });
             continue;
           }
           if (isPolymorphicArray(p, fields[p])) {
             polymorphic.push(`${line} (in ${num(fields[p].count)} doc(s))`);
+            polymorphicData.push({ path: p, types: fmtTypes(types), docs: num(fields[p].count) });
             continue;
           }
           mixed.push(line);
@@ -302,9 +309,12 @@ function analyze(snapshots, params) {
         if (mixed.length) F.add('WARN', 'FIELD_TYPE_MIXED', iname, sns, `${mixed.length} field(s) with inconsistent BSON types in a sample of ${num(schema.sampled)} document(s)`, mixed);
         if (polymorphic.length) {
           F.add('INFO', 'ARRAY_TYPES_POLYMORPHIC', iname, sns, `${polymorphic.length} array field(s) mix BSON types inside the same document `
-            + '(polymorphic / key-value pattern, usually by design; not a normalization candidate)', polymorphic);
+            + '(polymorphic / key-value pattern, usually by design; not a normalization candidate)', polymorphic, { fields: polymorphicData });
         }
-        if (numeric.length) F.add('INFO', 'NUMERIC_TYPE_MIXED', iname, sns, `${numeric.length} field(s) mix numeric widths (int/long/double/decimal)`, numeric);
+        if (numeric.length) {
+          F.add('INFO', 'NUMERIC_TYPE_MIXED', iname, sns, `${numeric.length} field(s) mix numeric widths (int/long/double/decimal)`, numeric,
+            { sampled: num(schema.sampled), fields: numericData });
+        }
 
         const features = [];
         if (ctype === 'timeseries') features.push(['time-series collection', [5, 0]]);
@@ -323,20 +333,34 @@ function analyze(snapshots, params) {
           }
         }
         const legacy = [];
-        for (const ix of indexes) for (const opt of ['background', 'dropDups']) if (has(ix, opt)) legacy.push(`${ix.name}: ${opt}`);
-        if (legacy.length) F.add('INFO', 'INDEX_LEGACY_OPTION', iname, sns, `${legacy.length} legacy index option(s) will be stripped in bootstrap`, legacy);
+        const legacyData = [];
+        for (const ix of indexes) {
+          for (const opt of ['background', 'dropDups']) {
+            if (has(ix, opt)) {
+              legacy.push(`${ix.name}: ${opt}`);
+              legacyData.push({ index: String(ix.name), option: opt });
+            }
+          }
+        }
+        if (legacy.length) F.add('INFO', 'INDEX_LEGACY_OPTION', iname, sns, `${legacy.length} legacy index option(s) will be stripped in bootstrap`, legacy, { options: legacyData });
         if (has(opts, 'autoIndexId')) F.add('WARN', 'OPTION_LEGACY', iname, sns, 'autoIndexId collection option is not supported by modern MongoDB and will be stripped');
-        if (opts.capped) F.add('INFO', 'CAPPED', iname, sns, `capped collection (size=${fmtValue(opts.size)}, max=${fmtValue(opts.max)})`);
-        const ttl = indexes.filter((ix) => has(ix, 'expireAfterSeconds') && !ix.clustered)
-          .map((ix) => `${ix.name}: expireAfterSeconds=${fmtValue(ix.expireAfterSeconds)}`);
-        if (ttl.length) F.add('INFO', 'TTL_INDEX', iname, sns, 'TTL index(es): expired documents are purged as soon as the index exists on target', ttl);
-        if (ctype === 'view') F.add('INFO', 'VIEW', iname, sns, `view on '${opts.viewOn || '-'}' must be created after its source collections`);
+        if (opts.capped) {
+          F.add('INFO', 'CAPPED', iname, sns, `capped collection (size=${fmtValue(opts.size)}, max=${fmtValue(opts.max)})`, [],
+            { size: fmtValue(opts.size), max: fmtValue(opts.max) });
+        }
+        const ttlIndexes = indexes.filter((ix) => has(ix, 'expireAfterSeconds') && !ix.clustered);
+        const ttl = ttlIndexes.map((ix) => `${ix.name}: expireAfterSeconds=${fmtValue(ix.expireAfterSeconds)}`);
+        if (ttl.length) {
+          F.add('INFO', 'TTL_INDEX', iname, sns, 'TTL index(es): expired documents are purged as soon as the index exists on target', ttl,
+            { indexes: ttlIndexes.map((ix) => ({ index: String(ix.name), expire_after_seconds: fmtValue(ix.expireAfterSeconds) })) });
+        }
+        if (ctype === 'view') F.add('INFO', 'VIEW', iname, sns, `view on '${opts.viewOn || '-'}' must be created after its source collections`, [], { view_on: String(opts.viewOn || '-') });
         if (ctype === 'timeseries' && tdb !== sdb) {
           F.add('WARN', 'TIMESERIES_RENAME', iname, sns, 'time-series collection remapped to another database: validate mongorestore --nsFrom/--nsTo (system.buckets) on staging first');
         }
         if (c.shard_key) {
           if (targetSharded) {
-            F.add('INFO', 'SHARD_KEY', iname, sns, `sharded on ${canon(c.shard_key, false)}; shardCollection is included in bootstrap`);
+            F.add('INFO', 'SHARD_KEY', iname, sns, `sharded on ${canon(c.shard_key, false)}; shardCollection is included in bootstrap`, [], { shard_key: canon(c.shard_key, false) });
           } else {
             F.add('WARN', 'SHARD_KEY_LOST', iname, sns, `sharded on ${canon(c.shard_key, false)} but target is ${target ? 'not sharded' : 'undefined'}; the shard key will not be recreated`);
           }
@@ -377,12 +401,13 @@ function analyze(snapshots, params) {
     let best = sources[0];
     for (const s of sources.slice(1)) if (cmpVer(parseVersion(s.server.version), parseVersion(best.server.version)) > 0) best = s;
     const bv = parseVersion(best.server.version);
-    F.add('INFO', 'NO_TARGET', '', '', `no target instance defined; the central instance should run MongoDB >= ${bv[0]}.${bv[1]}`);
+    F.add('INFO', 'NO_TARGET', '', '', `no target instance defined; the central instance should run MongoDB >= ${bv[0]}.${bv[1]}`, [], { min_version: `${bv[0]}.${bv[1]}` });
   }
   const majors = new Set(sources.map((s) => parseVersion((s.server || {}).version).slice(0, 2).join('.')));
   if (majors.size > 1) {
     F.add('INFO', 'MIXED_VERSIONS', '', '', `source instances run ${majors.size} different major versions`,
-      sortStr(sources.map((s) => `${sName(s)}: ${(s.server || {}).version}`)));
+      sortStr(sources.map((s) => `${sName(s)}: ${(s.server || {}).version}`)),
+      { versions: sources.map((s) => ({ instance: sName(s), version: String((s.server || {}).version || '-') })).sort((a, b) => strcmp(a.instance, b.instance)) });
   }
 
   // --- drift across instances
@@ -535,11 +560,14 @@ function listingFindings(s, F) {
   }
   if (hasUserDbs) return;
   if (excluded.length) {
-    F.add('INFO', 'NO_USER_DATABASES', iname, '', `all ${excluded.length} user database(s) were excluded by --include-dbs/--exclude-dbs`, sortStr(excluded));
+    F.add('INFO', 'NO_USER_DATABASES', iname, '', `all ${excluded.length} user database(s) were excluded by --include-dbs/--exclude-dbs`, sortStr(excluded),
+      { reason: 'excluded', databases: sortStr(excluded) });
   } else if (canList === true) {
-    F.add('INFO', 'NO_USER_DATABASES', iname, '', `the instance has no user databases (listed: ${listed}): nothing to migrate`);
+    F.add('INFO', 'NO_USER_DATABASES', iname, '', `the instance has no user databases (listed: ${listed}): nothing to migrate`, [],
+      { reason: 'no_user_databases', databases: (listing.listed || []).slice() });
   } else if (canList === null) {
-    F.add('INFO', 'NO_USER_DATABASES', iname, '', `no user databases listed (listed: ${listed}); the listDatabases privilege could not be verified`);
+    F.add('INFO', 'NO_USER_DATABASES', iname, '', `no user databases listed (listed: ${listed}); the listDatabases privilege could not be verified`, [],
+      { reason: 'unverified', databases: (listing.listed || []).slice() });
   }
 }
 
@@ -673,7 +701,8 @@ function analyzeActivity(sources, F, staleDays) {
       const uidMap = act.uid_map || {};
       if (uidMap.error) F.add('WARN', 'ACTIVITY_ERROR', iname, '', `session user resolution: ${uidMap.error}`);
       if (oplogOk && oplog.oplog_first && oplog.requested_from && oplog.oplog_first > oplog.requested_from) {
-        F.add('INFO', 'OPLOG_WINDOW_SHORT', iname, '', `oplog only covers writes since ${oplog.oplog_first} (requested since ${oplog.requested_from})`);
+        F.add('INFO', 'OPLOG_WINDOW_SHORT', iname, '', `oplog only covers writes since ${oplog.oplog_first} (requested since ${oplog.requested_from})`, [],
+          { oplog_first: oplog.oplog_first, requested_from: oplog.requested_from });
       }
       for (const d of sDbs(s)) {
         for (const c of sColls(d)) {
@@ -708,7 +737,8 @@ function analyzeActivity(sources, F, staleDays) {
           for (const m of modified) if (m.error) F.add('WARN', 'ACTIVITY_ERROR', iname, ns, `modified field ${m.path}: ${m.error}`);
           const method = nn(ca.last_modified_method);
           if (method === 'sample') {
-            F.add('INFO', 'MODIFIED_FROM_SAMPLE', iname, ns, `last modification of '${ca.last_modified_field}' is a lower bound taken from the sample (${ca.last_modified}); index the field or use --modified-scan for an exact value`);
+            F.add('INFO', 'MODIFIED_FROM_SAMPLE', iname, ns, `last modification of '${ca.last_modified_field}' is a lower bound taken from the sample (${ca.last_modified}); index the field or use --modified-scan for an exact value`, [],
+              { field: nn(ca.last_modified_field), last_modified: nn(ca.last_modified) });
           }
           const exactModified = (method === 'index' || method === 'scan') ? ca.last_modified : null;
           const uncertain = modified.some((m) => m.method === 'sample' || m.method === 'none' || !!m.error);
@@ -719,7 +749,11 @@ function analyzeActivity(sources, F, staleDays) {
             const age = daysBetween(collectedAt, newest);
             if (age >= staleDays) {
               const scope = exactModified ? 'inserts or modifications' : 'inserts (no *modified* date field: updates are not visible)';
-              F.add('INFO', 'STALE_COLLECTION', iname, ns, `no ${scope} since ${newest} (${age} days before the collection date)`);
+              F.add('INFO', 'STALE_COLLECTION', iname, ns, `no ${scope} since ${newest} (${age} days before the collection date)`, [], {
+                last_insert: nn(ca.last_insert), id_type: nn(ca.id_type), last_modified: exactModified,
+                modified_field: exactModified ? nn(ca.last_modified_field) : null, modified_method: exactModified ? method : null,
+                idle_days: age, stale_days: staleDays,
+              });
             }
           }
           collections.push({
@@ -739,7 +773,11 @@ function analyzeActivity(sources, F, staleDays) {
           const idleTop = ct === null || (num(ct.reads) + num(ct.writes)) === 0;
           const idleSample = cs === null || !cs.ops;
           if (oplogOk && writes === 0 && idleTop && idleSample) {
-            F.add('INFO', 'NO_RECENT_ACTIVITY', iname, ns, `no writes since ${oplog.from} (oplog) and no reads/writes since ${(ct && ct.since) || '-'}: candidate for archiving instead of migrating`);
+            F.add('INFO', 'NO_RECENT_ACTIVITY', iname, ns, `no writes since ${oplog.from} (oplog) and no reads/writes since ${(ct && ct.since) || '-'}: candidate for archiving instead of migrating`, [], {
+              last_insert: nn(ca.last_insert), id_type: nn(ca.id_type), last_modified: nn(ca.last_modified),
+              modified_field: nn(ca.last_modified_field), modified_method: method,
+              oplog_from: nn(oplog.from), top_since: (ct && ct.since) || null, sampled: cs !== null,
+            });
           }
         }
       }
@@ -772,9 +810,11 @@ function analyzeActivity(sources, F, staleDays) {
         recommendation,
       });
       if (name.startsWith('uid:')) {
-        F.add('INFO', 'USER_UNRESOLVED', iname, name, 'oplog writes from a session user that could not be resolved (dropped user or missing viewUser privilege)');
+        F.add('INFO', 'USER_UNRESOLVED', iname, name, 'oplog writes from a session user that could not be resolved (dropped user or missing viewUser privilege)', [],
+          { oplog_writes: st.oplog_writes });
       } else if (recommendation === 'review') {
-        F.add('INFO', 'USER_NO_ACTIVITY', iname, name, 'user has access but no activity was observed (oplog/sampling)');
+        F.add('INFO', 'USER_NO_ACTIVITY', iname, name, 'user has access but no activity was observed (oplog/sampling)', [],
+          { access: effectiveAccess(defined[name] || [], custom) });
       }
     }
   }
@@ -783,6 +823,201 @@ function analyzeActivity(sources, F, staleDays) {
 
 // ------------------------------------------------------------------ renderers
 const SEVERITY_TITLES = [['ERROR', 'Errors'], ['WARN', 'Warnings'], ['INFO', 'Informational']];
+
+// Groups findings by instance, in the order of the instances table; findings on
+// several instances (or global ones) go last under an empty key (cross-instance).
+function groupByInstance(an, items) {
+  const names = an.instances.map((i) => i.name);
+  const groups = new Map();
+  for (const f of items) {
+    const key = f.instance && !f.instance.includes(',') ? f.instance : '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const order = names.filter((n) => groups.has(n)).concat(sortStr([...groups.keys()].filter((k) => k && !names.includes(k))));
+  if (groups.has('')) order.push('');
+  return order.map((k) => [k, groups.get(k)]);
+}
+
+// Groups (already code-sorted) findings by code, keeping their order.
+function groupByCode(items) {
+  const groups = new Map();
+  for (const f of items) {
+    if (!groups.has(f.code)) groups.set(f.code, []);
+    groups.get(f.code).push(f);
+  }
+  return [...groups.entries()];
+}
+
+const codeCounts = (items) => groupByCode(items).map(([code, list]) => `${code} (${list.length})`).join(', ');
+const CROSS_INSTANCE = 'Cross-instance';
+
+// ---- per-code Informational tables: short cells, the explanation goes in one note per code.
+// A cell is [text, isCode]; each renderer escapes/format it (markdown, Jira, Confluence).
+const icell = (v, code = false) => [v === null || v === undefined || v === '' ? '-' : String(v), code && v !== null && v !== undefined && v !== ''];
+const lastUpdate = (d) => (!d.last_modified ? '-' : (d.modified_method === 'sample' ? `>= ${d.last_modified}` : d.last_modified));
+const nsCell = (f) => icell(f.namespace, true);
+const INFO_SPECS = {
+  STALE_COLLECTION: {
+    note: (list) => `No inserts or updates for at least ${list[0].data.stale_days} days (--stale-days) before the collection date. Last insert ~ comes from the ObjectId _id; updates are only visible through an exact (index/scan) modified date field.`,
+    cols: ['Namespace', 'Last insert ~', 'Last update', 'Idle days', 'Obtained from'],
+    rows: (f) => {
+      const d = f.data;
+      const parts = [];
+      if (d.last_insert) parts.push('_id');
+      if (d.modified_field) parts.push(`${d.modified_field} (${d.modified_method})`);
+      const how = parts.join(' + ') + (d.modified_field ? '' : ' (updates not visible)');
+      return [[nsCell(f), icell(d.last_insert), icell(lastUpdate(d)), icell(d.idle_days), icell(how.trim())]];
+    },
+  },
+  NO_RECENT_ACTIVITY: {
+    note: () => 'No writes in the oplog window and no reads/writes in top or $currentOp sampling: candidate for archiving instead of migrating. Last insert ~ comes from the ObjectId _id; Last update from a modified date field (>= = lower bound from the sample).',
+    cols: ['Namespace', 'Last insert ~', 'Last update', 'No writes since (oplog)', 'Checked'],
+    rows: (f) => {
+      const d = f.data;
+      const checked = ['oplog'].concat(d.top_since ? ['top'] : [], d.sampled ? ['$currentOp'] : []).join(' + ');
+      return [[nsCell(f), icell(d.last_insert), icell(lastUpdate(d)), icell(d.oplog_from), icell(checked)]];
+    },
+  },
+  MODIFIED_FROM_SAMPLE: {
+    note: () => 'Last update is a lower bound taken from the sampled documents (field not indexed): index the field or run with --modified-scan for an exact value.',
+    cols: ['Namespace', 'Field', 'Last update >='],
+    rows: (f) => [[nsCell(f), icell(f.data.field, true), icell(f.data.last_modified)]],
+  },
+  OPLOG_WINDOW_SHORT: {
+    note: () => 'The oplog does not cover the whole requested window: older write activity is not visible.',
+    cols: ['Oplog first entry', 'Requested from'],
+    rows: (f) => [[icell(f.data.oplog_first), icell(f.data.requested_from)]],
+  },
+  USER_NO_ACTIVITY: {
+    note: () => 'User with access but no activity observed (oplog writes / $currentOp sampling): review before migrating.',
+    cols: ['User', 'Access (databases)'],
+    rows: (f) => [[nsCell(f), icell(f.data.access.join(', '))]],
+  },
+  USER_UNRESOLVED: {
+    note: () => 'Session user from the oplog that could not be resolved (dropped user or missing viewUser privilege).',
+    cols: ['Session user', 'Oplog writes'],
+    rows: (f) => [[nsCell(f), icell(f.data.oplog_writes)]],
+  },
+  ARRAY_TYPES_POLYMORPHIC: {
+    note: () => 'Arrays mixing BSON types inside the same document (key/value pattern, usually by design): not a normalization candidate.',
+    cols: ['Namespace', 'Field', 'Types', 'Docs'],
+    rows: (f) => f.data.fields.map((x) => [nsCell(f), icell(x.path, true), icell(x.types), icell(x.docs)]),
+  },
+  NUMERIC_TYPE_MIXED: {
+    note: () => 'Numeric fields mixing widths (int/long/double/decimal) in the sample.',
+    cols: ['Namespace', 'Field', 'Types', 'Sampled docs'],
+    rows: (f) => f.data.fields.map((x) => [nsCell(f), icell(x.path, true), icell(x.types), icell(f.data.sampled)]),
+  },
+  SCHEMA_TRUNCATED: {
+    note: () => 'Field path limit reached while sampling (dynamic keys?): the inferred schema is partial.',
+    cols: ['Namespace', 'Sampled docs'],
+    rows: (f) => [[nsCell(f), icell(f.data.sampled)]],
+  },
+  INDEX_LEGACY_OPTION: {
+    note: () => 'Legacy index options are stripped in the target bootstrap.',
+    cols: ['Namespace', 'Index', 'Option'],
+    rows: (f) => f.data.options.map((x) => [nsCell(f), icell(x.index, true), icell(x.option, true)]),
+  },
+  CAPPED: {
+    note: () => 'Capped collections are recreated with the same size and max.',
+    cols: ['Namespace', 'Size (bytes)', 'Max docs'],
+    rows: (f) => [[nsCell(f), icell(f.data.size), icell(f.data.max)]],
+  },
+  TTL_INDEX: {
+    note: () => 'Expired documents are purged as soon as the TTL index exists on the target.',
+    cols: ['Namespace', 'Index', 'expireAfterSeconds'],
+    rows: (f) => f.data.indexes.map((x) => [nsCell(f), icell(x.index, true), icell(x.expire_after_seconds)]),
+  },
+  VIEW: {
+    note: () => 'Views must be created after their source collections.',
+    cols: ['Namespace', 'View on'],
+    rows: (f) => [[nsCell(f), icell(f.data.view_on, true)]],
+  },
+  SHARD_KEY: {
+    note: () => 'shardCollection is included in the target bootstrap.',
+    cols: ['Namespace', 'Shard key'],
+    rows: (f) => [[nsCell(f), icell(f.data.shard_key, true)]],
+  },
+  DB_MERGE: {
+    note: () => 'Target database receives collections from several sources.',
+    cols: ['Target DB', 'Sources'],
+    rows: (f) => [[nsCell(f), icell(f.details.join(', '))]],
+  },
+  NO_TARGET: {
+    note: () => 'No target instance defined: the central instance should run at least this MongoDB version.',
+    cols: ['Minimum version'],
+    rows: (f) => [[icell(f.data.min_version)]],
+  },
+  MIXED_VERSIONS: {
+    note: () => 'Source instances run different major versions.',
+    cols: ['Instance', 'Version'],
+    rows: (f) => f.data.versions.map((x) => [icell(x.instance), icell(x.version)]),
+  },
+  NO_USER_DATABASES: {
+    note: () => 'Nothing to migrate from this instance.',
+    cols: ['Reason', 'Databases'],
+    rows: (f) => {
+      const reason = { excluded: 'all excluded by --include-dbs/--exclude-dbs', no_user_databases: 'no user databases', unverified: 'listDatabases privilege not verified' }[f.data.reason] || f.data.reason;
+      return [[icell(reason), icell(f.data.databases.join(', '))]];
+    },
+  },
+  USER_DUPLICATE: {
+    note: () => 'Same user and roles defined in several sources: created once in the bootstrap.',
+    cols: ['User'],
+    rows: (f) => [[nsCell(f)]],
+  },
+  ROLE_DUPLICATE: {
+    note: () => 'Same custom role defined in several sources: created once in the bootstrap.',
+    cols: ['Role'],
+    rows: (f) => [[nsCell(f)]],
+  },
+};
+const NEEDS_DATA = new Set(['DB_MERGE', 'USER_DUPLICATE', 'ROLE_DUPLICATE']);
+const FALLBACK_SPEC = {
+  note: () => '',
+  cols: ['Namespace', 'Finding', 'Details'],
+  rows: (f) => [[nsCell(f), icell(f.message), icell(f.details.join('; '))]],
+};
+
+// Tables of one instance group: [{ code, count, note, head, rows }]; the cross-instance
+// group gets an Instances column when any finding of the code has instances.
+function infoCodeTables(list) {
+  return groupByCode(list).map(([code, byCode]) => {
+    let spec = INFO_SPECS[code] || FALLBACK_SPEC;
+    if (spec !== FALLBACK_SPEC && !NEEDS_DATA.has(code) && byCode.some((f) => !f.data)) spec = FALLBACK_SPEC;
+    const withInst = byCode.some((f) => f.instance && f.instance.includes(','));
+    const head = withInst ? [spec.cols[0], 'Instances'].concat(spec.cols.slice(1)) : spec.cols.slice();
+    const rows = [];
+    for (const f of byCode) {
+      for (const r of spec.rows(f)) rows.push(withInst ? [r[0], icell(f.instance)].concat(r.slice(1)) : r);
+    }
+    return { code, count: byCode.length, note: spec.note(byCode), head, rows };
+  });
+}
+
+function infoTableLines(list) {
+  const L = [];
+  for (const t of infoCodeTables(list)) {
+    L.push('', `#### ${t.code} (${t.count})`, '');
+    if (t.note) L.push(`> ${md(t.note)}`, '');
+    L.push(`| ${t.head.join(' | ')} |`, `|${t.head.map(() => '---').join('|')}|`);
+    for (const r of t.rows) L.push(`| ${r.map(([v, c]) => (c ? `\`${md(v)}\`` : md(v))).join(' | ')} |`);
+  }
+  return L;
+}
+
+function infoSectionLines(an, items, num) {
+  if (!items.length) return ['_None._'];
+  const groups = groupByInstance(an, items);
+  const L = ['| Instance | Findings | Codes |', '|---|---:|---|'];
+  for (const [inst, list] of groups) L.push(`| ${inst ? md(inst) : `_${CROSS_INSTANCE.toLowerCase()}_`} | ${list.length} | ${codeCounts(list)} |`);
+  groups.forEach(([inst, list], idx) => {
+    L.push('', `### ${num}.${idx + 1} ${inst ? `Instance \`${md(inst)}\`` : CROSS_INSTANCE} (${list.length})`);
+    L.push(...infoTableLines(list));
+  });
+  return L;
+}
 
 function findingLines(f) {
   const where = f.namespace ? ` \`${md(f.namespace)}\`` : '';
@@ -838,6 +1073,10 @@ function renderReport(an, snapshots) {
   SEVERITY_TITLES.forEach(([sev, title], idx) => {
     L.push('', `## ${idx + 3}. ${title}`, '');
     const items = an.findings.filter((f) => f.severity === sev);
+    if (sev === 'INFO') {
+      L.push(...infoSectionLines(an, items, idx + 3));
+      return;
+    }
     if (!items.length) L.push('_None._');
     for (const f of items) L.push(...findingLines(f));
   });
@@ -1318,13 +1557,19 @@ function jiraBody(an, compact) {
   const infos = an.findings.filter((f) => f.severity === 'INFO');
   L.push('', `h2. Informational (${infos.length})`, '');
   if (!infos.length) L.push('_None._');
-  const byCode = {};
-  for (const f of infos) (byCode[f.code] = byCode[f.code] || []).push(f.namespace || f.instance || '-');
-  for (const code of sortStr(Object.keys(byCode))) {
-    const targets = byCode[code];
-    let line = `* ${jmono(code)}: ${targets.length}`;
-    if (!compact) line += ` - ${jesc(limitList(targets, 8))}`;
-    L.push(line);
+  const infoGroups = groupByInstance(an, infos);
+  if (infoGroups.length) L.push(jrow(['Instance', 'Findings', 'Codes'], true));
+  for (const [inst, list] of infoGroups) L.push(jrow([inst ? jesc(inst) : `_${CROSS_INSTANCE.toLowerCase()}_`, String(list.length), jesc(codeCounts(list))]));
+  if (!compact) {
+    for (const [inst, list] of infoGroups) {
+      L.push('', `h3. ${inst ? `Instance ${jesc(inst)}` : CROSS_INSTANCE} (${list.length})`);
+      for (const t of infoCodeTables(list)) {
+        L.push('', `h4. ${jesc(t.code)} (${t.count})`);
+        if (t.note) L.push(`_${jesc(t.note)}_`);
+        L.push(jrow(t.head.map(jesc), true));
+        for (const r of t.rows) L.push(jrow(r.map(([v, c]) => (c ? jmono(v) : jesc(v)))));
+      }
+    }
   }
 
   L.push('', 'h2. Database mapping', '');
@@ -1425,6 +1670,21 @@ function xfinding(f) {
   if (!f.details.length) return head;
   return head + xmacro('expand', xcodeblock(f.details), [['title', `${f.details.length} detail line(s)`]]);
 }
+function xInfoTables(list) {
+  return infoCodeTables(list).map((t) => xp(`<strong>${xesc(t.code)}</strong> (${t.count})`) + (t.note ? xp(`<em>${xesc(t.note)}</em>`) : '')
+    + xtable(t.head.map(xesc), t.rows.map((r) => r.map(([v, c]) => (c ? xcode(v) : xesc(v)))))).join('');
+}
+
+function xInfoSection(an, items) {
+  if (!items.length) return [xp('<em>None.</em>')];
+  const groups = groupByInstance(an, items);
+  const B = [xtable(['Instance', 'Findings', 'Codes'], groups.map(([inst, list]) => [inst ? xesc(inst) : `<em>${CROSS_INSTANCE.toLowerCase()}</em>`, String(list.length), xesc(codeCounts(list))]))];
+  for (const [inst, list] of groups) {
+    B.push(`<h3>${inst ? `Instance ${xesc(inst)}` : CROSS_INSTANCE} (${list.length})</h3>`);
+    B.push(xmacro('expand', xInfoTables(list), [['title', `Show ${list.length} informational finding(s)`]]));
+  }
+  return B;
+}
 const xFindingsBlock = (items) => (items.length ? xlist(items.map(xfinding)) : xp('<em>None.</em>'));
 
 function renderConfluence(an, snapshots) {
@@ -1451,8 +1711,8 @@ function renderConfluence(an, snapshots) {
   for (const [sev, title] of SEVERITY_TITLES) {
     const items = an.findings.filter((f) => f.severity === sev);
     B.push(`<h2>${xesc(title)} (${items.length})</h2>`);
-    const block = xFindingsBlock(items);
-    B.push(sev === 'INFO' && items.length ? xmacro('expand', block, [['title', `Show ${items.length} informational finding(s)`]]) : block);
+    if (sev === 'INFO') B.push(...xInfoSection(an, items));
+    else B.push(xFindingsBlock(items));
   }
 
   B.push('<h1>3. Instances and capacity</h1>');
