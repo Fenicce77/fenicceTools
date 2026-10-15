@@ -13,6 +13,7 @@ The repository contains both maintained tools and historical utilities. Review e
 | MySQL | [Transaction and lock monitor](mysql/trx/mysql_trx_monitor.sh) | Inspect active transactions and lock waits, apply exact session filters, log snapshots, and explicitly terminate a selected connection. |
 | ProxySQL | [Python monitor](mysql/proxysql/python/README.md) | Interactive, install-free ProxySQL connection and backend monitor using MySQL login paths. |
 | ProxySQL | [Go monitor](mysql/proxysql/go/README.md) | Go implementation of the ProxySQL monitor with bounded resources and persistent clients. |
+| ProxySQL | [Log retention](mysql/proxysql/log_retention/README.md) | Purge and compress rotated ProxySQL events log and audit log files by count and age, protecting the active file. |
 | Cloud SQL | [General-log monitor](mysql/general_log/README.md) | Capture and safely parse GCP Cloud SQL MySQL general-log entries. |
 
 ## Repository map
@@ -68,6 +69,7 @@ bash mysql/estimations/tests/test_estimate_storage.sh
 )
 
 bash mysql/proxysql/tests/test_proxysql_connections_monitor.sh
+bash mysql/proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
 ```
 
 ## MySQL transaction and lock monitor
