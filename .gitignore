@@ -48,3 +48,4 @@ mongodb/sh/mongoconn.*.sh
 mongodb/mongo_schema_normalized/conf/
 mongodb/mongo_schema_normalized/bash/reports/
 mongodb/mongo_schema_normalized/snapshots/
+mongodb/mongo_schema_normalized/reports/
