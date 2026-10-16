@@ -192,7 +192,7 @@ test_help_colored() {
     local out flag
     for flag in -h --help; do
         out=$("$SCRIPT_PATH" "$flag" | cat)
-        assert_contains "$out" $'\033[1;33mOPTIONS' "help ($flag) colors section headers even when piped"
+        assert_contains "$out" $'\033[1;33mPURGE OPTIONS' "help ($flag) colors section headers even when piped"
         assert_contains "$out" $'\033[0;32m-k, --keep' "help ($flag) colors flags"
         assert_contains "$out" "SAFETY" "help ($flag) shows safety section"
         assert_contains "$out" "EXIT STATUS" "help ($flag) shows exit status"
