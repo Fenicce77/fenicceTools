@@ -118,6 +118,7 @@ sudo ./install.sh --uninstall -y
 | `--no-hardening` | | Omit `ProtectSystem=strict`, `ReadWritePaths=` and related sandboxing. |
 | `--no-logrotate` | | Do not install `/etc/logrotate.d/purge_proxysql_eventslog`. |
 | `--no-enable` | | Do not run `systemctl enable --now` on the timer. |
+| `--accept-log-dir` | | Confirm a `--log-dir` flagged by the review in non-interactive runs. |
 | `--systemd-version N` | detected | Selects `StandardOutput=append:` (>= 240) or `sh -c` redirection (older, e.g. RHEL 8). |
 | `--root DIR` | | Write under an alternate root; no `systemctl` or `systemd-tmpfiles` calls. |
 
@@ -133,9 +134,33 @@ Installed files:
 
 Re-run the installer to change the configuration. Files that do not change are
 left untouched; files that change are backed up as `<file>.bak.<timestamp>`.
-`--log-dir` must be a dedicated directory, different from `--data-dir`:
-`tmpfiles.d` enforces its mode and owner, and logrotate rotates every `*.log`
-in it, so system or shared directories such as `/var/log` are refused.
+`tmpfiles.d` enforces the mode and owner of `--log-dir`, and logrotate rotates
+every `*.log` in it. If the directory looks like a system or shared one (for
+example `/var/log` or `/data`) or is the same as `--data-dir`, the installer
+shows a review with the impact, the current owner and mode, and the existing
+`*.log` files that logrotate would manage, and asks for confirmation. Declining
+lets you enter another directory. In non-interactive runs (`-y`) confirm it with
+`--accept-log-dir`; `--dry-run` shows the review and continues:
+
+```text
+==> Log directory review: /var/log
+[WARN]  It looks like a system or shared directory, not one dedicated to this tool.
+
+  Impact of using /var/log:
+    - Mode 0750 and owner root:root are applied now and enforced at every boot (tmpfiles.d)
+    - logrotate rotates every /var/log/*.log monthly and keeps 12 copies
+    - The service gets write access to the whole directory (ReadWritePaths=)
+
+  Current state:
+    drwxr-xr-x 12 root root 4096 Oct 16 09:12 /var/log
+    7 existing *.log file(s) would be managed by logrotate
+      alternatives.log
+      auth.log
+      ...
+
+? Use /var/log anyway [y/N]:
+```
+
 The installer requires root unless `--dry-run` or `--root` is used. On hosts
 without systemd (for example macOS) use `--script-only`.
 
@@ -371,4 +396,5 @@ The installer suite runs only with `--root` on a temporary directory or with
 `--dry-run`. It covers option validation, script-only and systemd installs,
 `append:` versus `sh -c` output for systemd 240+ and older, custom options,
 idempotent reinstall with backups, interactive answers, re-prompting on
-invalid values, aborting, and uninstall.
+invalid values, the log directory review (confirm, decline and re-enter,
+`--accept-log-dir`), aborting on closed input, and uninstall.
