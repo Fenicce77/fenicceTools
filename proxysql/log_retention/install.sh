@@ -14,7 +14,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 readonly SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PURGE_NAME="proxysql_eventslog_purge.sh"
 readonly UNIT_NAME="proxysql-log-retention"
@@ -61,6 +61,7 @@ UNINSTALL=0
 ROOT_DIR=""
 SYSTEMD_VERSION=""
 RUN_GROUP=""
+ACCEPT_LOG_DIR=0
 
 # Runtime colors (only when stderr is a TTY; prompts and messages go to stderr)
 if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
@@ -123,6 +124,7 @@ ${H}SERVICE${N}
     ${F}--user${N} ${M}NAME${N}               Run the service as NAME (default: ${M}${DEFAULT_RUN_USER}${N})
     ${F}--schedule${N} ${M}SPEC${N}           systemd OnCalendar expression (default: ${M}${DEFAULT_SCHEDULE}${N})
     ${F}--no-enable${N}               Install the timer but do not enable/start it
+    ${F}--accept-log-dir${N}          Confirm a --log-dir flagged by the review (non-interactive)
     ${F}--no-hardening${N}            Omit ProtectSystem=strict and related sandboxing
     ${F}--no-logrotate${N}            Do not install the logrotate policy
     ${F}--systemd-version${N} ${M}N${N}       Override detection; append: output needs >= ${MIN_SYSTEMD_APPEND}
@@ -142,8 +144,9 @@ ${H}SAFETY${N}
     Requires root unless ${F}--root${N} or ${F}--dry-run${N} is used.
     The service ${R}deletes files permanently${N}; review the plan shown before applying.
     With hardening, only ${M}--data-dir${N} and ${M}--log-dir${N} are writable by the service.
-    ${M}--log-dir${N} must be a dedicated directory, different from ${M}--data-dir${N}:
-    tmpfiles.d sets its mode/owner and logrotate rotates its ${M}*.log${N} files.
+    tmpfiles.d sets the mode/owner of ${M}--log-dir${N} and logrotate rotates its ${M}*.log${N}
+    files. A system/shared directory or ${M}--data-dir${N} is shown for review and needs
+    confirmation (prompt, or ${F}--accept-log-dir${N} with ${F}-y${N}).
     ${W}Paths and the schedule must not contain spaces or '%'.${N}
 
 ${H}EXAMPLES${N}
@@ -215,6 +218,7 @@ parse_args() {
             --user)             need_value "$@"; RUN_USER="$2"; shift 2 ;;
             --schedule)         need_value "$@"; SCHEDULE="$2"; shift 2 ;;
             --no-enable)        ENABLE_TIMER=0; shift ;;
+            --accept-log-dir)   ACCEPT_LOG_DIR=1; shift ;;
             --no-hardening)     HARDENING=0; shift ;;
             --no-logrotate)     LOGROTATE=0; shift ;;
             --systemd-version)  need_value "$@"; SYSTEMD_VERSION="$2"; shift 2 ;;
@@ -247,13 +251,6 @@ validate_config() {
 
     [[ "$INSTALL_SYSTEMD" == "1" ]] || return 0
 
-    # The log directory gets 0750 + owner via tmpfiles.d and *.log via logrotate:
-    # refuse shared or system directories and the ProxySQL data directory.
-    [[ "${LOG_DIR%/}" != "${DATA_DIR%/}" ]] ||
-        die "--log-dir must differ from --data-dir (logrotate would rotate ProxySQL *.log files)"
-    is_dedicated_dir "$LOG_DIR" ||
-        die "--log-dir must be a dedicated directory, not a system or shared one: ${LOG_DIR}"
-
     is_name "$EVENTS_PREFIX" || die "Invalid events prefix: ${EVENTS_PREFIX}"
     is_name "$AUDIT_PREFIX"  || die "Invalid audit prefix: ${AUDIT_PREFIX}"
     for p in "$EVENTS_KEEP" "$EVENTS_MAX_AGE" "$AUDIT_KEEP" "$AUDIT_MAX_AGE"; do
@@ -281,7 +278,7 @@ ask() {
     __default="${!__var}"
     while true; do
         printf '%s?%s %s %s[%s]%s: ' "$CYAN" "$NC" "$__question" "$GRAY" "$__default" "$NC" >&2
-        IFS= read -r __answer || __answer=""
+        IFS= read -r __answer || die "Input closed while waiting for an answer"
         __answer="${__answer:-$__default}"
         if "$__validator" "$__answer"; then
             printf -v "$__var" '%s' "$__answer"
@@ -297,7 +294,7 @@ ask_yn() {
     if [[ "${!__var}" == "1" ]]; then __hint="Y/n"; else __hint="y/N"; fi
     while true; do
         printf '%s?%s %s %s[%s]%s: ' "$CYAN" "$NC" "$__question" "$GRAY" "$__hint" "$NC" >&2
-        IFS= read -r __answer || __answer=""
+        IFS= read -r __answer || die "Input closed while waiting for an answer"
         case "$__answer" in
             "")          return 0 ;;
             [Yy]|[Yy][Ee][Ss]) printf -v "$__var" '1'; return 0 ;;
@@ -508,6 +505,75 @@ EOF
 
 # ---------------------------------------------------------------- actions
 
+# ---------------------------------------------------------------- log dir review
+
+log_dir_concerns() {
+    if [[ "${LOG_DIR%/}" == "${DATA_DIR%/}" ]]; then
+        printf '%s\n' "It is the ProxySQL data directory (--data-dir): logrotate would also rotate ProxySQL's own *.log files (e.g. proxysql.log)."
+    fi
+    if ! is_dedicated_dir "$LOG_DIR"; then
+        printf '%s\n' "It looks like a system or shared directory, not one dedicated to this tool."
+    fi
+}
+
+show_log_dir_impact() {
+    local dir count reason
+    dir="$(dest "$LOG_DIR")"
+    while IFS= read -r reason; do
+        [[ -n "$reason" ]] && warn "$reason"
+    done <<<"$1"
+    printf '\n  %sImpact of using %s:%s\n' "$BOLD" "$LOG_DIR" "$NC" >&2
+    printf '    - Mode 0750 and owner %s:%s are applied now and enforced at every boot (tmpfiles.d)\n' \
+        "$RUN_USER" "$RUN_GROUP" >&2
+    if [[ "$LOGROTATE" -eq 1 ]]; then
+        printf '    - logrotate rotates every %s/*.log monthly and keeps 12 copies\n' "$LOG_DIR" >&2
+    fi
+    if [[ "$HARDENING" -eq 1 ]]; then
+        printf '    - The service gets write access to the whole directory (ReadWritePaths=)\n' >&2
+    fi
+    if [[ -d "$dir" ]]; then
+        printf '\n  %sCurrent state:%s\n' "$BOLD" "$NC" >&2
+        printf '    %s\n' "$(ls -ld "$dir")" >&2
+        count="$(find "$dir" -maxdepth 1 -type f -name '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+        printf '    %s existing *.log file(s) would be managed by logrotate\n' "$count" >&2
+        find "$dir" -maxdepth 1 -type f -name '*.log' 2>/dev/null | sort | head -n 10 |
+            while IFS= read -r reason; do printf '      %s\n' "${reason##*/}" >&2; done
+        [[ "$count" -le 10 ]] || printf '      ... and %s more\n' "$((count - 10))" >&2
+    else
+        printf '\n  The directory does not exist yet and will be created.\n' >&2
+    fi
+    printf '\n' >&2
+}
+
+review_log_dir() {
+    local concerns accept
+    [[ "$INSTALL_SYSTEMD" == "1" ]] || return 0
+    while true; do
+        concerns="$(log_dir_concerns)"
+        [[ -n "$concerns" ]] || return 0
+
+        step "Log directory review: ${LOG_DIR}"
+        show_log_dir_impact "$concerns"
+
+        if [[ "$ACCEPT_LOG_DIR" -eq 1 ]]; then
+            warn "Log directory accepted with --accept-log-dir"
+            return 0
+        fi
+        if [[ "$INTERACTIVE" -eq 1 ]]; then
+            accept=0
+            ask_yn accept "Use ${LOG_DIR} anyway"
+            [[ "$accept" -eq 0 ]] || return 0
+            ask LOG_DIR "Execution log directory" is_abspath
+            continue
+        fi
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            warn "Dry-run continues; a real run needs confirmation or --accept-log-dir"
+            return 0
+        fi
+        die "Review the impact above, then re-run with --accept-log-dir to confirm or choose another --log-dir"
+    done
+}
+
 retention_line() {
     local enabled=$1 prefix=$2 keep=$3 age=$4
     if [[ "$enabled" -eq 1 ]]; then
@@ -695,6 +761,7 @@ main() {
         die "systemd is not running on this host. Use --script-only, or --root DIR to render the units."
     fi
 
+    review_log_dir
     check_privileges
     [[ "$DRY_RUN" -eq 0 ]] || warn "Dry-run mode: no changes will be made"
     show_plan

@@ -88,11 +88,7 @@ test_invalid_values() {
     assert_eq 1 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --audit-prefix query.log)" "same prefixes"
     assert_eq 1 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --schedule '%H')" "percent in schedule"
     assert_eq 1 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --systemd-version abc)" "bad systemd version"
-    assert_eq 1 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --log-dir /data/proxysql)" "log dir equals data dir"
-    assert_eq 1 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --log-dir /var/log)" "system log dir refused"
-    assert_eq 1 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --log-dir /etc/plr)" "log dir under /etc refused"
-    assert_eq 1 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --log-dir /data)" "top-level log dir refused"
-    assert_eq 0 "$(exit_code "$INSTALLER" --systemd -y --root "$r" --log-dir /var/log/plr)" "dedicated /var/log subdir accepted"
+
 }
 
 test_script_only() {
@@ -245,6 +241,59 @@ test_requires_root_without_alt_root() {
     assert_eq 1 "$(exit_code "$INSTALLER" --script-only -y)" "non-root install is refused"
 }
 
+test_log_dir_review_non_interactive() {
+    local r out
+    r=$(new_root)
+    mkdir -p "$r/var/log"
+    touch "$r/var/log/syslog.log" "$r/var/log/auth.log"
+
+    set +e
+    out=$("$INSTALLER" --systemd -y --root "$r" --log-dir /var/log 2>&1)
+    local rc=$?
+    set -e
+    assert_eq 1 "$rc" "flagged log dir needs confirmation with -y"
+    assert_contains "$out" "Log directory review: /var/log" "review header shown"
+    assert_contains "$out" "system or shared directory" "shared directory reason shown"
+    assert_contains "$out" "2 existing *.log file(s)" "existing log files counted"
+    assert_contains "$out" "auth.log" "existing log files listed"
+    assert_contains "$out" "--accept-log-dir" "how to confirm is shown"
+    assert_no_file "$r/$SERVICE"
+
+    out=$("$INSTALLER" --systemd -y --root "$r" --log-dir /var/log --accept-log-dir 2>&1)
+    assert_contains "$out" "accepted with --accept-log-dir" "explicit acceptance"
+    assert_contains "$(cat "$r/$SERVICE")" "append:/var/log/purge_proxysql_eventslog.log" "accepted log dir used"
+
+    r=$(new_root)
+    set +e
+    out=$("$INSTALLER" --systemd -y --root "$r" --log-dir /data/proxysql 2>&1)
+    rc=$?
+    set -e
+    assert_eq 1 "$rc" "log dir equal to data dir needs confirmation"
+    assert_contains "$out" "ProxySQL data directory" "data dir reason shown"
+
+    assert_eq 0 "$(exit_code "$INSTALLER" --systemd -y --root "$(new_root)" --log-dir /data/log/purge_proxysql_eventslog)" "dedicated log dir needs no review"
+    assert_eq 0 "$(exit_code "$INSTALLER" --systemd -y -n --root "$(new_root)" --log-dir /var/log)" "dry-run shows the review and continues"
+}
+
+test_log_dir_review_interactive() {
+    local r
+    # Accept the flagged directory
+    r=$(new_root)
+    printf '%s\n' "" "y" "/data/proxysql" "/data" "root" "" "y" "" "" "" "n" "" "" "" "n" \
+        "y" "y" | "$INSTALLER" -i --root "$r" >/dev/null 2>&1
+    assert_contains "$(cat "$r/$SERVICE")" "append:/data/purge_proxysql_eventslog.log" "interactive acceptance"
+
+    # Decline it and enter a different directory
+    r=$(new_root)
+    printf '%s\n' "" "y" "/data/proxysql" "/data" "root" "" "y" "" "" "" "n" "" "" "" "n" \
+        "n" "/data/log/proxysql" "y" | "$INSTALLER" -i --root "$r" >/dev/null 2>&1
+    assert_contains "$(cat "$r/$SERVICE")" "append:/data/log/proxysql/purge_proxysql_eventslog.log" "interactive re-entry"
+}
+
+test_interactive_eof_aborts() {
+    assert_eq 1 "$(exit_code sh -c "printf '\n' | '$INSTALLER' -i --root '$(new_root)'")" "closed input aborts instead of looping"
+}
+
 main() {
     test_syntax_and_help
     test_invalid_values
@@ -258,6 +307,9 @@ main() {
     test_interactive_answers
     test_interactive_reprompts_invalid
     test_interactive_abort
+    test_log_dir_review_non_interactive
+    test_log_dir_review_interactive
+    test_interactive_eof_aborts
     test_uninstall
     test_requires_root_without_alt_root
     printf 'OK: %d assertions passed\n' "$TEST_COUNT"
