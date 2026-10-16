@@ -9,6 +9,10 @@ ProxySQL rotates both logs by size (`mysql-eventslog_filesize`,
 files. On busy instances, especially with `mysql-eventslog_default_log=1` or a
 catch-all query rule with `log=1`, the log directory grows without limit.
 
+The same script installs and manages named systemd rotations (`--install`,
+`--uninstall`, `--list`), one per ProxySQL instance and log type, each with its
+own schedule and execution log.
+
 ## Behavior
 
 - Files are selected by `<prefix>.<digits>` with an optional `.gz` suffix and
@@ -34,135 +38,7 @@ catch-all query rule with `log=1`, the log directory grows without limit.
 - `gzip` when `--compress` is used.
 - `lsof` (optional, recommended): skips files still opened by a process.
 - Write access to the log directory: run as the ProxySQL service user or root.
-
-## Installation
-
-`install.sh` installs the purge script and, optionally, the systemd service and
-timer, a `tmpfiles.d` entry that keeps the execution log directory in place,
-and a logrotate policy for the execution log. Run it from a terminal without
-options and it asks for every setting, shows the plan, and asks for
-confirmation before writing anything:
-
-```bash
-git clone https://github.com/Fenicce77/fenicceTools.git
-cd fenicceTools/proxysql/log_retention
-sudo ./install.sh
-```
-
-```text
-==> Configuration
-? Install proxysql_eventslog_purge.sh into [/usr/local/bin]:
-? Install systemd service and timer [Y/n]:
-? ProxySQL log directory (--data-dir) [/data/proxysql]:
-? Execution log directory [/data/log/purge_proxysql_eventslog]:
-? Run the service as user [root]:
-? Schedule (systemd OnCalendar) [*-*-* 00:00:00]:
-? Purge the events log [Y/n]:
-?   Events log prefix [query.log]:
-?   Rotated events log files to keep [200]:
-?   Max age in days (0 = off) [3]:
-? Purge the audit log [Y/n]:
-...
-==> Installation plan
-  Schedule:              *-*-* 00:00:00
-  Run as:                root:root
-  Execution log:         /data/log/purge_proxysql_eventslog/purge_proxysql_eventslog.log
-  Events log:            query.log (keep 200, max-age 3d)
-  Audit log:             audit.log (keep 1000, max-age 30d)
-  Output mode:           StandardOutput=append: (systemd 252)
-? Apply this configuration [Y/n]:
-```
-
-Every prompt has an equivalent option, so the same installation can be scripted
-(`-y` disables prompts, missing options take the defaults):
-
-```bash
-# Preview every generated file and command, change nothing
-./install.sh --systemd -y --dry-run
-
-# Daily at 00:00 as root, logs in /data/log/purge_proxysql_eventslog (defaults)
-sudo ./install.sh --systemd -y
-
-# Every 6 hours, events log only, 7 days retention, no compression
-sudo ./install.sh --systemd -y --no-audit --events-max-age 7 --no-compress \
-    --schedule '*-*-* 00/6:00:00'
-
-# Install the units but enable the timer later
-sudo ./install.sh --systemd -y --no-enable
-
-# Script only (no systemd), into another directory
-sudo ./install.sh --script-only -y --bin-dir /opt/dbre/bin
-
-# Render the files into a staging root (packaging, configuration management)
-./install.sh --systemd -y --root /tmp/stage --systemd-version 239
-
-# Remove units, tmpfiles, logrotate and script (execution logs are kept)
-sudo ./install.sh --uninstall -y
-```
-
-| Option | Default | Description |
-|---|---|---|
-| `--systemd` / `--script-only` | ask | Install the systemd components, or only the script. Non-interactive runs without either install only the script. |
-| `--uninstall` | | Disable the timer and remove every installed file except the execution logs. |
-| `-y`, `--yes` | | No prompts. |
-| `-i`, `--interactive` | auto | Force prompts even when stdin is not a terminal. |
-| `-n`, `--dry-run` | | Print the plan, the generated files and the commands. |
-| `--bin-dir DIR` | `/usr/local/bin` | Script destination. |
-| `--data-dir DIR` | `/data/proxysql` | ProxySQL log directory (`-d` of the purge script). |
-| `--log-dir DIR` | `/data/log/purge_proxysql_eventslog` | Execution log directory; the file is `purge_proxysql_eventslog.log`. |
-| `--user NAME` | `root` | Service user. Non-root adds `User=`/`Group=` and `su` to logrotate. |
-| `--schedule SPEC` | `*-*-* 00:00:00` | `OnCalendar=` expression, validated with `systemd-analyze calendar`. |
-| `--events-prefix`, `--events-keep`, `--events-max-age` | `query.log`, `200`, `3` | Events log retention. `--no-events` disables it. |
-| `--audit-prefix`, `--audit-keep`, `--audit-max-age` | `audit.log`, `1000`, `30` | Audit log retention. `--no-audit` disables it. |
-| `--no-compress` | | Do not pass `-c` to the purge script. |
-| `--no-hardening` | | Omit `ProtectSystem=strict`, `ReadWritePaths=` and related sandboxing. |
-| `--no-logrotate` | | Do not install `/etc/logrotate.d/purge_proxysql_eventslog`. |
-| `--no-enable` | | Do not run `systemctl enable --now` on the timer. |
-| `--accept-log-dir` | | Confirm a `--log-dir` flagged by the review in non-interactive runs. |
-| `--systemd-version N` | detected | Selects `StandardOutput=append:` (>= 240) or `sh -c` redirection (older, e.g. RHEL 8). |
-| `--root DIR` | | Write under an alternate root; no `systemctl` or `systemd-tmpfiles` calls. |
-
-Installed files:
-
-| File | Purpose |
-|---|---|
-| `/usr/local/bin/proxysql_eventslog_purge.sh` | Purge script. |
-| `/etc/systemd/system/proxysql-log-retention.service` | Oneshot service, one `ExecStart=` per enabled log. |
-| `/etc/systemd/system/proxysql-log-retention.timer` | Schedule (`Persistent=true`). |
-| `/etc/tmpfiles.d/purge_proxysql_eventslog.conf` | Creates the execution log directory at boot. |
-| `/etc/logrotate.d/purge_proxysql_eventslog` | Monthly rotation of the execution log, 12 copies. |
-
-Re-run the installer to change the configuration. Files that do not change are
-left untouched; files that change are backed up as `<file>.bak.<timestamp>`.
-`tmpfiles.d` enforces the mode and owner of `--log-dir`, and logrotate rotates
-every `*.log` in it. If the directory looks like a system or shared one (for
-example `/var/log` or `/data`) or is the same as `--data-dir`, the installer
-shows a review with the impact, the current owner and mode, and the existing
-`*.log` files that logrotate would manage, and asks for confirmation. Declining
-lets you enter another directory. In non-interactive runs (`-y`) confirm it with
-`--accept-log-dir`; `--dry-run` shows the review and continues:
-
-```text
-==> Log directory review: /var/log
-[WARN]  It looks like a system or shared directory, not one dedicated to this tool.
-
-  Impact of using /var/log:
-    - Mode 0750 and owner root:root are applied now and enforced at every boot (tmpfiles.d)
-    - logrotate rotates every /var/log/*.log monthly and keeps 12 copies
-    - The service gets write access to the whole directory (ReadWritePaths=)
-
-  Current state:
-    drwxr-xr-x 12 root root 4096 Oct 16 09:12 /var/log
-    7 existing *.log file(s) would be managed by logrotate
-      alternatives.log
-      auth.log
-      ...
-
-? Use /var/log anyway [y/N]:
-```
-
-The installer requires root unless `--dry-run` or `--root` is used. On hosts
-without systemd (for example macOS) use `--script-only`.
+- Service management: Linux with systemd and root (`--root`/`--dry-run` work anywhere).
 
 ## Options
 
@@ -177,9 +53,27 @@ without systemd (for example macOS) use `--script-only`.
 | `-h`, `--help` | | Show help and exit. |
 | `-V`, `--version` | | Show the version and exit. |
 
+Service management (see [Service management](#service-management-systemd)):
+
+| Option | Default | Description |
+|---|---|---|
+| `--install NAME` | | Install or update rotation `NAME` with the purge options of the same command line. `NAME` is `[A-Za-z0-9_-]`, max 64. |
+| `--uninstall NAME` | | Disable and remove rotation `NAME`. The execution log and the script are kept. |
+| `--list` | | List installed rotations with directory, prefix, retention, schedule, timer state and next run. |
+| `--schedule SPEC` | `*-*-* 00:00:00` | `OnCalendar=` expression, validated with `systemd-analyze calendar`. |
+| `--log-dir DIR` | `/data/log/purge_proxysql_eventslog` | Execution log directory. The log file is `DIR/NAME.log`. |
+| `--bin-dir DIR` | `/usr/local/bin` | Where the script is copied for the units to run. |
+| `--user NAME` | `root` | Service user. A non-root user adds `User=`/`Group=` and `su` to logrotate. |
+| `--no-hardening` | | Omit `ProtectSystem=strict`, `ReadWritePaths=` and related sandboxing. |
+| `--no-logrotate` | | Do not install a logrotate policy for the execution log. |
+| `--no-enable` | | Install the timer without enabling or starting it. |
+| `-y`, `--yes` | | Apply without the confirmation prompt. |
+| `--root DIR` | | Write under an alternate root (staging, packaging, tests). No `systemctl` calls. |
+| `--systemd-version N` | detected | `StandardOutput=append:` for 240 or newer, `sh -c` redirection for older (RHEL 8). |
+
 Exit status is `0` on success (including when no matching files exist) and `1`
-on invalid arguments, a missing directory, or a missing `gzip` with
-`--compress`.
+on invalid arguments, a missing directory or privileges, a missing `gzip` with
+`--compress`, a conflicting rotation, or a declined confirmation.
 
 ## Usage
 
@@ -237,6 +131,101 @@ Sample output:
 Summary: deleted=2 compressed=2 skipped=0 freed=371.40 MB
 ```
 
+## Service management (systemd)
+
+The script installs itself as named **rotations**. Each rotation is one
+directory + prefix with its own retention, schedule and execution log, so a
+host with several ProxySQL instances gets one rotation per instance and log
+type:
+
+| File | Purpose |
+|---|---|
+| `/usr/local/bin/proxysql_eventslog_purge.sh` | Copy of the script used by every rotation (updated when it differs). |
+| `/etc/systemd/system/proxysql-log-retention-NAME.service` | Oneshot service running the purge with the given options. |
+| `/etc/systemd/system/proxysql-log-retention-NAME.timer` | Schedule (`Persistent=true`). |
+| `/etc/logrotate.d/proxysql-log-retention-NAME` | Monthly rotation of `LOG_DIR/NAME.log` only, 12 copies. |
+
+Install the rotations for two instances, each with events and audit logs:
+
+```bash
+cd fenicceTools/proxysql/log_retention
+
+sudo ./proxysql_eventslog_purge.sh --install proxysql1-events \
+    -d /data/proxysql1 -p query.log -k 200 -a 3 -c
+
+sudo ./proxysql_eventslog_purge.sh --install proxysql1-audit \
+    -d /data/proxysql1 -p audit.log -k 1000 -a 30 -c
+
+sudo ./proxysql_eventslog_purge.sh --install proxysql2-events \
+    -d /data/proxysql2 -p query.log -k 100 -a 2 -c \
+    --schedule '*-*-* 00/6:00:00' --log-dir /data/log/proxysql2
+```
+
+Before changing anything, `--install` shows the plan and the exact content of
+the service, timer and logrotate files, then asks for confirmation:
+
+```text
+==> Install rotation 'proxysql1-events' (new)
+  Log files:         /data/proxysql1/query.log.NNNNNNNN
+  Retention:         keep 200, max-age 3d, compress yes
+  Schedule:          *-*-* 00:00:00
+  Run as:            root:root
+  Execution log:     /data/log/purge_proxysql_eventslog/proxysql1-events.log
+  Script:            /usr/local/bin/proxysql_eventslog_purge.sh (install)
+  Service:           /etc/systemd/system/proxysql-log-retention-proxysql1-events.service
+  Timer:             /etc/systemd/system/proxysql-log-retention-proxysql1-events.timer
+  Logrotate:         /etc/logrotate.d/proxysql-log-retention-proxysql1-events
+  Hardening:         yes
+  Output mode:       StandardOutput=append: (systemd 252)
+  Enable timer:      yes
+
+----- /etc/systemd/system/proxysql-log-retention-proxysql1-events.service -----
+...
+ExecStartPre=/bin/date '+=== %%Y-%%m-%%d %%H:%%M:%%S run start ==='
+ExecStart=/usr/local/bin/proxysql_eventslog_purge.sh -d /data/proxysql1 -p query.log -k 200 -a 3 -c
+...
+
+? Install rotation 'proxysql1-events' [y/N]:
+```
+
+`-y` skips the prompt (required when stdin is not a terminal) and `--dry-run`
+prints the plan and files without writing anything.
+
+List, inspect and remove rotations:
+
+```bash
+./proxysql_eventslog_purge.sh --list
+```
+
+```text
+NAME                 DIR                      PREFIX        KEEP    AGE GZ   SCHEDULE           TIMER     NEXT RUN
+proxysql1-audit      /data/proxysql1          audit.log     1000    30d yes  *-*-* 00:00:00     active    Sat 2026-10-17 00:00:00 WEST
+proxysql1-events     /data/proxysql1          query.log      200     3d yes  *-*-* 00:00:00     active    Sat 2026-10-17 00:00:00 WEST
+proxysql2-events     /data/proxysql2          query.log      100     2d yes  *-*-* 00/6:00:00   active    Fri 2026-10-16 18:00:00 WEST
+```
+
+```bash
+systemctl start proxysql-log-retention-proxysql1-events.service    # run now
+tail -n 50 /data/log/purge_proxysql_eventslog/proxysql1-events.log
+sudo ./proxysql_eventslog_purge.sh --uninstall proxysql2-events
+```
+
+Rules:
+
+- Re-running `--install NAME` with different options updates the rotation.
+  Files that do not change are left untouched; files that change are backed up
+  as `<file>.bak.<timestamp>`, and the timer is restarted to pick up a new
+  schedule.
+- Two rotations cannot manage the same directory + prefix; the second install
+  is refused and names the existing rotation.
+- The execution log directory is created if missing (mode `0750`); an existing
+  directory is never modified. logrotate only targets `LOG_DIR/NAME.log`, so
+  any directory can hold the execution logs.
+- The rotation settings are stored as `# plr.*` comments in the service file,
+  which is what `--list` and the conflict check read.
+- `--install` and `--uninstall` require root and systemd. On other hosts, use
+  `--root DIR` to render the files, or cron.
+
 ## Scheduling
 
 Install the script, then schedule it as the user that owns the log directory:
@@ -292,8 +281,9 @@ sudo install -d -o proxysql -g proxysql -m 0750 /var/log/proxysql
 
 ### systemd service and timer
 
-`install.sh --systemd` generates and activates these units for you (see
-[Installation](#installation)). The examples below document the manual setup.
+`--install` generates and activates these units for you (see
+[Service management](#service-management-systemd)). The examples below
+document the manual setup.
 
 A single `oneshot` service runs both prefixes in sequence. Output goes to the
 journal without ANSI colors, because stdout is not a TTY.
@@ -384,7 +374,7 @@ system files:
 
 ```bash
 bash proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
-bash proxysql/log_retention/tests/test_install.sh
+bash proxysql/log_retention/tests/test_service_management.sh
 ```
 
 The purge suite covers argument validation, colored help and `NO_COLOR`,
@@ -392,9 +382,9 @@ dry-run, retention by count and age, protection of the active file, compression 
 prefix isolation between `query.log` and `audit.log`, and color suppression on
 non-TTY output.
 
-The installer suite runs only with `--root` on a temporary directory or with
-`--dry-run`. It covers option validation, script-only and systemd installs,
-`append:` versus `sh -c` output for systemd 240+ and older, custom options,
-idempotent reinstall with backups, interactive answers, re-prompting on
-invalid values, the log directory review (confirm, decline and re-enter,
-`--accept-log-dir`), aborting on closed input, and uninstall.
+The service management suite runs only with `--root` on a temporary directory
+or with `--dry-run`. It covers option validation, the generated service, timer
+and logrotate files, several rotations on one host, the dir + prefix conflict
+check, idempotent reinstall with backups, `append:` versus `sh -c` output,
+custom options, the confirmation prompt (declined, accepted, and refused
+without a terminal), `--list`, and `--uninstall`.
