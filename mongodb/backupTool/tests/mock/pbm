@@ -56,7 +56,12 @@ case $1 in
         cfg=${MOCK_CONFIG:-/dev/null}
         if [[ ${2:-} == --set ]]; then
             kv=$3
-            { grep -v "^${kv%%=*}=" "$cfg" 2>/dev/null || true; printf '%s\n' "$kv"; } >"$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+            # Without MOCK_CONFIG the value is accepted but not stored (never
+            # write next to /dev/null: it fails as non-root, and as root it
+            # would replace /dev/null).
+            if [[ -n ${MOCK_CONFIG:-} ]]; then
+                { grep -v "^${kv%%=*}=" "$cfg" 2>/dev/null || true; printf '%s\n' "$kv"; } >"$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+            fi
             printf '[%s]\n' "$kv"
         else
             # Same output as PBM 2.12.0 (cmd/pbm/config.go, confKV):

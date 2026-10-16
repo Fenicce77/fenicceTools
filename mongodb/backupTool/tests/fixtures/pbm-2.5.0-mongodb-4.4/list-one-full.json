@@ -1,0 +1,23 @@
+{
+  "snapshots": [
+    {
+      "name": "2026-10-15T09:00:57Z",
+      "status": "done",
+      "restoreTo": 1792054959,
+      "pbmVersion": "2.5.0",
+      "type": "logical",
+      "src": ""
+    }
+  ],
+  "pitr": {
+    "on": true,
+    "ranges": [
+      {
+        "range": {
+          "start": 1792054960,
+          "end": 1792155773
+        }
+      }
+    ]
+  }
+}

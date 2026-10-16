@@ -11,6 +11,8 @@
 # kept unless given again. Run "install.sh --help" for usage.
 
 set -euo pipefail
+# An exported CDPATH makes "cd DIR" print DIR and corrupts $(cd ... && pwd).
+unset CDPATH
 
 PROG=install.sh
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)

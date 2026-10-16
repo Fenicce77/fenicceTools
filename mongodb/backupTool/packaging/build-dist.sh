@@ -8,6 +8,8 @@
 # no macOS metadata, owner root:root, files sorted. Run with --help.
 
 set -euo pipefail
+# An exported CDPATH makes "cd DIR" print DIR and corrupts $(cd ... && pwd).
+unset CDPATH
 
 PROG=build-dist.sh
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)

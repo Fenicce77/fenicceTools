@@ -95,7 +95,8 @@ load_config() {
     : "${WAIT_RUNNING_SEC:=1800}"
     : "${WAIT_POLL_SEC:=30}"
     : "${DEDUP_WINDOW_SEC:=600}"
-    : "${FULL_MIN_INTERVAL_SEC:=72000}"   # 20h: at most one scheduled full per day
+    : "${FULL_SAME_DAY_GUARD:=true}"      # at most one full per calendar day (host clock)
+    : "${FULL_MIN_INTERVAL_SEC:=0}"       # optional extra guard (0 = disabled)
     : "${LOCAL_NODE_NAMES:=}"
     : "${LOCK_DIR:=}"
     : "${PBM_BIN:=}"
@@ -112,11 +113,13 @@ load_config() {
     : "${MAX_REPL_LAG_SEC:=60}"
     : "${MAX_QUEUE:=50}"
     : "${MAX_WT_DIRTY_PCT:=20}"
+    : "${OWNER_BUSY_MAX_DEFER_SEC:=10800}" # physical: defer incrementals while the owner is busy
     : "${FALLBACK_DELAY_SEC:=120}"
     : "${PROBE_TIMEOUT_MS:=5000}"
 
     # Phase 4: logical scheme (Community)
     : "${OPLOG_INCR_MIN:=360}"
+    : "${PITR_SPAN_MIN:=}"                # empty = OPLOG_INCR_MIN
     : "${PITR_AUTOCONFIG:=true}"
     : "${PITR_LAG_MARGIN_SEC:=900}"
     : "${OPLOG_WINDOW_FACTOR:=2}"
@@ -137,13 +140,16 @@ validate_config() {
     local v
     for v in RETENTION_DAYS WAIT_RUNNING_SEC WAIT_POLL_SEC DEDUP_WINDOW_SEC FULL_MIN_INTERVAL_SEC \
              MAX_REPL_LAG_SEC MAX_QUEUE MAX_WT_DIRTY_PCT FALLBACK_DELAY_SEC PROBE_TIMEOUT_MS \
-             OPLOG_INCR_MIN PITR_LAG_MARGIN_SEC OPLOG_WINDOW_FACTOR; do
+             OPLOG_INCR_MIN PITR_LAG_MARGIN_SEC OPLOG_WINDOW_FACTOR OWNER_BUSY_MAX_DEFER_SEC; do
         is_uint "${!v}" || die "${v} must be a non-negative integer (got '${!v}')" 2
     done
     if [[ -n $EXPECTED_DUMP_SEC ]] && ! is_uint "$EXPECTED_DUMP_SEC"; then
         die "EXPECTED_DUMP_SEC must be empty or a non-negative integer (got '${EXPECTED_DUMP_SEC}')" 2
     fi
     (( OPLOG_INCR_MIN >= 1 )) || die "OPLOG_INCR_MIN must be >= 1" 2
+    if [[ -n $PITR_SPAN_MIN ]] && { ! is_uint "$PITR_SPAN_MIN" || (( PITR_SPAN_MIN < 1 )); }; then
+        die "PITR_SPAN_MIN must be empty or an integer >= 1 (got '${PITR_SPAN_MIN}')" 2
+    fi
     case $BACKUP_COMPRESSION in
         s2|gzip|pgzip|snappy|lz4|zstd) ;;
         *) die "BACKUP_COMPRESSION must be one of s2 gzip pgzip snappy lz4 zstd; 'none' is not allowed (got '${BACKUP_COMPRESSION}')" 2 ;;
@@ -152,7 +158,7 @@ validate_config() {
         die "BACKUP_COMPRESSION_LEVEL must be empty or a non-negative integer (got '${BACKUP_COMPRESSION_LEVEL}')" 2
     fi
     [[ -n $REQUIRED_STORAGE_TYPES ]] || die "REQUIRED_STORAGE_TYPES must not be empty" 2
-    for v in PITR_AUTOCONFIG OPLOG_WINDOW_ENFORCE; do
+    for v in PITR_AUTOCONFIG OPLOG_WINDOW_ENFORCE FULL_SAME_DAY_GUARD; do
         case ${!v} in
             true|false) ;;
             *) die "${v} must be true or false (got '${!v}')" 2 ;;
@@ -199,12 +205,25 @@ _date_is_gnu() {
     date --version >/dev/null 2>&1
 }
 
-# date_days_ago N - print the date N days ago as YYYY-MM-DD.
+# date_days_ago N - print the UTC date N days ago as YYYY-MM-DD (UTC, so it
+# matches the "T00:00:00Z" the retention cutoff is built with).
 date_days_ago() {
     if _date_is_gnu; then
-        date -d "-$1 day" '+%Y-%m-%d'
+        date -u -d "-$1 day" '+%Y-%m-%d'
     else
-        date -v "-$1d" '+%Y-%m-%d'
+        date -u -v "-$1d" '+%Y-%m-%d'
+    fi
+}
+
+# today_start_epoch - UNIX time of today's 00:00 on the host clock (local
+# time, the clock systemd OnCalendar uses; equal to 00:00 UTC on UTC hosts).
+today_start_epoch() {
+    local d
+    d=$(date '+%Y-%m-%d')
+    if _date_is_gnu; then
+        date -d "${d} 00:00:00" '+%s'
+    else
+        date -j -f '%Y-%m-%d %H:%M:%S' "${d} 00:00:00" '+%s'
     fi
 }
 

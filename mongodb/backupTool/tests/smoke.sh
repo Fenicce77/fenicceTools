@@ -7,6 +7,8 @@
 #   tests/smoke.sh                 # bash from PATH
 #   tests/smoke.sh /bin/bash       # macOS bash 3.2 compatibility check
 set -uo pipefail
+# An exported CDPATH makes "cd DIR" print DIR and corrupts $(cd ... && pwd).
+unset CDPATH
 
 case ${1:-} in
     -h|--help)
@@ -43,7 +45,8 @@ unset LOCAL_NODE_NAMES METRICS_DIR PREFERRED_NODES ALLOW_PRIMARY BACKUP_MODE \
       MONGODB_VERSION MONGODB_EDITION RETENTION_DAYS PBM_LOCAL_ROOT LOG_DIR \
       BACKUP_COMPRESSION BACKUP_COMPRESSION_LEVEL REQUIRED_STORAGE_TYPES \
       OPLOG_INCR_MIN PITR_AUTOCONFIG EXPECTED_DUMP_SEC PBM_BIN MONGO_SHELL \
-      FULL_MIN_INTERVAL_SEC DEDUP_WINDOW_SEC FALLBACK_DELAY_SEC \
+      FULL_MIN_INTERVAL_SEC FULL_SAME_DAY_GUARD OWNER_BUSY_MAX_DEFER_SEC PITR_SPAN_MIN \
+      DEDUP_WINDOW_SEC FALLBACK_DELAY_SEC \
       MOCK_STATUS MOCK_BACKUPS MOCK_BACKUPS_AFTER MOCK_RUNNING MOCK_NODE MOCK_RC \
       MOCK_LIST MOCK_CONFIG MOCK_BUILDINFO MOCK_PBM_VERSION MOCK_DUMP_SEC
 
@@ -51,6 +54,8 @@ export PATH="${ROOT}/tests/mock:$PATH"
 export MOCK_FIXTURES=$FIX MOCK_CALLS="$WORK/calls"
 export PBM_BACKUP_CONF="$WORK/conf" PBM_ENV_FILE="$WORK/env" LOCK_DIR=$WORK
 export PBM_BACKUP_COLOR=never FALLBACK_DELAY_SEC=0
+# Day boundaries ("one full per day") are computed on the host clock: pin it.
+export TZ=UTC
 
 # ---------------------------------------------------------------------------
 # Node probe sets: $WORK/probes/<set>/<short-host>.json (missing = unreachable)
@@ -79,6 +84,7 @@ mkset n03queue  "$P1" "$S_OK" "$(probe SECONDARY 0 80 1.2 false)"
 mkset n02dirty  "$P1" "$(probe SECONDARY 0 0 35 false)" "$S_OK"
 mkset onlyprim  "$P1" "" ""
 mkset n03smalloplog "$P1" "$S_OK" "$(probe SECONDARY 0 0 1.2 false 400)"
+mkset n02smalloplog "$P1" "$(probe SECONDARY 0 0 1.2 false 400)" "$S_OK"
 export MOCK_PROBES="$WORK/probes/healthy"
 
 # Status variants
@@ -138,6 +144,26 @@ MOCK_PROBES=$WORK/probes/n03queue LOCAL_NODE_NAMES=$N2 EXPECT_OUT="queued operat
     check "owner with queued ops -> node02 takes NEW base"                    0 "$BASE" "" -- incr
 MOCK_PROBES=$WORK/probes/n02dirty LOCAL_NODE_NAMES=$N3 \
     check "dirty cache on non-owner does not matter"                          0 "$INCR" "" -- incr
+# The fixture chain is old (> OWNER_BUSY_MAX_DEFER_SEC): above, a busy owner
+# restarts the chain. With a recent chain backup a busy owner is waited for.
+MOCK_BACKUPS=$WORK/backups-fresh-base.json MOCK_PROBES=$WORK/probes/n03lag LOCAL_NODE_NAMES=$N2 \
+    EXPECT_OUT="CHAIN\]\[DEFER" \
+    check "owner busy (lag), recent chain -> incremental deferred, no base"   0 "" "backup --type" -- incr
+MOCK_BACKUPS=$WORK/backups-fresh-base.json MOCK_PROBES=$WORK/probes/n03queue LOCAL_NODE_NAMES=$N2 \
+    EXPECT_OUT="busy (queued operations 80 > 50)" \
+    check "owner busy (queue), recent chain -> deferred"                      0 "" "backup --type" -- incr
+MOCK_BACKUPS=$WORK/backups-fresh-base.json MOCK_PROBES=$WORK/probes/n03lag LOCAL_NODE_NAMES=$N2 \
+    OWNER_BUSY_MAX_DEFER_SEC=0 DEDUP_WINDOW_SEC=0 EXPECT_OUT="CHAIN\]\[RESTART" \
+    check "OWNER_BUSY_MAX_DEFER_SEC=0 -> NEW base at once (0.6.x)"            0 "$BASE" "" -- incr
+MOCK_BACKUPS=$WORK/backups-fresh-base.json MOCK_PROBES=$WORK/probes/n03down LOCAL_NODE_NAMES=$N2 DEDUP_WINDOW_SEC=0 \
+    EXPECT_OUT="is not available (mongod unreachable" \
+    check "owner DOWN, recent chain -> NEW base (no deferral)"                0 "$BASE" "" -- incr
+MOCK_BACKUPS=$WORK/backups-fresh-base.json MOCK_PROBES=$WORK/probes/n03lag LOCAL_NODE_NAMES=$N2 \
+    EXPECT_OUT="incr -> deferred up to OWNER_BUSY_MAX_DEFER_SEC" \
+    check "check explains the deferral"                                       0 "" "backup --type" -- check
+MOCK_RUNNING='{"running":{"type":"backup","name":"x","opID":"y"}}' LOCAL_NODE_NAMES=$N3 \
+    EXPECT_OUT="incremental skipped, the next run takes it" \
+    check "PBM still busy (e.g. long base) -> incremental skipped, rc 0"      0 "" "backup --type" -- incr
 MOCK_STATUS=$FIX/status-node02-agent-down.json MOCK_PROBES=$WORK/probes/n03down LOCAL_NODE_NAMES=$N2 \
     EXPECT_OUT="No eligible node" \
     check "node02 agent down + node03 down -> error, no backup"               1 "" "backup --type" -- incr
@@ -171,17 +197,30 @@ LOCAL_NODE_NAMES=$N3 check "owner runs base"                                  0 
 LOCAL_NODE_NAMES=$N2 check "standby skips base"                               0 "" "backup --type" -- full
 MOCK_BACKUPS=$WORK/backups-fresh-base.json LOCAL_NODE_NAMES=$N3 \
     check "base already done -> dedup skip"                                   0 "" "backup --type" -- full
-# base 5h ago (outside DEDUP_WINDOW_SEC, inside FULL_MIN_INTERVAL_SEC)
-jq --arg n "$(jq -rn --argjson t "$(( $(date +%s) - 5 * 3600 ))" '$t | todate')" \
-    '.backups.snapshot = [{name: $n, status: "done", type: "incremental", src: ""}] + .backups.snapshot' \
-    "$FIX/status-backups.json" >"$WORK/backups-base-5h.json"
-MOCK_BACKUPS=$WORK/backups-base-5h.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="FULL_MIN_INTERVAL_SEC" \
-    check "full 5h after the last one (e.g. reboot catch-up) -> skip"         0 "" "backup --type" -- full
-MOCK_BACKUPS=$WORK/backups-base-5h.json FALLBACK_DELAY_SEC=1 LOCAL_NODE_NAMES=$N2 \
+# One full per day (TZ=UTC): a base at today's 00:00 (a catch-up after a
+# reboot must not add another) and a manual base yesterday at 23:00 (must
+# not cancel tonight's). Both are outside DEDUP_WINDOW_SEC except right after
+# midnight, where the guard message still wins (it is checked first).
+TODAY0=$(jq -rn --arg d "$(date -u '+%Y-%m-%d')T00:00:00Z" '$d | fromdateiso8601')
+mkbase() { # file epoch [type]
+    jq --arg n "$(jq -rn --argjson t "$2" '$t | todate')" --arg ty "${3:-incremental}" \
+        '.backups.snapshot = [{name: $n, status: "done", type: $ty, src: "", restoreTo: 0}] + .backups.snapshot' \
+        "$FIX/status-backups.json" >"$WORK/$1"
+}
+mkbase backups-base-today.json "$TODAY0"
+mkbase backups-base-yesterday.json $(( TODAY0 - 3600 ))
+MOCK_BACKUPS=$WORK/backups-base-today.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="A full already ran today" \
+    check "full already taken today (e.g. reboot catch-up) -> skip"           0 "" "backup --type" -- full
+MOCK_BACKUPS=$WORK/backups-base-today.json FALLBACK_DELAY_SEC=1 LOCAL_NODE_NAMES=$N2 \
     check "...also on a standby: no takeover, no extra full"                  0 "" "backup --type" -- full
-MOCK_BACKUPS=$WORK/backups-base-5h.json FULL_MIN_INTERVAL_SEC=0 LOCAL_NODE_NAMES=$N3 \
-    check "FULL_MIN_INTERVAL_SEC=0 disables the guard"                        0 "$BASE" "" -- full
-MOCK_BACKUPS=$WORK/backups-base-5h.json LOCAL_NODE_NAMES=$N3 \
+MOCK_BACKUPS=$WORK/backups-base-yesterday.json LOCAL_NODE_NAMES=$N3 EXPECT_NO_OUT="Skipping" \
+    check "manual full yesterday 23:00 -> tonight's full still runs"          0 "$BASE" "" -- full
+MOCK_BACKUPS=$WORK/backups-base-today.json FULL_SAME_DAY_GUARD=false DEDUP_WINDOW_SEC=0 LOCAL_NODE_NAMES=$N3 \
+    check "FULL_SAME_DAY_GUARD=false disables the guard"                      0 "$BASE" "" -- full
+MOCK_BACKUPS=$WORK/backups-base-yesterday.json FULL_MIN_INTERVAL_SEC=72000 LOCAL_NODE_NAMES=$N3 \
+    EXPECT_OUT="FULL_MIN_INTERVAL_SEC=72000" \
+    check "FULL_MIN_INTERVAL_SEC (opt-in, 0.6.x rule) still applies"          0 "" "backup --type" -- full
+MOCK_BACKUPS=$WORK/backups-base-today.json LOCAL_NODE_NAMES=$N3 \
     check "incr is not affected by the full guard"                            0 "" "" -- incr
 MOCK_BACKUPS=$WORK/backups-fresh-base.json LOCAL_NODE_NAMES=$N3 \
     check "--force ignores dedup"                                             0 "$BASE" "" -- full --force
@@ -286,8 +325,18 @@ MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_PROBES=$WORK
 MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_PROBES=$WORK/probes/n03smalloplog LOCAL_NODE_NAMES=$N3 \
     EXPECTED_DUMP_SEC=100 \
     check "EXPECTED_DUMP_SEC overrides the estimate"                          0 "$LOG" "" -- full
-MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="FULL_MIN_INTERVAL_SEC" \
-    check "logical full 6h after the last one -> skip"                        0 "" "backup --type" -- full
+mkbase backups-logical-today.json "$TODAY0" logical
+mkbase backups-logical-yesterday.json $(( TODAY0 - 15 * 3600 )) logical
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-today.json LOCAL_NODE_NAMES=$N3 EXPECT_OUT="A full already ran today" \
+    check "logical full already taken today -> skip"                          0 "" "backup --type" -- full
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-yesterday.json LOCAL_NODE_NAMES=$N3 \
+    check "manual logical full yesterday 09:00 -> tonight's runs (was skipped)" 0 "$LOG" "" -- full
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_PROBES=$WORK/probes/n02smalloplog LOCAL_NODE_NAMES=$N3 \
+    EXPECT_OUT="on mongocluster-node02.example.private:27017, a member PBM may pick" \
+    check "small oplog on ANOTHER secondary PBM may pick -> rc 1"             1 "" "backup --type" -- full
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json LOCAL_NODE_NAMES=$N3 \
+    EXPECT_NO_OUT="mongocluster-node01.example.private:27017)" \
+    check "the primary's oplog window is not considered"                      0 "$LOG" "" -- full
 MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-none.json LOCAL_NODE_NAMES=$N2 EXPECT_OUT="cannot estimate the dump time" \
     check "first logical full -> no estimate, runs"                           0 "$LOG" "" -- full
 MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
@@ -328,6 +377,29 @@ lcfg true 10
 MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/status-pitr-run.json MOCK_LIST=$WORK/list-ok.json \
     MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 PITR_AUTOCONFIG=false EXPECT_OUT="pitr.oplogSpanMin=10, expected" \
     check "oplogSpanMin mismatch is reported"                                 0 "" "" -- incr
+lcfg true 360
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical-old.json MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 \
+    PITR_SPAN_MIN=10 EXPECT_OUT="Setting pitr.oplogSpanMin=10" \
+    check "PITR_SPAN_MIN=10 (RPO) independent of OPLOG_INCR_MIN"              0 "config --set pitr.oplogSpanMin=10" "" -- full
+lcfg true 10
+mklist late30 "[[$(( LRESTORE - 60 )),$(( NOW - 1800 ))]]"
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/status-pitr-run.json MOCK_LIST=$WORK/list-late30.json \
+    MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 PITR_SPAN_MIN=10 EXPECT_OUT="s behind (max 1500s)" \
+    check "...and the max lag follows the span (10 min + 15 min)"            1 "" "backup --type" -- incr
+lcfg true 360
+jq -n '{snapshots: [], pitr: {on: true, ranges: []}}' >"$WORK/list-empty.json"
+jq --argjson s $(( LRESTORE - 60 )) --argjson e $(( NOW - 1200 )) \
+    '.backups.pitrChunks = {pitrChunks: [{range: {start: $s, end: $e}}], size: 1}' \
+    "$WORK/status-pitr-run.json" >"$WORK/status-pitr-chunks.json"
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/status-pitr-chunks.json MOCK_LIST=$WORK/list-empty.json \
+    MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 EXPECT_OUT="Restorable to any point" \
+    check "list without ranges -> falls back to pbm status pitrChunks"        0 "list -o json" "backup --type" -- incr
+jq -n --argjson a $(( LRESTORE - 60 )) --argjson b $(( LRESTORE + 600 )) --argjson c $(( LRESTORE + 601 )) --argjson d $(( NOW - 1200 )) \
+    '{snapshots: [], pitr: {on: true, ranges: [{range: {start: $a, end: $b}, noBaseSnapshot: true}, {range: {start: $c, end: $d}}]}}' \
+    >"$WORK/list-nobase.json"
+MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/status-pitr-run.json MOCK_LIST=$WORK/list-nobase.json \
+    MOCK_CONFIG=$WORK/pbmconf LOCAL_NODE_NAMES=$N3 EXPECT_OUT="no saved oplog covers the base snapshot" \
+    check "noBaseSnapshot ranges are not counted as coverage"                 1 "" "backup --type" -- incr
 MOCK_BUILDINFO=$CE MOCK_BACKUPS=$WORK/backups-logical.json MOCK_STATUS=$WORK/status-pitr-run.json MOCK_LIST=$WORK/list-ok.json \
     FALLBACK_DELAY_SEC=60 LOCAL_NODE_NAMES=$N2 \
     check "standby skips the check immediately (no takeover wait)"            0 "" "list -o json" -- incr
@@ -529,6 +601,43 @@ MOCK_BUILDINFO='{"version":"4.2.24","modules":[]}' MOCK_PBM_VERSION=2.3.1 MOCK_S
 MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_STATUS=$WORK/status-pbm25-gcs.json MOCK_BACKUPS=$WORK/backups-none.json \
     LOCAL_NODE_NAMES=$N2 EXPECT_OUT="No logical full yet and PITR is disabled: expected" \
     check "check before the first logical full -> warning, rc 0"              0 "" "backup --type" -- check
+
+printf '\n[real PBM 2.5.0 output, MongoDB 4.4 Community (anonymized)]\n'
+F25="${ROOT}/tests/fixtures/pbm-2.5.0-mongodb-4.4"
+# status-two-fulls: two logical fulls, one continuous oplog range across both.
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_BACKUPS=$F25/status-two-fulls.json MOCK_STATUS=$F25/status-two-fulls.json \
+    MOCK_LIST=$WORK/list-empty.json EXPECT_OUT="Base: logical backup 2026-10-16T00:00:01Z" \
+    check "restore --to after the 2nd full -> picks it, oplog continuous"     0 "" "pbm restore" -- restore --to 2026-10-16T09:30:00 --dry-run
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_BACKUPS=$F25/status-two-fulls.json MOCK_STATUS=$F25/status-two-fulls.json \
+    MOCK_LIST=$WORK/list-empty.json EXPECT_OUT="Oplog slices cover 2026-10-14T11:07:45Z .. 2026-10-15T12:00:00Z" \
+    check "restore --to between the fulls -> 1st full + its oplog"            0 "" "pbm restore" -- restore --to 2026-10-15T12:00:00 --dry-run
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_BACKUPS=$F25/status-nobase.json MOCK_STATUS=$F25/status-nobase.json \
+    MOCK_LIST=$WORK/list-empty.json EXPECT_OUT="No logical full backup with restoreTo" \
+    check "restore --to inside a noBaseSnapshot range -> rc 1"                1 "" "pbm restore" -- restore --to 2026-10-09T14:10:00 --dry-run
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_BACKUPS=$F25/status-one-full.json MOCK_STATUS=$F25/status-one-full.json \
+    MOCK_LIST=$F25/list-one-full.json EXPECT_OUT="Oplog slices cover 2026-10-15T09:02:39Z .. 2026-10-16T12:00:00Z" \
+    check "restore --to with real 'pbm list -o json' ranges"                  0 "" "pbm restore" -- restore --to 2026-10-16T12:00:00 --dry-run
+MOCK_BUILDINFO=$C44 MOCK_PBM_VERSION=2.5.0 MOCK_BACKUPS=$F25/status-nobase.json MOCK_STATUS=$F25/status-nobase.json \
+    METRICS_DIR=$WORK/mreal check "metrics from real PBM 2.5.0 status"        0 "" "" -- metrics
+if grep -q 'pbm_agent_ok{rs="gcssrs01",node="[^"]*",member="mongocluster-node02:27017",role="P"} 1' "$WORK/mreal/pbm_backup_state.prom" \
+   && grep -q 'pbm_agent_ok{.*member="mongocluster-node01:27017",role="S"} 1' "$WORK/mreal/pbm_backup_state.prom" \
+   && grep -q 'pbm_backup_snapshots{.*status="done"} 7' "$WORK/mreal/pbm_backup_state.prom"; then
+    pass=$((pass + 1)); printf '  \033[32mPASS\033[0m %s\n' "...members, roles and snapshot count parsed"
+else
+    fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s\n' "...members, roles and snapshot count parsed"; sed 's/^/       | /' "$WORK/mreal/pbm_backup_state.prom"
+fi
+
+printf '\n[detection / minimum PBM]\n'
+MOCK_BUILDINFO='MongoServerSelectionError: connection refused' LOCAL_NODE_NAMES=$N3 \
+    EXPECT_OUT="scheme (physical or logical) is unknown" \
+    check "buildInfo unreadable -> rc 1, nothing done, neutral label"         1 "" "backup --type" -- full
+[[ -s $WORK/root/logs/detect.log ]] && { pass=$((pass + 1)); printf '  \033[32mPASS\033[0m %s\n' "...logged to detect.log"; } \
+    || { fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s\n' "...logged to detect.log"; }
+MOCK_BUILDINFO='MongoServerSelectionError: connection refused' BACKUP_MODE=logical LOCAL_NODE_NAMES=$N3 \
+    EXPECT_OUT="Cannot read buildInfo" \
+    check "...with BACKUP_MODE forced -> preflight reports it"                1 "" "backup --type" -- full
+MOCK_PBM_VERSION=2.0.5 LOCAL_NODE_NAMES=$N3 EXPECT_OUT="requires PBM >= 2.1.0" \
+    check "PBM 2.0.x (no 'pbm cleanup') -> rc 1"                              1 "" "backup --type" -- full
 
 printf '\n[compatibility matrix 5.0 - 8.0]\n'
 for case in "6.0.19 2.12.0 1 dropped in PBM 2.11.0" "5.0.30 2.11.0 1 dropped in PBM 2.11.0" \

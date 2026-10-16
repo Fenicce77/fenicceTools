@@ -1,0 +1,26 @@
+{
+  "name": "2026-10-16T00:00:01Z",
+  "opid": "6ad169011816916a5b495f3e",
+  "type": "logical",
+  "last_write_ts": 1792109400,
+  "last_transition_ts": 1792109404,
+  "last_write_time": "2026-10-16T00:10:00Z",
+  "last_transition_time": "2026-10-16T00:10:04Z",
+  "mongodb_version": "4.4.15",
+  "fcv": "4.4",
+  "pbm_version": "2.5.0",
+  "status": "done",
+  "size": 2801327000,
+  "size_h": "2.6 GiB",
+  "replsets": [
+    {
+      "name": "rs44",
+      "status": "done",
+      "node": "mongocluster-node03:27017",
+      "last_write_ts": 1792109400,
+      "last_transition_ts": 1792109403,
+      "last_write_time": "2026-10-16T00:10:00Z",
+      "last_transition_time": "2026-10-16T00:10:03Z"
+    }
+  ]
+}

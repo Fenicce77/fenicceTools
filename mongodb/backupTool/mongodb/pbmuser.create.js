@@ -120,12 +120,22 @@
     // ---------------------------------------------------------------------
     // Must be the primary
     // ---------------------------------------------------------------------
-    let hello;
+    // "hello" exists since MongoDB 4.4.2 / 4.2.10; older servers only know
+    // "isMaster" (ismaster instead of isWritablePrimary).
+    let hello = null;
     try {
         hello = adminDb.runCommand({ hello: 1 });
     } catch (e) {
-        fail(`Cannot run 'hello': ${e.message || e}`);
+        hello = null;
     }
+    if (!hello || (hello.isWritablePrimary === undefined && hello.ismaster === undefined)) {
+        try {
+            hello = adminDb.runCommand({ isMaster: 1 });
+        } catch (e) {
+            fail(`Cannot run 'hello' nor 'isMaster': ${e.message || e}`);
+        }
+    }
+    hello.isWritablePrimary = !!(hello.isWritablePrimary || hello.ismaster);
     if (!hello.isWritablePrimary) {
         fail(`Not connected to the PRIMARY${hello.primary ? ` (primary is ${hello.primary})` : ''}. Connect with ?replicaSet=<name> or to the primary host`);
     }

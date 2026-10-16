@@ -389,6 +389,66 @@ skipped, probes returned nothing).
 - `tests/install.test.sh`: 138 checks (confirmations, edited / unedited
   copies, replace with backup, agent and storage files, log dirs, logrotate).
 
+## Real PBM 2.5.0 output, one full per day, busy owner (0.7.0)
+
+Reviewed against three live MongoDB 4.4 Community replica sets running
+0.6.8 (PBM 2.5.0, logical scheme with PITR) and the PBM docs/source.
+
+- **One full per day** (`FULL_SAME_DAY_GUARD=true`, default): `full` skips
+  only if a full already started today (00:00 host time, the clock of the
+  systemd timer; 00:00 UTC on UTC hosts). Before, `FULL_MIN_INTERVAL_SEC`
+  (20h) also made a manual full taken during the day cancel the next nightly
+  full (seen live: 3 of 3 replica sets lost one nightly full after a manual
+  one). `FULL_MIN_INTERVAL_SEC` stays as an opt-in extra guard, default `0`.
+  A configuration that sets it explicitly keeps the 20h rule.
+- **Physical scheme, busy owner**: if the chain owner is up but over a load
+  threshold (replication lag, queued operations, dirty cache), the hourly
+  incremental is skipped instead of starting a new base, while the newest
+  chain backup is younger than `OWNER_BUSY_MAX_DEFER_SEC` (default 10800s);
+  then a new base is taken. An owner that is down (unreachable, pbm-agent not
+  ok, primary) still restarts the chain at once. `0` = 0.6.x behaviour.
+  `check` explains the deferral.
+- **Physical scheme, PBM busy**: an incremental that still finds PBM busy
+  after `WAIT_RUNNING_SEC` (e.g. a long base) is skipped (rc 0, metric
+  `skipped`) instead of failing; the next run takes it. A full still fails.
+- **Logical scheme, oplog window**: checked on the smallest window among the
+  members PBM may pick for the dump (reachable secondaries with a healthy
+  pbm-agent), not only the launching member: PBM chooses the executor by
+  `backup.priority`. Falls back to this member with `--force`.
+- **`PITR_SPAN_MIN`** (new, optional): minutes per oplog slice
+  (`pitr.oplogSpanMin`, the RPO), independent of `OPLOG_INCR_MIN` (the check
+  interval). Empty = `OPLOG_INCR_MIN`, so nothing changes unless it is set.
+  The allowed oplog lag follows the span.
+- **PITR ranges**: `noBaseSnapshot` ranges (oplog saved before any full) are
+  no longer counted as coverage; when `pbm list -o json` returns no range,
+  `pbm status -o json` pitrChunks are used (an unexpected list format can
+  no longer report a false "no saved oplog").
+- **Detection failure**: if `buildInfo` cannot be read and `BACKUP_MODE=auto`,
+  `full`/`incr` stop with a neutral label in `detect.log` (before, the error
+  was logged as a PSMDB physical run in `incrbase.log`/`incr.log`).
+- **PBM minimum 2.1.0** (was 2.0.0): `pbm cleanup` does not exist in PBM
+  2.0.x (checked in the v2.0.5 / v2.1.0 sources).
+- **Retention cutoff in UTC**: `today - RETENTION_DAYS` is now a UTC date,
+  matching the `T00:00:00Z` it is combined with (before, the local date: off
+  by one day near midnight on non-UTC hosts).
+- `pbmuser.create.js`: falls back to `isMaster` on servers without `hello`
+  (MongoDB < 4.4.2 / 4.2.10).
+- `unset CDPATH` in every script: with an exported `CDPATH`, `cd DIR` prints
+  DIR, which corrupted `$(cd ... && pwd -P)` (pbm-backup could not find its
+  libraries, install.sh its source dir and its staged file list, the tests
+  their fixtures).
+- Tests: the `pbm config --set` mock no longer writes next to `/dev/null`
+  when `MOCK_CONFIG` is unset (failed as non-root).
+- Tests: `install.test.sh` and `pbmuser.test.sh` failed on Linux (`stat -f`
+  is `--file-system` in GNU stat: prints output and fails); GNU form first.
+  New fixtures `tests/fixtures/pbm-2.5.0-mongodb-4.4` (real, anonymized PBM
+  2.5.0 output) and scenarios: one full per day, busy owner, PBM busy, oplog
+  window of other members, `PITR_SPAN_MIN`, list fallback, `noBaseSnapshot`,
+  detection failure, PBM 2.0.x. `smoke.sh` pins `TZ=UTC`.
+- Docs: `backup.priority` must list every member (a partial list breaks the
+  incremental affinity), PMM Backup Management must stay off on these
+  clusters, README section "Verified against real PBM 2.5.0 output".
+
 ## Diffs of the replaced scripts
 
 <details>

@@ -1,6 +1,6 @@
 # pbm-backup: daily full backup at 00:00
 # Persistent=true: a full missed while the host was down runs at boot;
-# FULL_MIN_INTERVAL_SEC (20h) stops it if another member already took it.
+# FULL_SAME_DAY_GUARD (one full per day) stops it if a full already ran today.
 [Unit]
 Description=pbm-backup: daily full backup at 00:00
 

@@ -162,22 +162,28 @@ pbm_config_set() {
 }
 
 # pitr_ranges_json - print the saved PITR oplog ranges as a sorted JSON array
-# of [start, end] UNIX seconds, merged across the output shapes PBM may use:
-#   pbm list -o json   .pitr.ranges[] = {range: {start, end}}  (or {start, end})
-#   pbm status -o json .backups.pitrChunks.pitrChunks[] = {range: {start, end}}
-# NOTE: not verified against real PBM output with PITR enabled yet.
+# of [start, end] UNIX seconds. Verified against real PBM 2.5.0 output
+# (tests/fixtures/pbm-2.5.0-mongodb-4.4) and the PBM 2.12.0 source:
+#   pbm list -o json   .pitr.ranges[] = {range: {start, end}[, noBaseSnapshot]}
+#   pbm status -o json .backups.pitrChunks.pitrChunks[] = {range: {start, end}[, noBaseSnapshot]}
+# Ranges flagged noBaseSnapshot (oplog saved with no base backup before it,
+# e.g. PITR enabled before the first full) cannot be restored and are dropped.
+# "pbm list" is tried first; "pbm status" is used when list fails or returns
+# no range (so an unexpected list format cannot hide existing slices).
+_PITR_RANGES_JQ='
+    [ .[] | select((.noBaseSnapshot // false) | not) | (.range // .)
+      | select(.start != null and .end != null) | [(.start | floor), (.end | floor)] ] | sort'
 pitr_ranges_json() {
-    local out
+    local out r=''
     if out=$("$PBM_BIN" list -o json 2>/dev/null) && [[ -n $out ]]; then
-        printf '%s\n' "$out" | jq -c '
-            [ (.pitr.ranges // [])[] | (.range // .) | select(.start != null and .end != null)
-              | [(.start | floor), (.end | floor)] ] | sort'
-        return 0
+        r=$(printf '%s\n' "$out" | jq -c "(.pitr.ranges // []) | ${_PITR_RANGES_JQ}" 2>/dev/null || true)
+        if [[ -n $r && $r != '[]' ]]; then
+            printf '%s\n' "$r"
+            return 0
+        fi
     fi
-    out=$(pbm_status_json) || return 1
-    printf '%s\n' "$out" | jq -c '
-        [ (.backups.pitrChunks.pitrChunks // [])[] | (.range // .) | select(.start != null and .end != null)
-          | [(.start | floor), (.end | floor)] ] | sort'
+    out=$(pbm_status_json) || { [[ -n $r ]] && { printf '%s\n' "$r"; return 0; }; return 1; }
+    printf '%s\n' "$out" | jq -c "(.backups.pitrChunks.pitrChunks // []) | ${_PITR_RANGES_JQ}"
 }
 
 # pitr_coverage BASE_TS RANGES_JSON NOW MAX_LAG - check that saved oplog

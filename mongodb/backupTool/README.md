@@ -11,8 +11,10 @@ the work, and keeps an always-restorable, compressed backup set in a GCS bucket.
 | MongoDB Community / Enterprise, older PSMDB | logical | `pbm backup --type logical` | every `OPLOG_INCR_MIN` (6h): check the PBM PITR oplog slices |
 
 In the logical scheme PBM saves a compressed oplog slice every
-`OPLOG_INCR_MIN` minutes (`pitr.oplogSpanMin`), chained from the last logical
-full, so any point in time between fulls can be restored.
+`PITR_SPAN_MIN` minutes (`pitr.oplogSpanMin`; default `OPLOG_INCR_MIN`),
+chained from the last logical full, so any point in time between fulls can
+be restored. The span is the RPO: oplog not yet saved lives only in the
+cluster. `incr` checks the chain every `OPLOG_INCR_MIN` minutes.
 
 Change history against the original scripts: [CHANGES.md](CHANGES.md).
 
@@ -90,11 +92,21 @@ Every member runs the same systemd timers. On each run, every member:
    The **primary is never used** (unless `ALLOW_PRIMARY=true`). Only rank #0
    acts. Rank #N takes over after N x `FALLBACK_DELAY_SEC` if nobody started.
 3. If the owner is down, has no healthy pbm-agent or is overloaded, the next
-   member takes over. In the physical scheme it starts a **new base**, because
-   an incremental chain cannot move between members.
+   member takes over. In the physical scheme an incremental chain cannot move
+   between members:
+   - owner **down** (unreachable, pbm-agent not ok, became primary): **new
+     base** on the elected member;
+   - owner **busy** (replication lag, queued operations, dirty cache over the
+     thresholds): the hourly incremental is **skipped** while the newest chain
+     backup is younger than `OWNER_BUSY_MAX_DEFER_SEC` (3h), then new base.
 
-PBM itself chooses the member that executes a backup by `backup.priority`;
-pbm-backup checks afterwards and warns if it differs. Keep the primary lowest.
+PBM itself chooses the member that executes a backup by `backup.priority`
+(default: hidden 2.0, secondary 1.0, primary 0.5; physical incrementals stay
+on the member of the base); pbm-backup checks afterwards and warns if it
+differs. Keep the primary lowest and, if you set a priority list, include
+every member. For the same reason the oplog window check before a logical
+full uses the smallest window among the members PBM may pick, not only the
+member that launches it.
 
 ## Requirements
 
@@ -168,8 +180,8 @@ configuration error.
 
 | Timer | When | Notes |
 |---|---|---|
-| `pbm-backup-full.timer` | 00:00 | `Persistent=true`; `FULL_MIN_INTERVAL_SEC` (20h) prevents a second full after a reboot catch-up |
-| `pbm-backup-incr.timer` | physical: 01:15..23:15 hourly; logical: drop-in every `OPLOG_INCR_MIN` | `Persistent=false` |
+| `pbm-backup-full.timer` | 00:00 | `Persistent=true`; one full per day (`FULL_SAME_DAY_GUARD`): a reboot catch-up does not add a second full, a manual full taken yesterday does not cancel tonight's |
+| `pbm-backup-incr.timer` | physical: 01:15..23:15 hourly; logical: drop-in every `OPLOG_INCR_MIN` | `Persistent=false`; physical: skipped (not failed) when PBM is still busy |
 | `pbm-backup-cleanup.timer` | 00:40 | waits for a running backup |
 | `pbm-backup-metrics.timer` | every 5 min | only with `--metrics` |
 
@@ -238,6 +250,25 @@ tests/install.test.sh     # install.sh lifecycle (install, upgrade, downgrade, u
 Scenario tests with mocked `pbm` and `mongosh` and real PBM 2.12.0 JSON
 output as fixtures. No MongoDB needed.
 
+## Verified against real PBM 2.5.0 output (MongoDB 4.4 Community)
+
+Running on three production replica sets (MongoDB 4.4.3, 4.4.15, 4.4.29,
+PBM 2.5.0, GCS through the S3 endpoint, logical scheme with PITR). Anonymized
+output in `tests/fixtures/pbm-2.5.0-mongodb-4.4`, used by `tests/smoke.sh`:
+
+- `pbm status -o json`, `pbm list -o json`, `pbm describe-backup -o json`
+  have the shapes pbm-backup parses: members `<replset>/<host>:<port>` with an
+  empty secondary role, storage `S3` + `s3://https://storage.googleapis.com/...`,
+  PITR ranges in `.pitr.ranges[].range` and `.backups.pitrChunks.pitrChunks[].range`.
+- The first oplog chunk starts at the full's `restoreTo + 1`, and a new full
+  does not split the oplog range: the chain stays continuous across fulls.
+- Ranges flagged `noBaseSnapshot` (PITR enabled before the first full) exist
+  and are ignored as coverage.
+
+Do not enable PMM Backup Management on these clusters: PMM applies its own
+PBM configuration (`pbm config`) and would replace the storage and PITR
+settings pbm-backup relies on.
+
 ## Verified against PBM 2.5.0 (source)
 
 - Every `pbm` command, option and JSON field used by pbm-backup exists with
@@ -266,7 +297,6 @@ output as fixtures. No MongoDB needed.
 
 ## Not yet verified against a live cluster
 
-- A real Community run with PITR enabled (formats checked in the source only).
 - `buildInfo.psmdbVersion` (the `-N` version suffix is used as fallback).
 - `globalLock.currentQueue` as an overload signal on MongoDB 8.0.
 - Dynamic `backup.priority` to force the executing member is not

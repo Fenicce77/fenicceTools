@@ -7,15 +7,19 @@ README.md (what it does), INSTALL.md (deployment) and CHANGES.md (history agains
 original scripts, which are kept as diffs there and as units in `systemd/legacy/`).
 - Detects version/edition (buildInfo), checks the PBM compatibility matrix, picks the scheme.
 - PSMDB -> physical: daily `--base` + hourly incrementals, PITR off.
-- Community -> logical: daily logical full + PBM PITR oplog slices every OPLOG_INCR_MIN
-  (default 360), oplog window check before the full, chain continuity check every 6h.
+- Community -> logical: daily logical full + PBM PITR oplog slices every PITR_SPAN_MIN
+  (default OPLOG_INCR_MIN, 360), oplog window check (smallest window among the members
+  PBM may pick) before the full, chain continuity check every OPLOG_INCR_MIN.
+- One full per calendar day (FULL_SAME_DAY_GUARD); physical: a busy owner defers the
+  incremental up to OWNER_BUSY_MAX_DEFER_SEC, a down owner restarts the chain.
 - Node election on every member: stay on the owner of the last full, fail over to a
   healthy secondary, never the primary.
 - Chain-aligned safe retention, `restore` with coverage validation, optional Prometheus
   textfile metrics, systemd units, `install.sh`, tarball packaging, PBM user script.
-- Verified against PBM 2.12.0 output and source, and the PBM 2.5.0 source (last release for
-  MongoDB 4.4; no native GCS before 2.10, no agent config file before 2.9); not yet run on a
-  live cluster (see the "Not yet verified" list in README.md).
+- Verified against PBM 2.12.0 output and source, the PBM 2.5.0 source (last release for
+  MongoDB 4.4; no native GCS before 2.10, no agent config file before 2.9) and real PBM 2.5.0
+  output from live MongoDB 4.4 Community replica sets running 0.6.8
+  (tests/fixtures/pbm-2.5.0-mongodb-4.4). See also "Not yet verified" in README.md.
 
 ## Goal
 Extend the system to support MongoDB >= 4.x, both PSMDB and MongoDB Community:
@@ -28,10 +32,12 @@ Extend the system to support MongoDB >= 4.x, both PSMDB and MongoDB Community:
   unless explicitly requested.
 
 ## Requirements
-- Auto-detect server version (db.version()) and edition (buildInfo / $backupCursor availability)
-  and select backup type accordingly.
-- Validate installed PBM version against MongoDB version (PBM 2.3.0 deprecated 4.2,
-  PBM 2.6.0 dropped 4.4; 4.0 needs PBM 1.x). Recommend pinning the package on 4.x nodes.
+- Auto-detect server version and edition from buildInfo and select backup type accordingly.
+  Do not probe $backupCursor: it opens a backup cursor (pins a checkpoint, one at a time)
+  and would collide with a running physical backup.
+- Validate installed PBM version against MongoDB version (PBM >= 2.1.0 for "pbm cleanup";
+  PBM 2.3.0 deprecated 4.2, 2.4.0 dropped it; PBM 2.6.0 dropped 4.4; 4.0 needs PBM 1.x).
+  Recommend pinning the package on 4.x nodes.
 - Check oplog window vs. expected logical dump duration before running a full.
 - Retention (pbm cleanup --older-than) must keep the last valid base snapshot for PITR.
 - Optional Prometheus textfile-collector metrics (last backup ts, PITR lag, backup status);
@@ -53,7 +59,8 @@ Extend the system to support MongoDB >= 4.x, both PSMDB and MongoDB Community:
   editable copy install.sh installs; must stay identical to `etc/pbm-backup.conf.example` in git).
 - `install.sh`, `packaging/build-dist.sh`, `mongodb/pbmuser.create.js`,
   `tools/gcs-hmac-test.py` (GCS HMAC key check, Python stdlib).
-- `tests/` (smoke.sh, pbmuser.test.sh, mocks, PBM 2.12.0 fixtures).
+- `tests/` (smoke.sh, pbmuser.test.sh, install.test.sh, mocks, PBM 2.12.0 fixtures,
+  real anonymized PBM 2.5.0 / MongoDB 4.4 fixtures).
 
 ## Testing and release
 - `tests/smoke.sh` (bash from PATH) and `tests/smoke.sh /bin/bash` (macOS bash 3.2);

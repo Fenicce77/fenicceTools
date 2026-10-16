@@ -46,7 +46,7 @@ backup:
 #   - PSMDB (physical scheme): keep this section commented (PITR must be off).
 #   - Community (logical scheme): pbm-backup enables PITR after the first
 #     full. If you re-apply this file on a replica set already in service,
-#     uncomment these lines (with your OPLOG_INCR_MIN) so that PITR stays on;
+#     uncomment these lines (oplogSpanMin = PITR_SPAN_MIN, default OPLOG_INCR_MIN) so PITR stays on;
 #     otherwise no oplog is saved until the next full (gap in the chain).
 #pitr:
 #  enabled: true

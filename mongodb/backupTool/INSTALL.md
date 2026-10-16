@@ -938,7 +938,8 @@ the bucket are always kept.
 | pbm-agent does not start after a downgrade | remove the `--config` drop-in (§4.3) |
 | `PITR is enabled, but the physical scheme runs without PITR` | PSMDB: `pbm config --set pitr.enabled=false` |
 | `Oplog window ... < 2 x expected dump` | Community: enlarge the oplog (`replSetResizeOplog`) or set `EXPECTED_DUMP_SEC` / `OPLOG_WINDOW_ENFORCE=false` |
-| `Last full ... started N min ago (< FULL_MIN_INTERVAL_SEC)` | normal: a full already ran today. Use `pbm-backup full --force` to take another one |
+| `A full already ran today: ... (FULL_SAME_DAY_GUARD=true, one full per day)` | normal: a full already ran today (e.g. a catch-up after a reboot). Use `pbm-backup full --force` to take another one |
+| `Incremental deferred: newest chain backup is N min old` | physical: the chain owner is up but over a load threshold; the hourly incremental waits up to `OWNER_BUSY_MAX_DEFER_SEC`, then a new base is taken elsewhere |
 | `PBM executed the backup on X, not on this node` | PBM picked another member by `backup.priority`; keep the primary lowest in `conf/pbm-conf.yml` |
 | `Cannot read buildInfo` | `mongosh` missing or the URI is wrong; or set `MONGODB_VERSION` + `MONGODB_EDITION` |
 

@@ -1,0 +1,68 @@
+{
+  "backups": {
+    "type": "S3",
+    "path": "s3://https://storage.googleapis.com/example-bucket/rs44",
+    "region": "europe-west3",
+    "snapshot": [
+      {
+        "name": "2026-10-16T00:00:01Z",
+        "size": 2801327000,
+        "status": "done",
+        "restoreTo": 1792109400,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      },
+      {
+        "name": "2026-10-14T10:57:43Z",
+        "size": 2798695596,
+        "status": "done",
+        "restoreTo": 1791976065,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      }
+    ],
+    "pitrChunks": {
+      "pitrChunks": [
+        {
+          "range": {
+            "start": 1791976066,
+            "end": 1792152606
+          }
+        }
+      ],
+      "size": 211427211
+    }
+  },
+  "cluster": [
+    {
+      "rs": "rs44",
+      "nodes": [
+        {
+          "host": "rs44/mongocluster-node01:27017",
+          "agent": "v2.5.0",
+          "role": "P",
+          "ok": true
+        },
+        {
+          "host": "rs44/mongocluster-node02:27017",
+          "agent": "v2.5.0",
+          "role": "",
+          "ok": true
+        },
+        {
+          "host": "rs44/mongocluster-node03:27017",
+          "agent": "v2.5.0",
+          "role": "",
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "pitr": {
+    "conf": true,
+    "run": true
+  },
+  "running": {}
+}

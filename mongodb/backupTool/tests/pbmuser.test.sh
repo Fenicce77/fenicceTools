@@ -5,6 +5,8 @@
 #
 # Usage: tests/pbmuser.test.sh [-h|--help]
 set -uo pipefail
+# An exported CDPATH makes "cd DIR" print DIR and corrupts $(cd ... && pwd).
+unset CDPATH
 
 case ${1:-} in
     -h|--help)
@@ -22,6 +24,7 @@ export NO_COLOR=1
 
 # Fake admin DB. Scenario from env FAKE_*:
 #   FAKE_PRIMARY=0       not the primary
+#   FAKE_LEGACY=1        server without "hello" (MongoDB < 4.4.2 / 4.2.10): isMaster only
 #   FAKE_USER_ROLES      JSON array of roles of an existing pbmuser ("" = no user)
 #   FAKE_ROLE_PRIVS      JSON privileges of an existing pbmAnyAction ("" = no role)
 #   FAKE_PROMPT          "a|b" answers returned by passwordPrompt, in order
@@ -30,7 +33,11 @@ const answers = (E.FAKE_PROMPT || "").split("|");
 globalThis.__pbmUserTest = {
   passwordPrompt: () => answers.shift(),
   adminDb: {
-    runCommand: () => E.FAKE_PRIMARY === "0"
+    runCommand: (c) => (E.FAKE_LEGACY === "1" && c.hello)
+      ? { ok: 0, errmsg: "no such command: hello", code: 59 }
+      : (E.FAKE_LEGACY === "1" && E.FAKE_PRIMARY !== "0")
+      ? { ismaster: true, setName: "rsTest", me: "n1:27017", hosts: ["n1:27017", "n2:27017", "n3:27017"] }
+      : E.FAKE_PRIMARY === "0"
       ? { isWritablePrimary: false, primary: "n1:27017", setName: "rsTest", me: "n2:27017", hosts: ["n1:27017", "n2:27017"] }
       : { isWritablePrimary: true, setName: "rsTest", me: "n1:27017", hosts: ["n1:27017", "n2:27017", "n3:27017"] },
     getRole: () => E.FAKE_ROLE_PRIVS ? { role: "pbmAnyAction", privileges: JSON.parse(E.FAKE_ROLE_PRIVS), roles: [] } : null,
@@ -73,8 +80,8 @@ no_file() { ls "$WORK"/sec/*.env >/dev/null 2>&1 && ko_ "$CUR: no secret file" |
 perms() {
     local f d fm dm
     f=$(ls "$WORK"/sec/*.env 2>/dev/null | head -n 1)
-    fm=$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)
-    dm=$(stat -f '%Lp' "$WORK/sec" 2>/dev/null || stat -c '%a' "$WORK/sec" 2>/dev/null)
+    fm=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)
+    dm=$(stat -c '%a' "$WORK/sec" 2>/dev/null || stat -f '%Lp' "$WORK/sec" 2>/dev/null)
     [[ $fm == 600 && $dm == 700 ]] && ok_ "$CUR: file 0600, dir 0700" || ko_ "$CUR: file $fm, dir $dm (want 600/700)"
 }
 
@@ -131,6 +138,10 @@ printf '\n[errors / help]\n'
 run "not primary" 1 FAKE_PRIMARY=0
 has 'Not connected to the PRIMARY \(primary is n1:27017\)' "clear message"
 hasnt 'CALL ' "nothing changed"
+
+run "server without hello (isMaster fallback)" 0 FAKE_LEGACY=1
+has 'Replica set rsTest, primary n1:27017' "primary detected through isMaster"
+has "$WIDE_ROLES" "user created"
 
 run "invalid mode" 2 PBM_PASSWORD_MODE=random
 hasnt 'CALL ' "nothing changed"

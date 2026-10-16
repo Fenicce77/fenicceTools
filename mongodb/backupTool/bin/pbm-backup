@@ -9,13 +9,18 @@
 #   Phase 4: Community / logical scheme: daily logical full + PITR oplog
 #            slicing, oplog window check, oplog chain continuity check.
 #   Phase 5: chain-aligned safe retention, Prometheus textfile metrics.
+#   0.7.0:   one full per calendar day, deferred incrementals while the chain
+#            owner is busy, oplog window of every member PBM may pick,
+#            PITR_SPAN_MIN, checked against real PBM 2.5.0 output.
 #
 # Run "pbm-backup --help" for usage.
 
 set -euo pipefail
+# An exported CDPATH makes "cd DIR" print DIR and corrupts $(cd ... && pwd).
+unset CDPATH
 
 PROG=pbm-backup
-VERSION=0.6.8
+VERSION=0.7.0
 
 # ---------------------------------------------------------------------------
 # Locate and load libraries
@@ -115,19 +120,23 @@ Common steps:
      the last full goes first, then PREFERRED_NODES, then by name. Primary
      excluded. Rank #N takes over after N x FALLBACK_DELAY_SEC (default 120s)
      only if nobody started a backup meanwhile.
-  3. Skips if the last full started less than FULL_MIN_INTERVAL_SEC (20h)
-     ago (e.g. a systemd catch-up run after a reboot) or another node
-     completed one within DEDUP_WINDOW_SEC. --force overrides both.
+  3. Skips if a full already started today (00:00 host time, the clock of
+     the systemd timer; FULL_SAME_DAY_GUARD=true), e.g. a systemd catch-up
+     run after a reboot. A manual full taken yesterday does not cancel
+     tonight's. Also skips if another node completed one within
+     DEDUP_WINDOW_SEC. --force overrides both.
 
 PSMDB (physical): "pbm backup --type incremental --base --wait".
   Requires PITR disabled. Log file: \${LOG_DIR}/incrbase.log
 
 Community (logical): "pbm backup --type logical --wait".
-  - Before: the oplog window of this node must be >= OPLOG_WINDOW_FACTOR
-    (default 2) x the expected dump time (EXPECTED_DUMP_SEC, or the duration
-    of the previous logical backup).
+  - Before: the smallest oplog window among the members PBM may pick for
+    the dump (healthy secondaries with a pbm-agent) must be >=
+    OPLOG_WINDOW_FACTOR (default 2) x the expected dump time
+    (EXPECTED_DUMP_SEC, or the duration of the previous logical backup).
   - After: with PITR_AUTOCONFIG=true (default) sets pitr.enabled=true and
-    pitr.oplogSpanMin=OPLOG_INCR_MIN (default 360 = an oplog slice every 6h).
+    pitr.oplogSpanMin=PITR_SPAN_MIN (default: OPLOG_INCR_MIN, 360 = an oplog
+    slice every 6h; the span is the RPO of the logical scheme).
   Log file: \${LOG_DIR}/logical-full.log
 
 ${C_BLD}EXAMPLES${C_OFF}
@@ -143,8 +152,12 @@ ${C_BLD}${PROG} incr${C_OFF} - incremental step
 
 PSMDB (physical), hourly. Same preflight and election as "full". Then:
   - elected node owns the last base -> "pbm backup --type incremental --wait"
-  - owner unavailable / no base yet  -> NEW BASE on this node ("--base"),
-    because an incremental chain cannot move between nodes.
+  - owner BUSY (replication lag, queued operations or dirty cache over the
+    thresholds) -> skipped, as long as the newest backup of the chain is
+    younger than OWNER_BUSY_MAX_DEFER_SEC (default 3h); after that, NEW BASE
+  - owner DOWN (unreachable, pbm-agent not ok, now primary...) or no base
+    yet -> NEW BASE ("--base"): an incremental chain cannot move between nodes.
+  - PBM still busy after WAIT_RUNNING_SEC (e.g. a long base) -> skipped.
   Log file: \${LOG_DIR}/incr.log
 
 Community (logical), every 6h. Takes no backup: PBM already saves the oplog
@@ -154,8 +167,8 @@ node checks, and fails (exit 1) if:
     full exists), or
   - the saved oplog does not cover the last logical snapshot (restoreTo), or
   - there is a gap in the saved oplog after it, or
-  - the newest saved oplog is older than OPLOG_INCR_MIN x 60 +
-    PITR_LAG_MARGIN_SEC (default 6h + 15min).
+  - the newest saved oplog is older than PITR_SPAN_MIN (default
+    OPLOG_INCR_MIN) x 60 + PITR_LAG_MARGIN_SEC (default 6h + 15min).
   Log file: \${LOG_DIR}/oplog.log
 
 ${C_BLD}EXAMPLES${C_OFF}
@@ -293,16 +306,32 @@ recent_done_since() {
     is_uint "$ts" && (( ts >= $2 ))
 }
 
-# full_too_recent LABEL LAST_FULL_JSON STARTED - true (and logs) if the last
-# full started less than FULL_MIN_INTERVAL_SEC ago. Protects against extra
-# fulls, e.g. a systemd "Persistent=true" catch-up after a node reboots.
+# full_too_recent LABEL LAST_FULL_JSON STARTED - true (and logs) if a full
+# must not run now:
+#   FULL_SAME_DAY_GUARD=true  a full already started today (00:00 host time,
+#                             the clock systemd OnCalendar uses). Stops an
+#                             extra full on a "Persistent=true" catch-up after
+#                             a reboot, while a manual full taken yesterday
+#                             does not cancel tonight's scheduled one.
+#   FULL_MIN_INTERVAL_SEC>0   the last full started less than this ago
+#                             (the 20h rule of 0.6.x; disabled by default).
 full_too_recent() {
-    local L=$1 last=$2 started=$3 ts
-    [[ $FORCE != 1 && -n $last && $FULL_MIN_INTERVAL_SEC -gt 0 ]] || return 1
+    local L=$1 last=$2 started=$3 ts name today
+    [[ $FORCE != 1 && -n $last ]] || return 1
     ts=$(printf '%s\n' "$last" | jq -r '.start_ts // 0')
-    if is_uint "$ts" && (( ts >= started - FULL_MIN_INTERVAL_SEC )); then
+    is_uint "$ts" || return 1
+    name=$(printf '%s\n' "$last" | jq -r '.name')
+    if [[ $FULL_SAME_DAY_GUARD == true ]]; then
+        today=$(today_start_epoch)
+        if is_uint "$today" && (( ts >= today )); then
+            SKIPPED=1
+            log INFO "${L}[PRECHECK]" "A full already ran today: ${name} started $(( (started - ts) / 60 )) min ago (FULL_SAME_DAY_GUARD=true, one full per day). Skipping (use --force to override)"
+            return 0
+        fi
+    fi
+    if (( FULL_MIN_INTERVAL_SEC > 0 && ts >= started - FULL_MIN_INTERVAL_SEC )); then
         SKIPPED=1
-        log INFO "${L}[PRECHECK]" "Last full $(printf '%s\n' "$last" | jq -r '.name') started $(( (started - ts) / 60 )) min ago (< FULL_MIN_INTERVAL_SEC=${FULL_MIN_INTERVAL_SEC}s). Skipping (use --force to override)"
+        log INFO "${L}[PRECHECK]" "Last full ${name} started $(( (started - ts) / 60 )) min ago (< FULL_MIN_INTERVAL_SEC=${FULL_MIN_INTERVAL_SEC}s). Skipping (use --force to override)"
         return 0
     fi
     return 1
@@ -494,6 +523,31 @@ self_is_owner() {
     [[ -n $SELF && $(printf '%s\n' "$SELF" | jq -r '.owner') == true ]]
 }
 
+# owner_entry - election entry of the chain owner, or nothing.
+owner_entry() {
+    printf '%s\n' "$ELECTION" | jq -c '[.[] | select(.owner)][0] // empty'
+}
+
+# owner_is_busy - true if the owner is up (reachable, pbm-agent ok, still a
+# secondary) and only skipped for load: replication lag, queued operations
+# or WiredTiger dirty cache over the thresholds.
+owner_is_busy() {
+    local reason
+    reason=$(owner_entry | jq -r '.reason // empty')
+    case $reason in
+        "replication lag "*|"queued operations "*|"WiredTiger dirty cache "*) return 0 ;;
+    esac
+    return 1
+}
+
+# chain_last_start_ts - start time (UNIX) of the newest successful physical
+# backup (base or incremental), or 0.
+chain_last_start_ts() {
+    pbm_snapshots_json | jq -r '
+        [ .[] | select(.status == "done" and .type == "incremental") ]
+        | sort_by(.name) | last | (.name // "") | (try fromdateiso8601 catch 0)' 2>/dev/null || printf '0\n'
+}
+
 # verify_executor LABEL KIND - log the new backup and warn if PBM ran it on
 # another node.
 verify_executor() {
@@ -563,7 +617,23 @@ run_physical() {
             action=incr
             log OK "${L}[CHECKINFO]" "Last MongoDB Base Backup Ran in current Node. PBM Incremental Backup will be Run!!"
         else
-            log WARN "${L}[CHAIN][RESTART]" "Chain owner ${owner} is not available ($(printf '%s\n' "$ELECTION" | jq -r '[.[] | select(.owner)][0].reason // "did not run"')). An incremental cannot continue on another node: taking a NEW BASE here"
+            local why last_ts age
+            why=$(owner_entry | jq -r '.reason // "not in the member list"')
+            [[ -n $why ]] || why='not in the member list'
+            if owner_is_busy && (( OWNER_BUSY_MAX_DEFER_SEC > 0 )); then
+                last_ts=$(chain_last_start_ts)
+                is_uint "$last_ts" || last_ts=0
+                age=$(( started - last_ts ))
+                if (( last_ts > 0 && age < OWNER_BUSY_MAX_DEFER_SEC )); then
+                    SKIPPED=1
+                    log WARN "${L}[CHAIN][DEFER]" "Chain owner ${owner} is up but busy (${why}). Incremental deferred: newest chain backup is $(( age / 60 )) min old (< OWNER_BUSY_MAX_DEFER_SEC=${OWNER_BUSY_MAX_DEFER_SEC}s). A new base is taken only if it stays busy"
+                    log INFO "${L}[END]" "${title} Service Ended"
+                    return 0
+                fi
+                log WARN "${L}[CHAIN][RESTART]" "Chain owner ${owner} busy (${why}) and the newest chain backup is $(( age / 60 )) min old (>= OWNER_BUSY_MAX_DEFER_SEC=${OWNER_BUSY_MAX_DEFER_SEC}s): taking a NEW BASE here"
+            else
+                log WARN "${L}[CHAIN][RESTART]" "Chain owner ${owner} is not available (${why}). An incremental cannot continue on another node: taking a NEW BASE here"
+            fi
         fi
     fi
 
@@ -576,7 +646,13 @@ run_physical() {
 
     # --- Run ---------------------------------------------------------------
     LOG_LABEL="${L}[PBM][RUN]"
-    pbm_wait_idle "$WAIT_RUNNING_SEC" || true
+    if ! pbm_wait_idle "$WAIT_RUNNING_SEC" && [[ $action == incr ]]; then
+        # e.g. the daily base is still running: the next hourly run takes it.
+        SKIPPED=1
+        log WARN "${L}[PBM][RUN]" "PBM is still busy after ${WAIT_RUNNING_SEC}s: incremental skipped, the next run takes it"
+        log INFO "${L}[END]" "${title} Service Ended"
+        return 0
+    fi
     compression_args
     local -a args=(backup --type incremental "${COMP_ARGS[@]}" --wait)
     [[ $action == base ]] && args=(backup --type incremental --base "${COMP_ARGS[@]}" --wait)
@@ -613,36 +689,72 @@ expected_dump_sec() {
     fi
 }
 
-# check_oplog_window LABEL LAST_LOGICAL_JSON - compare this node's oplog
-# window with the expected dump time. Returns 1 if the full must not run.
+# dump_candidates_window - print "SECONDS HOST" for the smallest oplog window
+# among the members PBM may pick to run the dump (it picks by
+# backup.priority, not by pbm-backup's election): reachable, pbm-agent ok,
+# not an arbiter, not the primary (unless ALLOW_PRIMARY=true). Falls back to
+# this node's probe (e.g. with --force, when no election ran).
+dump_candidates_window() {
+    local out=''
+    if [[ -n $ELECTION ]]; then
+        out=$(printf '%s\n' "$ELECTION" | jq -r --argjson ap "$( [[ $ALLOW_PRIMARY == true ]] && echo true || echo false )" '
+            [ .[] | select(.role != "A" and .agent_ok and .probe.reachable == true
+                           and .probe.oplog_window_sec != null
+                           and ($ap or ((.probe.primary != true) and .role != "P"))) ]
+            | sort_by(.probe.oplog_window_sec) | first
+            | if . == null then empty else "\(.probe.oplog_window_sec) \(.host)" end')
+    fi
+    if [[ -z $out && -n $SELF ]]; then
+        out=$(printf '%s\n' "$SELF" | jq -r 'if .probe.oplog_window_sec != null then "\(.probe.oplog_window_sec) \(.host)" else empty end')
+    fi
+    [[ -z $out ]] || printf '%s\n' "$out"
+}
+
+# check_oplog_window LABEL LAST_LOGICAL_JSON - compare the oplog window of
+# the members PBM may dump from with the expected dump time. Returns 1 if
+# the full must not run.
 check_oplog_window() {
-    local L=$1 last=$2 win='' expected need
-    if [[ -n $SELF ]]; then
-        win=$(printf '%s\n' "$SELF" | jq -r '.probe.oplog_window_sec // empty')
+    local L=$1 last=$2 win='' host='' expected need cand
+    cand=$(dump_candidates_window)
+    if [[ -n $cand ]]; then
+        win=${cand%% *}
+        host=${cand#* }
     fi
     expected=$(expected_dump_sec "$last")
     if [[ -z $win ]]; then
-        log WARN "${L}[PRECHECK][OPLOG]" "Cannot read this node's oplog window (local.oplog.rs); check skipped"
+        log WARN "${L}[PRECHECK][OPLOG]" "Cannot read the oplog window of any candidate member (local.oplog.rs); check skipped"
         return 0
     fi
     if [[ -z $expected ]]; then
-        log WARN "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s. No previous logical backup and no EXPECTED_DUMP_SEC: cannot estimate the dump time (this run will calibrate it)"
+        log WARN "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s (smallest among the members PBM may pick: ${host}). No previous logical backup and no EXPECTED_DUMP_SEC: cannot estimate the dump time (this run will calibrate it)"
         return 0
     fi
     need=$(( expected * OPLOG_WINDOW_FACTOR ))
     if (( win >= need )); then
-        log OK "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s >= ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s"
+        log OK "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s >= ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s (smallest among the members PBM may pick: ${host})"
         return 0
     fi
     if [[ $OPLOG_WINDOW_ENFORCE == true ]]; then
-        log ERROR "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s < ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s (${need}s). The dump could outlive the oplog. Resize the oplog (replSetResizeOplog) or set OPLOG_WINDOW_ENFORCE=false"
+        log ERROR "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s < ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s (${need}s) on ${host}, a member PBM may pick for the dump. The dump could outlive the oplog. Resize the oplog (replSetResizeOplog) or set OPLOG_WINDOW_ENFORCE=false"
         return 1
     fi
-    log WARN "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s < ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s (${need}s); continuing (OPLOG_WINDOW_ENFORCE=false)"
+    log WARN "${L}[PRECHECK][OPLOG]" "Oplog window ${win}s < ${OPLOG_WINDOW_FACTOR} x expected dump ${expected}s (${need}s) on ${host}; continuing (OPLOG_WINDOW_ENFORCE=false)"
+}
+
+# pitr_span_min - minutes per saved oplog slice: PITR_SPAN_MIN, or
+# OPLOG_INCR_MIN when it is not set (0.6.x behaviour).
+pitr_span_min() {
+    printf '%s\n' "${PITR_SPAN_MIN:-$OPLOG_INCR_MIN}"
+}
+
+# pitr_max_lag_sec - the newest saved oplog may be this old: one span plus
+# PITR_LAG_MARGIN_SEC for the upload.
+pitr_max_lag_sec() {
+    printf '%s\n' $(( $(pitr_span_min) * 60 + PITR_LAG_MARGIN_SEC ))
 }
 
 # ensure_pitr LABEL - with PITR_AUTOCONFIG=true make sure pitr.enabled=true,
-# pitr.oplogSpanMin=OPLOG_INCR_MIN and the oplog slices are compressed like
+# pitr.oplogSpanMin=PITR_SPAN_MIN and the oplog slices are compressed like
 # the backups. Only scalar keys, via "pbm config --set".
 ensure_pitr() {
     local L=$1 enabled span comp level
@@ -662,9 +774,9 @@ ensure_pitr() {
         fi
     fi
     span=$(pbm_config_get pitr.oplogSpanMin)
-    if [[ $span != "$OPLOG_INCR_MIN" ]]; then
-        log INFO "${L}[PITR][CONFIG]" "Setting pitr.oplogSpanMin=${OPLOG_INCR_MIN} (was '${span:-unknown}')"
-        pbm_config_set pitr.oplogSpanMin "$OPLOG_INCR_MIN" || { log ERROR "${L}[PITR][CONFIG]" "pbm config --set pitr.oplogSpanMin failed"; return 1; }
+    if [[ $span != "$(pitr_span_min)" ]]; then
+        log INFO "${L}[PITR][CONFIG]" "Setting pitr.oplogSpanMin=$(pitr_span_min) (was '${span:-unknown}')"
+        pbm_config_set pitr.oplogSpanMin "$(pitr_span_min)" || { log ERROR "${L}[PITR][CONFIG]" "pbm config --set pitr.oplogSpanMin failed"; return 1; }
     fi
     enabled=$(pbm_config_get pitr.enabled)
     if [[ $enabled != true ]]; then
@@ -756,8 +868,8 @@ pitr_report() {
         log WARN "${L}[PITR]" "PITR is enabled but no node is slicing right now${err:+ (${err})}"
     fi
     span=$(pbm_config_get pitr.oplogSpanMin)
-    if [[ -n $span && $span != "$OPLOG_INCR_MIN" ]]; then
-        log WARN "${L}[PITR]" "pitr.oplogSpanMin=${span}, expected OPLOG_INCR_MIN=${OPLOG_INCR_MIN}"
+    if [[ -n $span && $span != "$(pitr_span_min)" ]]; then
+        log WARN "${L}[PITR]" "pitr.oplogSpanMin=${span}, expected $(pitr_span_min) (PITR_SPAN_MIN, default OPLOG_INCR_MIN)"
     fi
     local comp
     comp=$(pbm_config_get pitr.compression)
@@ -774,7 +886,7 @@ pitr_report() {
 
     ranges=$(pitr_ranges_json) || { log ERROR "${L}[PITR]" "Cannot read PITR ranges (pbm list -o json)"; return 1; }
     now=$(now_epoch)
-    maxlag=$(( OPLOG_INCR_MIN * 60 + PITR_LAG_MARGIN_SEC ))
+    maxlag=$(pitr_max_lag_sec)
     cov=$(pitr_coverage "$(printf '%s\n' "$last" | jq -r '.restore_to')" "$ranges" "$now" "$maxlag")
     ok=$(printf '%s\n' "$cov" | jq -r '.ok')
     if [[ $ok == true ]]; then
@@ -842,10 +954,14 @@ cmd_backup() {
         mv=$(printf '%s\n' "$DETECTED" | jq -r '.version')
         ed=$(printf '%s\n' "$DETECTED" | jq -r '.edition')
         STRATEGY=$(resolve_strategy "$ed" "$mv")
+    elif [[ $BACKUP_MODE == physical || $BACKUP_MODE == logical ]]; then
+        # Forced scheme: preflight reports the detection error in its log.
+        STRATEGY=$BACKUP_MODE
     else
-        # preflight will report the detection error in the matching log.
-        STRATEGY=physical
-        [[ $BACKUP_MODE == logical ]] && STRATEGY=logical
+        # Cannot tell physical from logical: log in a neutral file and stop.
+        setup_run detect.log "[PBM-BACKUP][$(printf '%s' "$kind" | tr '[:lower:]' '[:upper:]')]"
+        log ERROR "${LOG_LABEL}[PRECHECK][DETECT]" "Cannot read buildInfo with ${MONGO_SHELL##*/}, so the scheme (physical or logical) is unknown. Nothing done. Check the connection, or set BACKUP_MODE (or MONGODB_VERSION and MONGODB_EDITION)"
+        return 1
     fi
     case $STRATEGY/$kind in
         physical/full) run_physical full ;;
@@ -889,6 +1005,8 @@ cmd_check() {
                 log INFO "${L}[DECISION]" "This node is #0: full -> base, incr -> base (no chain yet)"
             elif self_is_owner; then
                 log INFO "${L}[DECISION]" "This node is #0 and owns the chain: full -> base, incr -> incremental"
+            elif owner_is_busy && (( OWNER_BUSY_MAX_DEFER_SEC > 0 )); then
+                log WARN "${L}[DECISION]" "This node is #0; the owner (${owner}) is busy ($(owner_entry | jq -r '.reason')): full -> base, incr -> deferred up to OWNER_BUSY_MAX_DEFER_SEC=${OWNER_BUSY_MAX_DEFER_SEC}s since the newest chain backup, then NEW base"
             else
                 log WARN "${L}[DECISION]" "This node is #0 but the owner (${owner}) is not available: full -> base, incr -> NEW base (chain restart)"
             fi ;;
@@ -1098,7 +1216,7 @@ collect_state_metrics() {
         last=$(last_done_backup_json logical 2>/dev/null || true)
         if [[ -n $last ]] && ranges=$(pitr_ranges_json 2>/dev/null); then
             cov=$(pitr_coverage "$(printf '%s\n' "$last" | jq -r '.restore_to')" "$ranges" "$(now_epoch)" \
-                $(( OPLOG_INCR_MIN * 60 + PITR_LAG_MARGIN_SEC )) 2>/dev/null || true)
+                "$(pitr_max_lag_sec)" 2>/dev/null || true)
         fi
     fi
     metrics_state "$status" "$snaps" "$cov" "${ELECTION:-}"

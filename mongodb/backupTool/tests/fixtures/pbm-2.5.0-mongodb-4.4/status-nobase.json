@@ -1,0 +1,120 @@
+{
+  "backups": {
+    "type": "S3",
+    "path": "s3://https://storage.googleapis.com/example-bucket/rs44",
+    "region": "europe-west3",
+    "snapshot": [
+      {
+        "name": "2026-10-16T00:00:02Z",
+        "size": 54998,
+        "status": "done",
+        "restoreTo": 1792108808,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      },
+      {
+        "name": "2026-10-15T00:00:02Z",
+        "size": 53559,
+        "status": "done",
+        "restoreTo": 1792022408,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      },
+      {
+        "name": "2026-10-14T00:00:02Z",
+        "size": 49896,
+        "status": "done",
+        "restoreTo": 1791936008,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      },
+      {
+        "name": "2026-10-13T00:00:02Z",
+        "size": 50590,
+        "status": "done",
+        "restoreTo": 1791849608,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      },
+      {
+        "name": "2026-10-12T00:00:02Z",
+        "size": 49426,
+        "status": "done",
+        "restoreTo": 1791763208,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      },
+      {
+        "name": "2026-10-11T00:00:02Z",
+        "size": 47852,
+        "status": "done",
+        "restoreTo": 1791676808,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      },
+      {
+        "name": "2026-10-09T14:14:53Z",
+        "size": 43368,
+        "status": "done",
+        "restoreTo": 1791555299,
+        "pbmVersion": "2.5.0",
+        "type": "logical",
+        "src": ""
+      }
+    ],
+    "pitrChunks": {
+      "pitrChunks": [
+        {
+          "range": {
+            "start": 1791554517,
+            "end": 1791555299
+          },
+          "noBaseSnapshot": true
+        },
+        {
+          "range": {
+            "start": 1791555300,
+            "end": 1792152015
+          }
+        }
+      ],
+      "size": 251439746
+    }
+  },
+  "cluster": [
+    {
+      "rs": "rs44",
+      "nodes": [
+        {
+          "host": "rs44/mongocluster-node01:27017",
+          "agent": "v2.5.0",
+          "role": "",
+          "ok": true
+        },
+        {
+          "host": "rs44/mongocluster-node02:27017",
+          "agent": "v2.5.0",
+          "role": "P",
+          "ok": true
+        },
+        {
+          "host": "rs44/mongocluster-node03:27017",
+          "agent": "v2.5.0",
+          "role": "",
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "pitr": {
+    "conf": true,
+    "run": true
+  },
+  "running": {}
+}

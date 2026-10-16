@@ -10,6 +10,8 @@
 #
 # Usage: tests/install.test.sh [-h|--help] [BASH_BINARY]
 set -uo pipefail
+# An exported CDPATH makes "cd DIR" print DIR and corrupts $(cd ... && pwd).
+unset CDPATH
 
 case ${1:-} in
     -h|--help)
@@ -203,7 +205,8 @@ t_file /data/backup/pbm/logs "LOG_DIR created (default)"
 t_grep $LR/pbm-backup '^/data/backup/pbm/logs/\*\.log \{' "logrotate for the default LOG_DIR"
 t_grep $LR/pbm-backup 'Managed by pbm-backup install.sh' "logrotate marker"
 t_grep $DOC/install.state '^LOGROTATE=1$' "state: logrotate"
-[[ $(stat -f '%Lp' "$R/data/backup/pbm/logs" 2>/dev/null || stat -c '%a' "$R/data/backup/pbm/logs") == 750 ]] && ok_ "LOG_DIR mode 0750" || ko_ "LOG_DIR mode 0750"
+# GNU stat first: on Linux "stat -f" is --file-system, prints output AND fails.
+[[ $(stat -c '%a' "$R/data/backup/pbm/logs" 2>/dev/null || stat -f '%Lp' "$R/data/backup/pbm/logs") == 750 ]] && ok_ "LOG_DIR mode 0750" || ko_ "LOG_DIR mode 0750"
 
 printf '\n[package copy not edited: member files kept, no questions]\n'
 sed -i.tmp 's|<pbm_user>:<pbm_password>|pbmuser:S3cret|; s|<replica_set>|rs44|' "$R$SC/pbm-conf" && rm -f "$R$SC/pbm-conf.tmp"

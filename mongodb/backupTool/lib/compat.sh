@@ -10,7 +10,9 @@
 # ---------------------------------------------------------------------------
 # Sources: project requirements (CLAUDE.md) and the PBM source code
 # (pbm/version/version.go, FeatureSupport.PBMSupport):
-#   - PBM 2.x is required by this tool (MongoDB 4.0 needs PBM 1.x).
+#   - PBM >= 2.1.0 is required by this tool: "pbm cleanup" (retention) does
+#     not exist before 2.1.0 (checked in cli/cli.go of v2.0.5 and v2.1.0).
+#     MongoDB 4.0 needs PBM 1.x.
 #   - PBM 2.3.0 deprecated MongoDB 4.2; PBM 2.4.0 dropped it
 #     (v2.4.0/v2.5.0: "PBM works with v4.4, v5.0, v6.0, v7.0").
 #   - PBM 2.6.0 dropped MongoDB 4.4 ("PBM works with v5.0, v6.0, v7.0"):
@@ -21,7 +23,7 @@
 #   - The first release whose version gate lists MongoDB 7.0 is 2.4.0.
 #   - Physical incremental backups need PSMDB >= the versions below.
 # Items marked "verify" come from the PBM docs and were not tested here.
-COMPAT_PBM_MIN=2.0.0
+COMPAT_PBM_MIN=2.1.0
 COMPAT_MONGO_MIN=4.2
 COMPAT_PBM_DEPRECATES_42=2.3.0
 COMPAT_PBM_DROPS_42=2.4.0
