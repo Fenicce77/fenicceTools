@@ -35,6 +35,110 @@ catch-all query rule with `log=1`, the log directory grows without limit.
 - `lsof` (optional, recommended): skips files still opened by a process.
 - Write access to the log directory: run as the ProxySQL service user or root.
 
+## Installation
+
+`install.sh` installs the purge script and, optionally, the systemd service and
+timer, a `tmpfiles.d` entry that keeps the execution log directory in place,
+and a logrotate policy for the execution log. Run it from a terminal without
+options and it asks for every setting, shows the plan, and asks for
+confirmation before writing anything:
+
+```bash
+git clone https://github.com/Fenicce77/fenicceTools.git
+cd fenicceTools/proxysql/log_retention
+sudo ./install.sh
+```
+
+```text
+==> Configuration
+? Install proxysql_eventslog_purge.sh into [/usr/local/bin]:
+? Install systemd service and timer [Y/n]:
+? ProxySQL log directory (--data-dir) [/data/proxysql]:
+? Execution log directory [/data/log/purge_proxysql_eventslog]:
+? Run the service as user [root]:
+? Schedule (systemd OnCalendar) [*-*-* 00:00:00]:
+? Purge the events log [Y/n]:
+?   Events log prefix [query.log]:
+?   Rotated events log files to keep [200]:
+?   Max age in days (0 = off) [3]:
+? Purge the audit log [Y/n]:
+...
+==> Installation plan
+  Schedule:              *-*-* 00:00:00
+  Run as:                root:root
+  Execution log:         /data/log/purge_proxysql_eventslog/purge_proxysql_eventslog.log
+  Events log:            query.log (keep 200, max-age 3d)
+  Audit log:             audit.log (keep 1000, max-age 30d)
+  Output mode:           StandardOutput=append: (systemd 252)
+? Apply this configuration [Y/n]:
+```
+
+Every prompt has an equivalent option, so the same installation can be scripted
+(`-y` disables prompts, missing options take the defaults):
+
+```bash
+# Preview every generated file and command, change nothing
+./install.sh --systemd -y --dry-run
+
+# Daily at 00:00 as root, logs in /data/log/purge_proxysql_eventslog (defaults)
+sudo ./install.sh --systemd -y
+
+# Every 6 hours, events log only, 7 days retention, no compression
+sudo ./install.sh --systemd -y --no-audit --events-max-age 7 --no-compress \
+    --schedule '*-*-* 00/6:00:00'
+
+# Install the units but enable the timer later
+sudo ./install.sh --systemd -y --no-enable
+
+# Script only (no systemd), into another directory
+sudo ./install.sh --script-only -y --bin-dir /opt/dbre/bin
+
+# Render the files into a staging root (packaging, configuration management)
+./install.sh --systemd -y --root /tmp/stage --systemd-version 239
+
+# Remove units, tmpfiles, logrotate and script (execution logs are kept)
+sudo ./install.sh --uninstall -y
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--systemd` / `--script-only` | ask | Install the systemd components, or only the script. Non-interactive runs without either install only the script. |
+| `--uninstall` | | Disable the timer and remove every installed file except the execution logs. |
+| `-y`, `--yes` | | No prompts. |
+| `-i`, `--interactive` | auto | Force prompts even when stdin is not a terminal. |
+| `-n`, `--dry-run` | | Print the plan, the generated files and the commands. |
+| `--bin-dir DIR` | `/usr/local/bin` | Script destination. |
+| `--data-dir DIR` | `/data/proxysql` | ProxySQL log directory (`-d` of the purge script). |
+| `--log-dir DIR` | `/data/log/purge_proxysql_eventslog` | Execution log directory; the file is `purge_proxysql_eventslog.log`. |
+| `--user NAME` | `root` | Service user. Non-root adds `User=`/`Group=` and `su` to logrotate. |
+| `--schedule SPEC` | `*-*-* 00:00:00` | `OnCalendar=` expression, validated with `systemd-analyze calendar`. |
+| `--events-prefix`, `--events-keep`, `--events-max-age` | `query.log`, `200`, `3` | Events log retention. `--no-events` disables it. |
+| `--audit-prefix`, `--audit-keep`, `--audit-max-age` | `audit.log`, `1000`, `30` | Audit log retention. `--no-audit` disables it. |
+| `--no-compress` | | Do not pass `-c` to the purge script. |
+| `--no-hardening` | | Omit `ProtectSystem=strict`, `ReadWritePaths=` and related sandboxing. |
+| `--no-logrotate` | | Do not install `/etc/logrotate.d/purge_proxysql_eventslog`. |
+| `--no-enable` | | Do not run `systemctl enable --now` on the timer. |
+| `--systemd-version N` | detected | Selects `StandardOutput=append:` (>= 240) or `sh -c` redirection (older, e.g. RHEL 8). |
+| `--root DIR` | | Write under an alternate root; no `systemctl` or `systemd-tmpfiles` calls. |
+
+Installed files:
+
+| File | Purpose |
+|---|---|
+| `/usr/local/bin/proxysql_eventslog_purge.sh` | Purge script. |
+| `/etc/systemd/system/proxysql-log-retention.service` | Oneshot service, one `ExecStart=` per enabled log. |
+| `/etc/systemd/system/proxysql-log-retention.timer` | Schedule (`Persistent=true`). |
+| `/etc/tmpfiles.d/purge_proxysql_eventslog.conf` | Creates the execution log directory at boot. |
+| `/etc/logrotate.d/purge_proxysql_eventslog` | Monthly rotation of the execution log, 12 copies. |
+
+Re-run the installer to change the configuration. Files that do not change are
+left untouched; files that change are backed up as `<file>.bak.<timestamp>`.
+`--log-dir` must be a dedicated directory, different from `--data-dir`:
+`tmpfiles.d` enforces its mode and owner, and logrotate rotates every `*.log`
+in it, so system or shared directories such as `/var/log` are refused.
+The installer requires root unless `--dry-run` or `--root` is used. On hosts
+without systemd (for example macOS) use `--script-only`.
+
 ## Options
 
 | Option | Default | Description |
@@ -163,6 +267,9 @@ sudo install -d -o proxysql -g proxysql -m 0750 /var/log/proxysql
 
 ### systemd service and timer
 
+`install.sh --systemd` generates and activates these units for you (see
+[Installation](#installation)). The examples below document the manual setup.
+
 A single `oneshot` service runs both prefixes in sequence. Output goes to the
 journal without ANSI colors, because stdout is not a TTY.
 
@@ -247,14 +354,21 @@ journalctl -u proxysql-log-retention.service --since today --no-pager
 
 ## Local verification
 
-The test suite builds temporary fixture directories only and never touches real
-ProxySQL files:
+Both suites use temporary directories only and never touch real ProxySQL or
+system files:
 
 ```bash
 bash proxysql/log_retention/tests/test_proxysql_eventslog_purge.sh
+bash proxysql/log_retention/tests/test_install.sh
 ```
 
-It covers argument validation, colored help and `NO_COLOR`, dry-run, retention by count and age, protection
-of the active file, compression and re-runs, numeric ordering of suffixes,
+The purge suite covers argument validation, colored help and `NO_COLOR`,
+dry-run, retention by count and age, protection of the active file, compression and re-runs, numeric ordering of suffixes,
 prefix isolation between `query.log` and `audit.log`, and color suppression on
 non-TTY output.
+
+The installer suite runs only with `--root` on a temporary directory or with
+`--dry-run`. It covers option validation, script-only and systemd installs,
+`append:` versus `sh -c` output for systemd 240+ and older, custom options,
+idempotent reinstall with backups, interactive answers, re-prompting on
+invalid values, aborting, and uninstall.
