@@ -18,7 +18,7 @@ The inventory excludes tests, mocks, fixtures, vendored dependencies, generated 
 
 | Domain | Active commands | Standardized / documented | Pending audit | Legacy | Latest verified update |
 |---|---:|---:|---:|---:|---|
-| MongoDB / `backupTool` | 2 | 2 | 0 | 3 compatibility wrappers | 2026-10-05 |
+| MongoDB / `backupTool` | 2 | 2 | 0 | 3 compatibility wrappers | 2026-10-16 |
 | MongoDB / other tools | 14 | 0 | 14 | 0 | Not yet audited |
 | MySQL / InnoDB | 3 | 3 | 0 | 10 | 2026-09-29 |
 | MySQL / binlogs | 1 | 1 | 0 | 8 | 2026-09-30 |
@@ -39,6 +39,7 @@ Counts describe supported entry points grouped by operational domain. The backup
 
 | Date | Scope | State | Primary commits / outcome |
 |---|---|---|---|
+| 2026-10-16 | MongoDB backupTool 0.7.0 | `documented` | `37eea51` + docs follow-up; validated against live MongoDB 4.4 Community replica sets (PBM 2.5.0, PITR), one full per day, busy-owner deferral, PITR span (RPO) setting, `CDPATH`-safe scripts, anonymized PBM 2.5.0 fixtures. |
 | 2026-10-05 | MongoDB backupTool PBM 2.12 configuration handling | `documented` | `6fe8f31`, PR #15; reads supported PBM configuration values through JSON and records PBM 2.12 source verification. |
 | 2026-10-05 | MongoDB backupTool operation, retention, restore and systemd | `documented` | `e7679b3`, `ac413f1`, `5a273fc`, `6c4ff25`, PR #14; logical/physical schemes, chain-safe retention, guarded restore, systemd installation, metrics and PBM 2.12 documentation. |
 | 2026-09-30 | MySQL binlog activity reporting | `standardized` | `dde301b`, PR #13; canonical local/remote report, event-level MySQL/MariaDB parsing, ANSI-free CSV and eight archived variants. |
@@ -60,14 +61,14 @@ Counts describe supported entry points grouped by operational domain. The backup
 
 | Path | Status | Updated | Notes |
 |---|---|---:|---|
-| `mongodb/backupTool/bin/pbm-backup` | `documented` | 2026-10-05 | Canonical PBM 2.x runner for `full`, `incr`, `cleanup`, `restore`, `check` and `metrics`; supports logical and physical schemes. |
-| `mongodb/backupTool/install.sh` | `documented` | 2026-10-05 | Systemd installer with `--dry-run`, enablement and legacy-wrapper migration controls. |
-| `mongodb/backupTool/tests/smoke.sh` | `test helper` | 2026-10-05 | Mocked `pbm`/`mongosh` scenario tests with PBM 2.12.0 JSON fixtures; no live cluster required. |
+| `mongodb/backupTool/bin/pbm-backup` | `documented` | 2026-10-16 | Canonical PBM 2.x runner for `full`, `incr`, `cleanup`, `restore`, `check` and `metrics`; supports logical and physical schemes. 0.7.0 runs on live MongoDB 4.4 Community replica sets (PBM 2.5.0, logical + PITR). |
+| `mongodb/backupTool/install.sh` | `documented` | 2026-10-16 | Systemd installer with `--dry-run`, enablement and legacy-wrapper migration controls. |
+| `mongodb/backupTool/tests/smoke.sh` | `test helper` | 2026-10-16 | Mocked `pbm`/`mongosh` scenario tests with real PBM 2.12.0 (PSMDB 8.0) and PBM 2.5.0 (Community 4.4) JSON fixtures; no live cluster required. |
 | `mongodb/backupTool/systemd/{services,timers}/pbm-backup-*` | `documented` | 2026-10-05 | Current full, incremental, cleanup and Prometheus-metrics service/timer families. |
 | `mongodb/backupTool/systemd/legacy/` | `legacy` | 2026-10-05 | Retained historical physical/deletion unit files. |
 | `mongodb/backupTool/sysconfig/pbm-deletion`, `pbm-physical-full-base`, `pbm-physical-incremental` | `legacy` | 2026-10-05 | Compatibility wrappers; use `pbm-backup` for new operations. |
 
-The backupTool README records remaining live-cluster validation gaps: Community PITR execution, `buildInfo.psmdbVersion`, MongoDB 8.0 `globalLock.currentQueue`, and dynamic PBM `backup.priority`. Do not mark it `standardized` until those boundaries have production evidence.
+The backupTool README records remaining live-cluster validation gaps: `buildInfo.psmdbVersion`, MongoDB 8.0 `globalLock.currentQueue`, and dynamic PBM `backup.priority`. Community PITR execution was validated on 2026-10-16 (MongoDB 4.4, PBM 2.5.0). Do not mark it `standardized` until those boundaries have production evidence.
 
 ## Canonical and archived MySQL commands
 

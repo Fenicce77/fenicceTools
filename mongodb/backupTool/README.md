@@ -8,7 +8,7 @@ the work, and keeps an always-restorable, compressed backup set in a GCS bucket.
 | Server | Scheme | `full` (daily) | `incr` |
 |---|---|---|---|
 | Percona Server for MongoDB with physical incremental support | physical | `pbm backup --type incremental --base` | hourly `pbm backup --type incremental` |
-| MongoDB Community / Enterprise, older PSMDB | logical | `pbm backup --type logical` | every `OPLOG_INCR_MIN` (6h): check the PBM PITR oplog slices |
+| MongoDB Community / Enterprise, older PSMDB | logical | `pbm backup --type logical` | every `OPLOG_INCR_MIN` (6h): check the PBM PITR oplog slices (saved every `PITR_SPAN_MIN`) |
 
 In the logical scheme PBM saves a compressed oplog slice every
 `PITR_SPAN_MIN` minutes (`pitr.oplogSpanMin`; default `OPLOG_INCR_MIN`),
@@ -67,7 +67,8 @@ backupTool/
 │   ├── pbmuser.test.sh                     pbmuser.create.js in mongosh, fake admin DB
 │   ├── install.test.sh                     install.sh lifecycle in a staging root (--destdir)
 │   ├── mock/{pbm,mongosh}                  mocks reproducing real PBM output
-│   └── fixtures/pbm-2.12.0-psmdb-8.0/      real (anonymized) pbm JSON output
+│   └── fixtures/pbm-2.12.0-psmdb-8.0/      real (anonymized) pbm JSON output, PSMDB 8.0
+│       fixtures/pbm-2.5.0-mongodb-4.4/     real (anonymized) pbm JSON output, Community 4.4 + PITR
 ├── README.md  INSTALL.md  CHANGES.md [pkg] docs (the package also adds VERSION)
 └── CLAUDE.md  .gitignore             [dev]
 ```
@@ -110,9 +111,10 @@ member that launches it.
 
 ## Requirements
 
-- Linux with systemd on every member; bash >= 3.2.
-- `pbm` (PBM 2.x, same version as the pbm-agents), `jq`, `mongosh` (or the
-  legacy `mongo` shell).
+- Linux with systemd on every member; bash >= 3.2 (an exported `CDPATH` is
+  ignored since 0.7.0).
+- `pbm` (PBM >= 2.1, same version as the pbm-agents), `jq`, `mongosh` (or
+  the legacy `mongo` shell).
 - MongoDB >= 4.2 with a PBM release that supports it (INSTALL.md 1.1): 4.2 ->
   2.3.1, 4.4 -> 2.5.0, 5.0/6.0 -> 2.10.0, 7.0/8.0 -> current (8.0 needs >= 2.7.0);
   pin the package
@@ -163,8 +165,8 @@ logical scheme).
 
 | Command | What it does | Log file |
 |---|---|---|
-| `full` | Daily full on the elected member | `incrbase.log` / `logical-full.log` |
-| `incr` | Physical incremental, or oplog (PITR) check | `incr.log` / `oplog.log` |
+| `full` | Daily full on the elected member (one per day) | `incrbase.log` / `logical-full.log` (`detect.log` if the scheme cannot be detected) |
+| `incr` | Physical incremental, or oplog (PITR) check | `incr.log` / `oplog.log` (`detect.log` idem) |
 | `cleanup` | Safe retention purge on the elected member | `deletion.log` |
 | `restore` | Validated `pbm restore` by name or `--to TIME` | `restore.log` |
 | `check` | Read-only diagnostics | none |
@@ -247,8 +249,10 @@ tests/pbmuser.test.sh     # pbmuser.create.js in mongosh, fake admin DB
 tests/install.test.sh     # install.sh lifecycle (install, upgrade, downgrade, uninstall) in a staging root
 ```
 
-Scenario tests with mocked `pbm` and `mongosh` and real PBM 2.12.0 JSON
-output as fixtures. No MongoDB needed.
+Scenario tests with mocked `pbm` and `mongosh` and real JSON output as
+fixtures: PBM 2.12.0 / PSMDB 8.0 and PBM 2.5.0 / MongoDB 4.4 Community.
+No MongoDB needed. They pass on Linux and macOS, as root or not, with or
+without an exported `CDPATH`.
 
 ## Verified against real PBM 2.5.0 output (MongoDB 4.4 Community)
 

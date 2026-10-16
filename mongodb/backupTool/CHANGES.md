@@ -445,6 +445,12 @@ Reviewed against three live MongoDB 4.4 Community replica sets running
   2.5.0 output) and scenarios: one full per day, busy owner, PBM busy, oplog
   window of other members, `PITR_SPAN_MIN`, list fallback, `noBaseSnapshot`,
   detection failure, PBM 2.0.x. `smoke.sh` pins `TZ=UTC`.
+- Repository: the 0.6.8 snapshot tarball and assistant scratch files
+  committed by mistake in `37eea51` are untracked and ignored
+  (`.backup-*.tgz`, `Claude outputs/`).
+- Docs: INSTALL.md (new tunables, 0.6.x -> 0.7.0 upgrade notes,
+  troubleshooting entries, PBM 2.5.0 live verification), README.md (tests,
+  layout, requirements: PBM >= 2.1).
 - Docs: `backup.priority` must list every member (a partial list breaks the
   incremental affinity), PMM Backup Management must stay off on these
   clusters, README section "Verified against real PBM 2.5.0 output".

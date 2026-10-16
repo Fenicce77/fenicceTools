@@ -1,1 +1,4 @@
 dist/
+# Local snapshots and assistant scratch files: never commit
+.backup-*.tgz
+Claude outputs/

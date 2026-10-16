@@ -368,10 +368,10 @@ The examples use `VERSION`: set it to the version of the package you
 deploy (the `VERSION=` line in `bin/pbm-backup`, also in the package name).
 
 ```bash
-VERSION=0.6.8
+VERSION=0.7.0
 scp dist/pbm-backup-${VERSION}.tar.gz* rmateos@mongodbcluster-node01:/tmp/
 ssh rmateos@mongodbcluster-node01
-VERSION=0.6.8
+VERSION=0.7.0
 cd /tmp
 sha256sum -c pbm-backup-${VERSION}.tar.gz.sha256
 tar -xzf pbm-backup-${VERSION}.tar.gz
@@ -608,7 +608,11 @@ Copied from `etc/pbm-backup.conf` (edit it in the package; identical to
 | `RETENTION_DAYS` | `7` | retention policy |
 | `LOCAL_NODE_NAMES` | empty | when `hostname`/`hostname -f` differ from the member name in the replica set config |
 | `PREFERRED_NODES` | empty | order of members after the chain owner |
-| `OPLOG_INCR_MIN` | `360` | Community: minutes between oplog slices (keep in line with `--incr-every-min`) |
+| `OPLOG_INCR_MIN` | `360` | Community: minutes between oplog (PITR) checks, the `incr` timer (keep in line with `--incr-every-min`); also the slice span when `PITR_SPAN_MIN` is empty |
+| `PITR_SPAN_MIN` | empty (= `OPLOG_INCR_MIN`) | Community: minutes per saved oplog slice (`pitr.oplogSpanMin`), i.e. the RPO; e.g. `10` while `incr` still checks every `OPLOG_INCR_MIN` |
+| `FULL_SAME_DAY_GUARD` | `true` | one full per calendar day (host clock): a reboot catch-up adds no second full, a manual full yesterday does not cancel tonight's |
+| `FULL_MIN_INTERVAL_SEC` | `0` | optional extra guard, the 0.6.x rule (e.g. `72000` = 20h); a manual full during the day then cancels the next nightly one |
+| `OWNER_BUSY_MAX_DEFER_SEC` | `10800` | PSMDB: how long hourly incrementals wait for a busy chain owner before a new base is taken elsewhere (`0` = new base at once) |
 | `METRICS_DIR` | empty | textfile-collector directory (node_exporter, PMM2, PMM3) |
 | `MAX_REPL_LAG_SEC` / `MAX_QUEUE` / `MAX_WT_DIRTY_PCT` | `60` / `50` / `20` | overload thresholds of the election |
 | `PBM_LOCAL_ROOT` / `LOG_DIR` | `/data/backup/pbm` / `.../logs` | log location (created by `install.sh`, §4.4) |
@@ -877,6 +881,20 @@ Plan
 - Timers that are enabled stay enabled. A backup already running keeps its
   old code until it finishes.
 
+**0.6.x -> 0.7.0**: no action needed; the installed configuration keeps
+working and the plan lists the new settings (`FULL_SAME_DAY_GUARD`,
+`PITR_SPAN_MIN`, `OWNER_BUSY_MAX_DEFER_SEC`). Behaviour changes:
+
+- The 20h full guard is replaced by "one full per day". If
+  `/etc/sysconfig/pbm-backup` sets `FULL_MIN_INTERVAL_SEC=72000`
+  explicitly (uncommented), the 20h rule still applies: comment it out.
+- PSMDB: a busy (not down) chain owner defers incrementals up to 3h
+  instead of starting a new base at once (`OWNER_BUSY_MAX_DEFER_SEC=0`
+  restores the old behaviour).
+- The logical slice span (RPO) does not change unless `PITR_SPAN_MIN` is
+  set. Setting it changes `pitr.oplogSpanMin` at the next `full` (or `incr`
+  when PITR is off); keep the `incr` timer (`OPLOG_INCR_MIN`) as it is.
+
 ## 9. Rollback
 
 - **To a previous pbm-backup version:** install its package again.
@@ -921,7 +939,7 @@ the bucket are always kept.
 |---|---|
 | Timers and next runs | `systemctl list-timers 'pbm-backup-*'` |
 | Last run of a job | `journalctl -u pbm-backup-incr.service -n 50` |
-| Logs | `/data/backup/pbm/logs/{incrbase,incr,logical-full,oplog,deletion,restore}.log` |
+| Logs | `${LOG_DIR}` (default `/data/backup/pbm/logs`): `{incrbase,incr,logical-full,oplog,deletion,restore,detect}.log` |
 | Overall state | `pbm-backup check`, `pbm status`, `pbm list` |
 | Metrics | `${METRICS_DIR}/pbm_backup_state.prom`, `pbm_backup_run_*.prom` |
 
@@ -940,6 +958,9 @@ the bucket are always kept.
 | `Oplog window ... < 2 x expected dump` | Community: enlarge the oplog (`replSetResizeOplog`) or set `EXPECTED_DUMP_SEC` / `OPLOG_WINDOW_ENFORCE=false` |
 | `A full already ran today: ... (FULL_SAME_DAY_GUARD=true, one full per day)` | normal: a full already ran today (e.g. a catch-up after a reboot). Use `pbm-backup full --force` to take another one |
 | `Incremental deferred: newest chain backup is N min old` | physical: the chain owner is up but over a load threshold; the hourly incremental waits up to `OWNER_BUSY_MAX_DEFER_SEC`, then a new base is taken elsewhere |
+| `PBM is still busy after Ns: incremental skipped` | physical: a long backup (usually the daily base) is still running; the next hourly run takes the incremental. Not a failure |
+| `Cannot read buildInfo ... the scheme (physical or logical) is unknown` | `full`/`incr` did nothing (logged in `detect.log`): fix `mongosh` / the URI, or set `BACKUP_MODE` |
+| `cannot find library directory` / paths printed twice | a shell with `CDPATH` exported and pbm-backup < 0.7.0: upgrade, or `unset CDPATH` |
 | `PBM executed the backup on X, not on this node` | PBM picked another member by `backup.priority`; keep the primary lowest in `conf/pbm-conf.yml` |
 | `Cannot read buildInfo` | `mongosh` missing or the URI is wrong; or set `MONGODB_VERSION` + `MONGODB_EDITION` |
 
@@ -948,8 +969,10 @@ the bucket are always kept.
 PBM 2.6.0 dropped MongoDB 4.4, so **PBM 2.5.0 is the last release for 4.4**
 (from the PBM source: v2.5.0 "PBM works with v4.4, v5.0, v6.0, v7.0", v2.6.0
 "v5.0, v6.0, v7.0"). pbm-backup works with it as is (all the `pbm` commands
-and JSON fields it uses were checked in the v2.5.0 source). Two differences
-matter:
+and JSON fields it uses were checked in the v2.5.0 source, and since 0.7.0
+against real output of three MongoDB 4.4 Community replica sets: 4.4.3,
+4.4.15, 4.4.29; anonymized in `tests/fixtures/pbm-2.5.0-mongodb-4.4`). Two
+differences matter:
 
 - **No native GCS before PBM 2.10:** the bucket is configured as S3 with
   `endpointUrl: https://storage.googleapis.com` and a GCS HMAC key (§1.2 A,
